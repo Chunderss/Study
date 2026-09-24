@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: vocab-study
+Version: 0.1.0
+Summary: A terminal-first, command-driven vocabulary study program with a pluggable spaced-repetition engine and swappable dictionaries.
+Requires-Python: >=3.9
+Provides-Extra: wordnet
+Requires-Dist: nltk>=3.8; extra == "wordnet"
+Provides-Extra: repl
+Requires-Dist: prompt_toolkit>=3.0; extra == "repl"
+Provides-Extra: embeddings
+Requires-Dist: sentence-transformers>=2.2; extra == "embeddings"

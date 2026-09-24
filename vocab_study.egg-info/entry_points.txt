@@ -1,0 +1,2 @@
+[console_scripts]
+vocab = vocab.__main__:main

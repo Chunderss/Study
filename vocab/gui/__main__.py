@@ -64,6 +64,18 @@ def main() -> None:
                 editor.render()
                 assert "Desktop ready" in editor.preview.toPlainText()
                 editor.deleteLater()
+                # Exercise the platform's window-to-widget key delivery in the
+                # packaged app as well as the source regression tests.
+                from PySide6.QtCore import Qt
+                from PySide6.QtTest import QTest
+                win.activateWindow()
+                win.workspace.focused.component.focus_default()
+                app.processEvents()
+                native = win.windowHandle()
+                QTest.keyClick(native, Qt.Key_B, Qt.ControlModifier)
+                assert win.hotkeys._armed, "Ctrl+B did not arm the leader"
+                QTest.keyClick(native, Qt.Key_V)
+                assert len(win.workspace._panes) == 2, "Leader split did not run once"
             except Exception:
                 report_error(*sys.exc_info())
                 app.exit(1)

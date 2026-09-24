@@ -104,13 +104,20 @@ class HotkeyFilter(QObject):
             return False
         if ev.type() not in (QEvent.KeyPress, QEvent.KeyRelease, QEvent.ShortcutOverride):
             return False
+        # Native input passes through QWindow before reaching the focused
+        # QWidget. Ignore that intermediate delivery without changing leader
+        # state; otherwise releasing Ctrl+B cancels the sequence. Handle the
+        # widget delivery only, so each command runs once.
+        if not isinstance(obj, QWidget):
+            return False
         owner = self.parent()
         # Application filters also see dialogs and other windows. Workspace
         # commands must never steal keys from those controls.
         if isinstance(owner, QWidget) and (
-                not isinstance(obj, QWidget) or obj.window() is not owner.window()
+                obj.window() is not owner.window()
                 or QApplication.activeModalWidget() is not None):
             self._disarm()
+            self._consumed_keys.clear()
             return False
         key = int(ev.key())
         mods = _norm_mods(ev.modifiers())

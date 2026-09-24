@@ -184,6 +184,9 @@ class App:
         name = sanitize_list_name(name)
         if not self.storage.exists(name):
             raise ListNotFound(f"List '{name}' does not exist. (CREATE it first)")
+        names = self.storage.list_names()
+        if name not in names:
+            name = next((n for n in names if n.casefold() == name.casefold()), name)
         self.current_list = name
         return f"Now using '{name}'."
 
@@ -225,12 +228,13 @@ class App:
     def cmd_add(self, word: str, target: Optional[str] = None,
                 manual_def: Optional[str] = None, sentence: str = "") -> str:
         target = self._resolve_target(target)
-        wl = self.storage.load_words(target)
         word_clean = word.strip()
         if not word_clean:
             raise ValueError("No word given.")
         notice = ""
         if manual_def is not None:
+            if not manual_def.strip():
+                raise ValueError("Definition cannot be empty.")
             senses, dict_id = [Sense(definition=manual_def.strip())], "manual"
         else:
             try:
@@ -238,6 +242,15 @@ class App:
             except LookupFailed as e:
                 hint = "  (add manually:  ADD {} :: <your definition>)".format(word_clean)
                 raise ValueError(f"{e}{hint if e.recoverable else ''}") from e
+        return self.add_resolved_word(word_clean, target, senses, dict_id, notice)
+
+    def add_resolved_word(self, word: str, target: str, senses, dict_id: str,
+                          notice: str = "") -> str:
+        """Commit a lookup on the UI thread, reading the latest module state."""
+        word_clean = word.strip()
+        if not word_clean or not senses or not senses[0].definition.strip():
+            raise ValueError("A word and a non-empty definition are required.")
+        wl = self.storage.load_words(target)
         w = Word(word=word_clean, dictionary=dict_id, senses=senses)
         existed = wl.has(word_clean)
         wl.add(w)

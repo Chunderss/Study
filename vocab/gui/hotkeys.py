@@ -57,6 +57,7 @@ class HotkeyFilter(QObject):
         self._leader: Dict[int, Callable[[], None]] = {}   # plain key -> action
         self._leader_chord: Optional[Tuple[int, int]] = None
         self._armed = False
+        self._consumed_keys = set()
         self._on_arm_change: Optional[Callable[[bool], None]] = None
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -96,10 +97,36 @@ class HotkeyFilter(QObject):
 
     # ---- event handling -------------------------------------------------
     def eventFilter(self, obj, ev):
-        if ev.type() != QEvent.KeyPress:
+        from PySide6.QtWidgets import QApplication, QWidget
+        if ev.type() == QEvent.ApplicationDeactivate:
+            self._disarm()
+            self._consumed_keys.clear()
+            return False
+        if ev.type() not in (QEvent.KeyPress, QEvent.KeyRelease, QEvent.ShortcutOverride):
+            return False
+        owner = self.parent()
+        # Application filters also see dialogs and other windows. Workspace
+        # commands must never steal keys from those controls.
+        if isinstance(owner, QWidget) and (
+                not isinstance(obj, QWidget) or obj.window() is not owner.window()
+                or QApplication.activeModalWidget() is not None):
+            self._disarm()
             return False
         key = int(ev.key())
         mods = _norm_mods(ev.modifiers())
+        chord = (mods, key)
+        if ev.type() == QEvent.KeyRelease:
+            if not ev.isAutoRepeat():
+                self._consumed_keys.discard(key)
+            return False
+        bound = self._armed or chord == self._leader_chord or chord in self._direct
+        if ev.type() == QEvent.ShortcutOverride:
+            if bound or key in self._consumed_keys:
+                ev.accept()
+                return True
+            return False
+        if ev.isAutoRepeat() and (bound or key in self._consumed_keys):
+            return True
 
         # 1) if armed, the next key is a leader command (ignore modifiers on it)
         if self._armed:
@@ -108,6 +135,7 @@ class HotkeyFilter(QObject):
                        int(Qt.Key_Meta)):
                 return False
             self._disarm()
+            self._consumed_keys.add(key)
             if key == int(Qt.Key_Escape):
                 return True  # cancel
             action = self._leader.get(key)
@@ -115,19 +143,22 @@ class HotkeyFilter(QObject):
                 # also try case-folded letter via text (Shift+letter etc.)
                 t = ev.text().lower()
                 if t:
-                    action = self._leader.get(ord(t.upper())) if t.isalpha() else None
+                    upper = t.upper()
+                    action = self._leader.get(ord(upper)) if len(upper) == 1 else None
             if action is not None:
                 action()
             return True  # consume regardless, so stray keys don't leak
 
         # 2) leader chord itself?
         if self._leader_chord is not None and (mods, key) == self._leader_chord:
+            self._consumed_keys.add(key)
             self._arm()
             return True
 
         # 3) direct chord?
         action = self._direct.get((mods, key))
         if action is not None:
+            self._consumed_keys.add(key)
             action()
             return True
         return False

@@ -66,11 +66,22 @@ def sanitize_list_name(name: str) -> str:
         raise InvalidModuleName(
             "Name may only contain letters, numbers, spaces, and _ . - ( ) '"
         )
+    validate_windows_filename(name)
     if name.lower() in _RESERVED:
         raise InvalidModuleName(f"'{name}' is a reserved name.")
     if name in (".", ".."):
         raise InvalidModuleName("Invalid name.")
     return name
+
+
+def validate_windows_filename(name: str) -> None:
+    if name.endswith("."):
+        raise InvalidModuleName("Name cannot end with a dot.")
+    device = name.split(".", 1)[0].lower()
+    windows_devices = {"con", "prn", "aux", "nul"} | {
+        f"{prefix}{i}" for prefix in ("com", "lpt") for i in range(1, 10)}
+    if device in windows_devices:
+        raise InvalidModuleName(f"'{name}' is a reserved Windows filename.")
 
 
 # New canonical alias.

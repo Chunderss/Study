@@ -52,18 +52,7 @@ class NlpDisambiguator(Disambiguator):
             import nltk
         except Exception:
             return False
-        needed = ["averaged_perceptron_tagger_eng", "averaged_perceptron_tagger",
-                  "punkt_tab", "punkt"]
-        for res in needed:
-            kind = "taggers" if "tagger" in res else "tokenizers"
-            try:
-                nltk.data.find(f"{kind}/{res}")
-            except LookupError:
-                try:
-                    nltk.download(res, quiet=True)
-                except Exception:
-                    pass
-        return True
+        return True  # optional POS data is used if already installed
 
     def _wn_pos_of(self, word: str, sentence: str) -> Optional[str]:
         try:
@@ -106,7 +95,9 @@ class NlpDisambiguator(Disambiguator):
         else:
             matching, others = list(senses), []
 
-        pool = matching or list(senses)
+        if not matching:
+            matching, others = list(senses), []
+        pool = matching
 
         # 2) Lesk among the POS-matching pool: overlap of sentence words with
         #    each sense's definition+example; float the best match to front.

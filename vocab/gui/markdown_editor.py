@@ -1,7 +1,7 @@
 """Plain Markdown source plus a debounced, local Qt preview (no browser/LLM)."""
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QTextDocument
-from PySide6.QtWidgets import (QLabel, QSplitter, QTextBrowser, QTextEdit,
+from PySide6.QtWidgets import (QLabel, QSplitter, QTextBrowser, QPlainTextEdit,
                                QVBoxLayout, QWidget)
 
 
@@ -27,7 +27,7 @@ class MarkdownEditor(QWidget):
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setChildrenCollapsible(False)
         layout.addWidget(self.splitter)
-        self.editor = QTextEdit(acceptRichText=False)
+        self.editor = QPlainTextEdit()
         self.editor.setAccessibleName("Markdown source")
         self.editor.setTabChangesFocus(True)
         self.preview = MarkdownPreview()
@@ -69,12 +69,15 @@ class MarkdownEditor(QWidget):
             self.splitter.setSizes([extent // 2, extent // 2])
         super().resizeEvent(event)
 
-    def render(self):
+    def render(self, reset_scroll=False):
         self._timer.stop()
         bar = self.preview.verticalScrollBar()
-        old_scroll = bar.value()
+        old_scroll = 0 if reset_scroll else bar.value()
+        horizontal = self.preview.horizontalScrollBar()
+        old_horizontal = 0 if reset_scroll else horizontal.value()
         self.preview.document().setMarkdown(
             self.editor.toPlainText(),
             QTextDocument.MarkdownFeature.MarkdownDialectGitHub
             | QTextDocument.MarkdownFeature.MarkdownNoHTML)
         bar.setValue(old_scroll)
+        horizontal.setValue(old_horizontal)

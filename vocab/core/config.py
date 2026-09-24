@@ -36,9 +36,5 @@ class Config:
         return cls(**known)
 
     def save(self, paths: Paths) -> None:
-        path = paths.config_file
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(asdict(self), f, indent=2)
-        os.replace(tmp, path)
+        from .storage import _atomic_write
+        _atomic_write(paths.config_file, asdict(self))

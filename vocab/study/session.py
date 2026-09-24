@@ -170,6 +170,12 @@ class StudySession:
         new_card = self.scheduler.review(
             sc.card, Review.GOOD if correct else Review.AGAIN, time.time())
         key = sc.word.word.strip().lower()
+        wl = self.storage.load_words(sc.home_list)
+        if not wl.has(key):
+            raise ValueError(f"'{sc.word.word}' was deleted during this session.")
+        stats = self.storage.load_stats(sc.home_list)
+        stats[key] = new_card
+        self.storage.save_stats(sc.home_list, stats)
         self.result.mark(sc.home_list, key, new_card, correct)
         self._i += 1
         return AnswerOutcome(
@@ -202,9 +208,8 @@ class StudySession:
 
     def finish(self) -> str:
         """Flush all reviewed cards back to their HOME lists; return a summary."""
-        for home, cards in self.result.dirty.items():
-            stats = self.storage.load_stats(home)
-            stats.update(cards)
-            self.storage.save_stats(home, stats)
+        # Reviews were committed when answered. Replaying old cards here could
+        # overwrite progress from another session or resurrect deleted words.
+        self.result.dirty.clear()
         acc = (self.result.correct / self.result.reviewed * 100) if self.result.reviewed else 0.0
         return f"Session done: {self.result.correct}/{self.result.reviewed} correct ({acc:.0f}%)."

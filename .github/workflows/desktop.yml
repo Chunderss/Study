@@ -1,0 +1,41 @@
+name: Desktop tests and Windows executable
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -e ".[desktop-build,test]"
+      - name: Download offline test dictionary
+        run: python -m nltk.downloader -q -d build/nltk_data wordnet
+      - name: GUI and storage regressions
+        env:
+          QT_QPA_PLATFORM: offscreen
+          NLTK_DATA: ${{ github.workspace }}/build/nltk_data
+        run: python -m pytest -q
+      - name: Build portable desktop app
+        run: python tools/build_desktop.py
+      - name: Smoke test packaged desktop and offline dictionary
+        shell: python
+        run: |
+          import os, subprocess, tempfile
+          with tempfile.TemporaryDirectory() as home:
+              subprocess.run([r'dist\VocabStudy\VocabStudy.exe', '--home', home, '--smoke-test'],
+                             check=True, timeout=60,
+                             env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen'})
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VocabStudy-Windows
+          path: dist/VocabStudy-Windows.zip
+          if-no-files-found: error

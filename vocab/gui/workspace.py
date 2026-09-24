@@ -258,6 +258,9 @@ class Workspace(QWidget):
         from PySide6.QtCore import QTimer
 
         def apply():
+            from shiboken6 import isValid
+            if not isValid(splitter):
+                return
             n = splitter.count()
             if n <= 0:
                 return
@@ -295,6 +298,9 @@ class Workspace(QWidget):
             if 0 <= neighbor_idx < parent.count():
                 w = parent.widget(neighbor_idx)
                 neighbor = self._first_pane_in(w)
+        hook = getattr(cur.component, "on_replaced", None)
+        if callable(hook):
+            hook()
         cur.setParent(None)
         cur.deleteLater()
         self._collapse_empty_splitters()

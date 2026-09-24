@@ -28,7 +28,7 @@ class BaseComponent(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self.app = ctx.app
-        ctx.module_changed.connect(lambda _=None: self.refresh())
+        ctx.module_changed.connect(self.refresh)
         ctx.changed.connect(self.refresh)
 
     def refresh(self) -> None:
@@ -49,11 +49,14 @@ class VocabComponent(BaseComponent):
         self.words = QTextEdit(readOnly=True)
         lay.addWidget(self.words, 1)
         row = QHBoxLayout()
+        self._pending = None
+        self._submitted = ""
+        self.ctx.word_added.connect(self._added)
         self.add_input = QLineEdit()
         self.add_input.setPlaceholderText("Add a word (Enter).  word :: your definition  skips the dictionary")
         self.add_input.returnPressed.connect(self._add)
         row.addWidget(self.add_input, 1)
-        add_btn = QPushButton("Add")
+        add_btn = self.add_btn = QPushButton("Add")
         add_btn.clicked.connect(self._add)
         row.addWidget(add_btn)
         lay.addLayout(row)
@@ -64,7 +67,7 @@ class VocabComponent(BaseComponent):
 
     def _add(self) -> None:
         raw = self.add_input.text().strip()
-        if not raw:
+        if self._pending is not None or not raw:
             return
         if not self.app.current_module:
             self.ctx.log.emit("! Select or create a module first.")
@@ -73,11 +76,23 @@ class VocabComponent(BaseComponent):
         if "::" in raw:
             word, manual = [s.strip() for s in raw.split("::", 1)]
         try:
-            self.ctx.log.emit(self.app.cmd_add(word, manual_def=manual))
+            self._submitted = raw
+            self._pending = self.ctx.add_word(word, manual=manual)
         except Exception as e:
             self.ctx.log.emit(f"! {e}")
-        self.add_input.clear()
-        self.ctx.changed.emit()
+            return  # retain input so a failed lookup can be corrected/retried
+        if self._pending is None:
+            self.add_input.clear()
+        else:
+            self.add_btn.setEnabled(False)
+
+    def _added(self, token, success):
+        if token != self._pending:
+            return
+        self._pending = None
+        self.add_btn.setEnabled(True)
+        if success and self.add_input.text().strip() == self._submitted:
+            self.add_input.clear()
 
     def refresh(self) -> None:
         name = self.app.current_module
@@ -104,7 +119,7 @@ class NotesComponent(BaseComponent):
         super().__init__(ctx, parent)
         self._current = None
         self._loaded_note = None
-        self._loaded_text = ""
+        self._buffer = None
         lay = QHBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(8)
@@ -160,16 +175,21 @@ class NotesComponent(BaseComponent):
     def _apply_outer_orientation(self) -> None:
         narrow = self.width() < self._NARROW_W
         orientation = Qt.Vertical if narrow else Qt.Horizontal
-        if self.outer.orientation() != orientation:
-            self.outer.setOrientation(orientation)
+        changed = self.outer.orientation() != orientation
         if narrow:
             self._picker.setMaximumWidth(16777215)
             self._picker.setMaximumHeight(150)
-            self.outer.setSizes([150, max(1, self.height() - 150)])
+
         else:
             self._picker.setMaximumHeight(16777215)
             self._picker.setMaximumWidth(200)
-            self.outer.setSizes([170, max(1, self.width() - 170)])
+        if changed:
+            self.outer.setOrientation(orientation)
+            self.outer.setSizes([150, max(1, self.height() - 150)] if narrow
+                                else [170, max(1, self.width() - 170)])
+            self.outer.updateGeometry()
+            self.layout().invalidate()
+            self.layout().activate()
 
     def resizeEvent(self, e):
         self._apply_outer_orientation()
@@ -188,83 +208,111 @@ class NotesComponent(BaseComponent):
         self.editor.setEnabled(on)
 
     def refresh(self) -> None:
+        module = self.app.current_module
+        names = self.app.storage.note_names(module) if module else []
+        # Keep deleted/external drafts accessible until explicitly discarded.
+        names = sorted(set(names) | {note for (home, note), buffer in
+                       self.ctx.notes.buffers.items() if home == module and buffer.dirty})
         self.note_list.blockSignals(True)
         self.note_list.clear()
-        name = self.app.current_module
-        if name:
-            for n in self.app.storage.note_names(name):
-                self.note_list.addItem(n)
+        self.note_list.addItems(names)
+        wanted = self._current if self._current in names else None
+        if wanted:
+            self.note_list.setCurrentRow(names.index(wanted))
         self.note_list.blockSignals(False)
-        # keep current selection if still present
-        if self._current:
-            items = self.note_list.findItems(self._current, Qt.MatchExactly)
-            if items:
-                self.note_list.setCurrentItem(items[0])
-            else:
-                self._current = None
-                self.editor.clear(); self.title.setText("(no note)"); self._set_editing(False)
-                self.markdown.render()
+        if wanted:
+            self._select(wanted)
+        else:
+            self._detach()
+            self._current = None
+            self._loaded_note = None
+            self.editor.clear()
+            self.title.setText("(no note)")
+            self.dirty.clear()
+            self._set_editing(False)
+            self.markdown.render(reset_scroll=True)
+
+    def _detach(self):
+        if self._buffer is not None:
+            self._buffer.changed.disconnect(self._dirty)
+            self._buffer = None
+        # Never clear a shared document when clearing this view.
+        from PySide6.QtGui import QTextDocument
+        from PySide6.QtWidgets import QPlainTextDocumentLayout
+        doc = QTextDocument(self.editor)
+        doc.setDocumentLayout(QPlainTextDocumentLayout(doc))
+        self.editor.setDocument(doc)
 
     def _select(self, note: str) -> None:
         if not note or not self.app.current_module:
             return
         identity = (self.app.current_module, note)
-        if identity == self._loaded_note and self.editor.toPlainText() != self._loaded_text:
-            return  # unrelated data refresh must not overwrite an unsaved draft
         try:
-            content = self.app.storage.load_note(self.app.current_module, note)
+            buffer = self.ctx.notes.open(*identity)
         except Exception as e:
-            self.ctx.log.emit(f"! {e}"); return
+            self.ctx.log.emit(f"! {e}")
+            return
+        if buffer is self._buffer:
+            return  # preserve cursor, selection, undo stack and preview position
+        self._detach()
+        self._buffer = buffer
         self._current = note
         self._loaded_note = identity
-        self._loaded_text = content
-        self.editor.blockSignals(True)
-        self.editor.setPlainText(content)
-        self.editor.blockSignals(False)
-        self.markdown.render()
-        self.title.setText(note); self.dirty.setText(""); self._set_editing(True)
+        self.editor.setDocument(buffer.document)
+        buffer.changed.connect(self._dirty)
+        self.markdown.render(reset_scroll=True)
+        self.title.setText(note)
+        self._set_editing(True)
+        self._dirty()
 
     def _new(self) -> None:
         if not self.app.current_module:
-            self.ctx.log.emit("! Select or create a module first."); return
+            self.ctx.log.emit("! Select or create a module first.")
+            return
         name, ok = QInputDialog.getText(self, "New note", "Note name:")
         if not ok or not name.strip():
             return
         try:
-            stem = self.app.storage.save_note(self.app.current_module, name.strip(), "")
+            stem = self.app.storage.create_note(self.app.current_module, name.strip())
         except Exception as e:
-            self.ctx.log.emit(f"! {e}"); return
+            self.ctx.log.emit(f"! {e}")
+            return
         self._current = stem
         self.ctx.changed.emit()
         self.editor.setFocus()
 
     def _delete(self) -> None:
-        if not self._current or not self.app.current_module:
+        if not self._loaded_note:
             return
-        if QMessageBox.question(self, "Delete note", f"Delete '{self._current}'?") != QMessageBox.Yes:
+        module, note = self._loaded_note
+        if QMessageBox.question(self, "Delete note",
+                                f"Delete '{note}', including any unsaved edits?") != QMessageBox.Yes:
             return
         try:
-            self.app.storage.delete_note(self.app.current_module, self._current)
+            self.app.storage.delete_note(module, note)
         except Exception as e:
             self.ctx.log.emit(f"! {e}")
+            return
+        self.ctx.notes.discard(module, note)
         self._current = None
         self.ctx.changed.emit()
 
     def _dirty(self) -> None:
-        if self._current:
-            self.dirty.setText("● unsaved")
+        if self._buffer:
+            self.dirty.setText("● unsaved" if self._buffer.dirty else "")
 
-    def save(self) -> None:
-        if not self._current or not self.app.current_module:
-            return
+    def save(self) -> bool:
+        if self._buffer is None:
+            return True
         try:
-            self.app.storage.save_note(self.app.current_module, self._current,
-                                       self.editor.toPlainText())
-            self._loaded_text = self.editor.toPlainText()
-            self.editor.document().setModified(False)
-            self.dirty.setText("saved")
+            self._buffer.save()
         except Exception as e:
             self.ctx.log.emit(f"! {e}")
+            QMessageBox.warning(self, "Could not save note", str(e))
+            return False
+        self.dirty.setText("saved")
+        self.ctx.changed.emit()
+        return True
 
 
 # --------------------------------------------------------------------------- #
@@ -323,7 +371,7 @@ class DocumentsComponent(BaseComponent):
         if not item or not self.app.current_module:
             return
         name = item.text()
-        if name.startswith("("):   # placeholder row
+        if not item.flags() & Qt.ItemIsEnabled:
             return
         path = self.app.paths.documents_dir(self.app.current_module) / name
         if not path.exists():
@@ -348,7 +396,9 @@ class DocumentsComponent(BaseComponent):
         for d in self.app.storage.document_names(name):
             self.docs.addItem(d)
         if self.docs.count() == 0:
-            self.docs.addItem("(no documents yet — click + Add file)")
+            item = QListWidgetItem("(no documents yet — click + Add file)")
+            item.setFlags(Qt.NoItemFlags)
+            self.docs.addItem(item)
 
 
 # --------------------------------------------------------------------------- #
@@ -374,7 +424,9 @@ class ConsoleComponent(BaseComponent):
         self.cmd.setFocus()
 
     def log(self, text: str) -> None:
-        self.out.append(text)
+        from PySide6.QtGui import QTextCursor
+        self.out.moveCursor(QTextCursor.End)
+        self.out.insertPlainText(text + "\n")
 
     def _run(self) -> None:
         line = self.cmd.text().strip()
@@ -391,15 +443,29 @@ class ConsoleComponent(BaseComponent):
                 self.ctx.study_requested.emit(None)
             else:
                 target = " ".join(cmd.args) if cmd.args else self.app.current_module
-                self.ctx.study_requested.emit([target] if target else None)
+                self.ctx.study_requested.emit([target] if target else [])
             return
         repl = Repl(self.app)
+        repl._confirm = lambda text: QMessageBox.question(
+            self, "Confirm", text, QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No) == QMessageBox.Yes
+        previous_module = self.app.current_module
         try:
             result = repl.dispatch(cmd)
             if result:
                 self.log(result)
+            if cmd.verb == "DELETE" and cmd.args:
+                deleted = " ".join(cmd.args)
+                if not self.app.storage.exists(deleted):
+                    self.ctx.notes.discard(deleted)
+            if cmd.verb == "NOTE" and cmd.args and cmd.args[0].upper() in ("DEL", "DELETE", "RM"):
+                from ..core.storage import _sanitize_note_name
+                note = _sanitize_note_name(" ".join(cmd.args[1:]))
+                self.ctx.notes.discard(previous_module, note)
         except EOFError:
             self.log("(QUIT ignored in the app — just close the window)")
         except Exception as e:
             self.log(f"! {e}")
+        if previous_module != self.app.current_module:
+            self.ctx.module_changed.emit(self.app.current_module or "")
         self.ctx.changed.emit()

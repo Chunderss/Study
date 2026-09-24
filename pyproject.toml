@@ -1,8 +1,8 @@
 [project]
 name = "vocab-study"
-version = "0.1.0"
-description = "A terminal-first, command-driven vocabulary study program with a pluggable spaced-repetition engine and swappable dictionaries."
-requires-python = ">=3.9"
+version = "0.2.0"
+description = "Desktop study workspace with vocabulary, Markdown notes, document readers, and spaced repetition."
+requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
@@ -10,7 +10,9 @@ dependencies = []
 wordnet = ["nltk>=3.8"]              # offline dictionary (~40 MB corpus download)
 repl = ["prompt_toolkit>=3.0"]       # history + tab-completion for power users
 embeddings = ["sentence-transformers>=2.2"]  # phase-2 semantic judge (~250 MB via torch)
-gui = ["PySide6>=6.5"]               # standalone desktop app (Qt); ~100 MB
+test = ["pytest>=8,<10"]
+desktop-build = ["PySide6>=6.8,<7", "nltk>=3.9,<4", "pyinstaller>=6.20,<7"]
+gui = ["PySide6>=6.8,<7"]               # standalone desktop app (Qt); ~100 MB
 
 [project.scripts]
 vocab = "vocab.__main__:main"

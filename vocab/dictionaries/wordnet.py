@@ -18,7 +18,7 @@ class WordNet(Dictionary):
     id = "wordnet"
     name = "WordNet (offline)"
     description = "Offline lexical database. Works with no network once installed."
-    install_cost = "~40 MB (nltk 'wordnet' + 'omw-1.4' corpora)"
+    install_cost = "~11 MB (English WordNet corpus)"
     requires_network = False  # at lookup time; install needs network once
 
     def _corpus(self):
@@ -41,8 +41,7 @@ class WordNet(Dictionary):
                 "feature first:  pip install \"vocab-study[wordnet]\"",
                 recoverable=True,
             ) from e
-        nltk.download("wordnet")
-        nltk.download("omw-1.4")
+        nltk.download("wordnet", quiet=True, raise_on_error=True)
 
     def lookup(self, word: str) -> List[Sense]:
         wn = self._corpus()

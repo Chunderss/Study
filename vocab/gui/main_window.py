@@ -11,7 +11,7 @@ import os
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QInputDialog, QLabel,
                                QListWidget, QListWidgetItem, QMessageBox,
-                               QPushButton, QVBoxLayout, QWidget)
+                               QPushButton, QVBoxLayout, QWidget, QMenuBar)
 
 from ..cli.app import App
 from ..dictionaries import get_dictionary
@@ -48,6 +48,9 @@ class MainWindow(QWidget):
         # keep the pane highlight in sync with the REAL keyboard focus, whether
         # it moves by click or by keyboard (fixes "focus only changes on click")
         QApplication.instance().focusChanged.connect(self._on_focus_changed)
+        self.ctx.changed.connect(self._refresh_modules)
+        self.ctx.module_changed.connect(self._refresh_modules)
+        self.ctx.log.connect(self._show_message)
         self._refresh_modules()
         if self.app.migration_note:
             self.ctx.log.emit(self.app.migration_note)
@@ -55,18 +58,13 @@ class MainWindow(QWidget):
                           "x close). Press F1 for the full list.")
 
     def _bootstrap_dictionary(self) -> None:
-        try:
-            pref = get_dictionary(self.app.config.active_dictionary)
-        except Exception:
-            return
-        if pref.available():
-            return
-        try:
-            import nltk  # noqa: F401
-            if pref.id == "wordnet":
-                pref.install()
-        except Exception:
-            pass
+        # Offline data is bundled by the desktop build. Source users may install
+        # it explicitly; startup must not wait for a download.
+        pass
+
+    def _show_message(self, text):
+        self.status.setText(text)
+        self.status.setToolTip(text)
 
     # ---- component factory ---------------------------------------------
     def _make_component(self, key: str):
@@ -84,6 +82,23 @@ class MainWindow(QWidget):
     def _build(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        menu = QMenuBar(self)
+        outer.addWidget(menu)
+        notes_menu = menu.addMenu("Notes")
+        save_action = notes_menu.addAction("Save focused note", self._save_focused_note)
+        save_action.setShortcut("Ctrl+S")
+        notes_menu.addAction("Toggle preview", self._toggle_note_preview)
+        view_menu = menu.addMenu("View")
+        for key in COMPONENT_ORDER:
+            view_menu.addAction(key.title(), lambda checked=False, k=key:
+                                self.workspace.set_focused_component(k))
+        view_menu.addSeparator()
+        view_menu.addAction("Split side by side", lambda: self.workspace.split_vertical())
+        view_menu.addAction("Split stacked", lambda: self.workspace.split_horizontal())
+        view_menu.addAction("Zoom pane", lambda: self.workspace.toggle_zoom())
+        view_menu.addAction("Close pane", lambda: self.workspace.close_focused())
+        view_menu.addAction("Toggle sidebar", self._toggle_sidebar)
+        menu.addAction("Help", self._toggle_help)
         body = QHBoxLayout()
         body.setContentsMargins(12, 12, 12, 6)
         body.setSpacing(12)
@@ -100,7 +115,7 @@ class MainWindow(QWidget):
         side.addWidget(self.module_list, 1)
         newb = QPushButton("+ New module"); newb.clicked.connect(self._new_module)
         delb = QPushButton("Delete module"); delb.setObjectName("Bad"); delb.clicked.connect(self._delete_module)
-        studyb = QPushButton("Study ▶"); studyb.clicked.connect(lambda: self._open_study([self.app.current_module] if self.app.current_module else None))
+        studyb = QPushButton("Study ▶"); studyb.clicked.connect(lambda: self._open_study([self.app.current_module] if self.app.current_module else []))
         allb = QPushButton("Study All"); allb.clicked.connect(lambda: self._open_study(None))
         for b in (newb, delb, studyb, allb):
             side.addWidget(b)
@@ -216,6 +231,7 @@ class MainWindow(QWidget):
             self.app.cmd_use(name)
         except Exception as e:
             self.ctx.log.emit(f"! {e}")
+            return
         self.ctx.module_changed.emit(name)
         self._refresh_status()
 
@@ -240,6 +256,7 @@ class MainWindow(QWidget):
             return
         try:
             self.ctx.log.emit(self.app.cmd_delete(name))
+            self.ctx.notes.discard(name)
         except Exception as e:
             self.ctx.log.emit(f"! {e}")
         self._refresh_modules()
@@ -255,16 +272,7 @@ class MainWindow(QWidget):
             due = str(len(self.app.scheduler.due_order(stats, _t.time())))
         net = "offline" if not dic.requires_network else "ONLINE"
         z = "  ·  ZOOM" if self.workspace.is_zoomed else ""
-        # sense-selection engine indicator
-        try:
-            st = self.app.disambig_status()
-            if st["engine"] == "ollama":
-                sense = f"sense: ollama✓" if st["ollama_up"] else "sense: ollama(off→nlp)"
-            else:
-                sense = f"sense: {st['engine']}"
-        except Exception:
-            sense = ""
-        sense = f"    ·    {sense}" if sense else ""
+        sense = f"    ·    sense: {self.app.config.disambiguator}"
         self.status.setText(
             f"module: {cur}    ·    due: {due}    ·    dict: {dic.id} ({net}){sense}{z}")
 
@@ -314,13 +322,17 @@ class MainWindow(QWidget):
             return
         mechanical = self.app.config.mechanical_repetition
         judge = get_judge(self.app.config.judge_backend) if mechanical else None
-        session = StudySession(self.app.storage, self.app.scheduler, names,
-                               mechanical=mechanical, judge=judge, session_label=label)
+        try:
+            session = StudySession(self.app.storage, self.app.scheduler, names,
+                                   mechanical=mechanical, judge=judge, session_label=label)
+        except Exception as error:
+            self.ctx.log.emit(f"! {error}")
+            return
         if session.total == 0:
             self.ctx.log.emit("Nothing due right now. Add more words, or come back later.")
             return
         view = StudyView(session)
-        view.finished.connect(self._on_study_finished)
+        view.finished.connect(lambda summary, source=view: self._on_study_finished(summary, source))
         # split beside the focused pane and drop Study into the new pane
         self.workspace.split_vertical()
         self.workspace.focused.set_component(view, "study")
@@ -328,11 +340,11 @@ class MainWindow(QWidget):
         self.workspace.focused.set_focused(True)
         self._refresh_status()
 
-    def _on_study_finished(self, summary: str) -> None:
+    def _on_study_finished(self, summary: str, source=None) -> None:
         self.ctx.log.emit(summary)
         # turn the study pane back into vocab
-        pane = self.workspace.focused
-        if pane and getattr(pane.component, "TITLE", "") == "Study":
+        pane = next((p for p in self.workspace._panes if p.component is source), None)
+        if pane is not None:
             pane.set_component(self._make_component("vocab"), "vocab")
             pane.set_focused(True)
         self.ctx.changed.emit()
@@ -368,27 +380,16 @@ class MainWindow(QWidget):
         pane.set_focused(True)
         self._refresh_status()
 
-    def _add_highlighted_word(self, word: str, sentence: str) -> None:
+    def _add_highlighted_word(self, word: str, sentence: str, module: str = "") -> None:
         """A reader highlighted a word — add it to the current module's vocab,
         using the sentence for in-context sense selection."""
-        if not self.app.current_module:
+        if not (module or self.app.current_module):
             self.ctx.log.emit("! Open or select a module before adding words.")
             return
-        # If the LLM engine is active, sense selection takes 1-3s and blocks the
-        # event loop — show a hint and force it to paint before we call cmd_add.
-        st = self.app.disambig_status()
-        if st["engine"] == "ollama" and st["ollama_up"] and sentence:
-            self.status.setText(f"disambiguating “{word}” with {st['model']}…")
-            from PySide6.QtWidgets import QApplication
-            QApplication.processEvents()
         try:
-            msg = self.app.cmd_add(word, sentence=sentence)
-            self.ctx.log.emit(msg)
+            self.ctx.add_word(word, sentence=sentence, target=module or None)
         except Exception as e:
             self.ctx.log.emit(f"! Could not add '{word}': {e}")
-        self.ctx.changed.emit()
-        self._refresh_modules()
-        self._refresh_status()
 
 
     # ---- keep status live on any focus change --------------------------
@@ -397,6 +398,30 @@ class MainWindow(QWidget):
         super().focusInEvent(e)
 
     def closeEvent(self, e):
+        if self.ctx.busy:
+            QMessageBox.information(self, "Lookup in progress",
+                                    "Please let the current word lookup finish before closing.")
+            e.ignore()
+            return
+        drafts = self.ctx.notes.dirty_buffers()
+        if drafts:
+            names = "\n".join(f"• {b.module}/{b.note}" for b in drafts)
+            choice = QMessageBox.question(
+                self, "Unsaved notes", f"Save changes before closing?\n\n{names}",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save)
+            if choice == QMessageBox.Cancel:
+                e.ignore()
+                return
+            if choice == QMessageBox.Save:
+                try:
+                    for buffer in drafts:
+                        buffer.save()
+                except Exception as error:
+                    QMessageBox.warning(self, "Could not save notes", str(error))
+                    e.ignore()
+                    return
+        QApplication.instance().removeEventFilter(self.hotkeys)
         # persist reading position for any open document viewer before quitting
         for pane in list(self.workspace._panes):
             saver = getattr(pane.component, "save_position", None)

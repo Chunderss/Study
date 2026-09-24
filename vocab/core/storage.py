@@ -21,7 +21,7 @@ from typing import Dict, List
 
 from .models import WordList
 from .module import Module
-from .paths import Paths, sanitize_module_name
+from .paths import Paths, sanitize_module_name, validate_windows_filename
 
 
 def _atomic_write(path: Path, data: dict) -> None:
@@ -81,7 +81,10 @@ class Storage:
     module_names = list_names
 
     def exists(self, name: str) -> bool:
-        return sanitize_module_name(name) in self.list_names()
+        name = sanitize_module_name(name)
+        # Let the filesystem apply its own case rules (especially on Windows).
+        return (self.paths.manifest_file(name).is_file()
+                or self.paths.words_file(name).is_file())
 
     def load_module(self, name: str) -> Module:
         name = sanitize_module_name(name)
@@ -93,7 +96,9 @@ class Storage:
             mod = Module(name=name)
             self.save_module(mod)
             return mod
-        return Module.from_dict(raw, fallback_name=name)
+        mod = Module.from_dict(raw, fallback_name=name)
+        mod.name = name  # directory identity is authoritative
+        return mod
 
     def save_module(self, mod: Module) -> None:
         _atomic_write(self.paths.manifest_file(mod.name), mod.to_dict())
@@ -128,7 +133,9 @@ class Storage:
         if not self.exists(name):
             raise ModuleNotFound(f"Module '{name}' does not exist.")
         raw = _read_json(self.paths.words_file(name), {"name": name, "words": {}})
-        return WordList.from_dict(raw, fallback_name=name)
+        wl = WordList.from_dict(raw, fallback_name=name)
+        wl.name = name
+        return wl
 
     def save_words(self, wl: WordList) -> None:
         _atomic_write(self.paths.words_file(wl.name), wl.to_dict())
@@ -166,11 +173,25 @@ class Storage:
         p.parent.mkdir(parents=True, exist_ok=True)
         # atomic text write
         fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, p)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, p)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        return p.stem
+
+    def create_note(self, module: str, note: str) -> str:
+        if not self.exists(module):
+            raise ModuleNotFound(f"Module '{module}' does not exist.")
+        p = self._note_path(module, note)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Exclusive creation prevents accidental clobbering, also on Windows.
+        with p.open("x", encoding="utf-8"):
+            pass
         return p.stem
 
     def delete_note(self, module: str, note: str) -> None:
@@ -196,6 +217,8 @@ class Storage:
         dest_dir = self.paths.documents_dir(module)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / src.name
+        if dest.exists():
+            raise FileExistsError(f"Document '{src.name}' already exists in '{module}'.")
         shutil.copy2(src, dest)
         return dest.name
 
@@ -211,6 +234,8 @@ class Storage:
     def save_reading_pos(self, module: str, filename: str, pos: dict) -> None:
         """Persist where the reader left off in `filename` (chapter/scroll/zoom)."""
         module = sanitize_module_name(module)
+        if not self.exists(module):
+            return  # an old reader callback must not recreate a deleted module
         path = self.paths.reading_pos_file(module)
         data = _read_json(path, {})
         if not isinstance(data, dict):
@@ -261,4 +286,5 @@ def _sanitize_note_name(note: str) -> str:
         raise ValueError("Note name too long (max 100 chars).")
     if note in (".", ".."):
         raise ValueError("Invalid note name.")
+    validate_windows_filename(note)
     return note

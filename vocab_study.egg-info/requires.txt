@@ -1,9 +1,0 @@
-
-[embeddings]
-sentence-transformers>=2.2
-
-[repl]
-prompt_toolkit>=3.0
-
-[wordnet]
-nltk>=3.8

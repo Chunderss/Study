@@ -1,33 +1,77 @@
-"""GUI entry point:  python -m vocab.gui   (or the `vocab-gui` script)."""
+"""Desktop entry point, also used by the windowed executable."""
 from __future__ import annotations
 
 import argparse
+import logging
+from pathlib import Path
 import sys
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="vocab-gui", description="Vocab Study desktop app.")
+    ap = argparse.ArgumentParser(prog="VocabStudy", description="Vocab Study desktop app.")
     ap.add_argument("--home", help="Override data directory (default: platform data dir)")
+    ap.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
-
     try:
-        from PySide6.QtWidgets import QApplication
-    except ImportError:
-        sys.stderr.write(
-            "The desktop app needs PySide6. Install it with:\n"
-            '    pip install "vocab-study[gui]"\n'
-            "or run the terminal version:  python -m vocab\n")
-        sys.exit(1)
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        from PySide6.QtCore import QTimer
+    except ImportError as error:
+        if sys.stderr:
+            sys.stderr.write(f"Could not load Qt: {error}\n"
+                             'Source install: pip install "vocab-study[gui]"\n')
+        raise SystemExit(1)
 
-    from .main_window import MainWindow
-    from . import theme
-
-    app = QApplication(sys.argv)
+    app = QApplication([sys.argv[0]])
     app.setApplicationName("Vocab Study")
-    app.setStyleSheet(theme.stylesheet())
-    win = MainWindow(root=args.home)
-    win.show()
-    sys.exit(app.exec())
+    from ..core.paths import get_paths
+    paths = get_paths(args.home)
+    logfile = paths.root / "desktop.log"
+    logging.basicConfig(filename=logfile, level=logging.ERROR,
+                        format="%(asctime)s %(levelname)s %(message)s")
+
+    def report_error(kind, error, traceback):
+        logging.error("Desktop error", exc_info=(kind, error, traceback))
+        if args.smoke_test:
+            app.exit(1)
+        else:
+            QMessageBox.critical(None, "Vocab Study error",
+                                 f"{error}\n\nDetails were saved to {logfile}")
+
+    sys.excepthook = report_error
+    try:
+        # PyInstaller places bundled data inside _MEIPASS, never the working dir.
+        if getattr(sys, "frozen", False):
+            import nltk
+            nltk.data.path.insert(0, str(Path(sys._MEIPASS) / "nltk_data"))
+        from .main_window import MainWindow
+        from . import theme
+        app.setStyleSheet(theme.stylesheet())
+        win = MainWindow(root=args.home)
+        win.show()
+    except Exception:
+        report_error(*sys.exc_info())
+        raise SystemExit(1)
+
+    if args.smoke_test:
+        def smoke():
+            try:
+                from PySide6 import QtPdf, QtPdfWidgets, QtWebEngineWidgets
+                from ..dictionaries import get_dictionary
+                assert get_dictionary("wordnet").lookup("test")
+                from .markdown_editor import MarkdownEditor
+                editor = MarkdownEditor()
+                editor.editor.setPlainText("# Desktop ready\n\n**Offline**")
+                editor.render()
+                assert "Desktop ready" in editor.preview.toPlainText()
+                editor.deleteLater()
+            except Exception:
+                report_error(*sys.exc_info())
+                app.exit(1)
+            else:
+                win.close()
+                app.exit(0)
+        QTimer.singleShot(100, smoke)
+    raise SystemExit(app.exec())
 
 
 if __name__ == "__main__":

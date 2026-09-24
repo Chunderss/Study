@@ -12,7 +12,8 @@ from __future__ import annotations
 import os
 import tempfile
 import zipfile
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -37,13 +38,31 @@ class EpubBook:
 
     def __init__(self, path: str):
         self.src = path
-        self.tmpdir = tempfile.mkdtemp(prefix="vocab_epub_")
+        self._temp = tempfile.TemporaryDirectory(prefix="vocab_epub_")
+        self.tmpdir = self._temp.name
         self.title = os.path.splitext(os.path.basename(path))[0]
         self.chapters: list[tuple[str, str]] = []
-        self._extract_and_parse(path)
+        try:
+            self._extract_and_parse(path)
+        except Exception:
+            self._temp.cleanup()
+            raise
+
+    def _inside(self, base, relative):
+        url = urlsplit(relative)
+        if url.scheme or url.netloc:
+            raise ValueError("EPUB entries must refer to files inside the book.")
+        path = (Path(base) / unquote(url.path).replace("\\", "/")).resolve()
+        try:
+            path.relative_to(Path(self.tmpdir).resolve())
+        except ValueError:
+            raise ValueError("EPUB contains a path outside the book.") from None
+        return str(path)
 
     def _extract_and_parse(self, path: str) -> None:
         with zipfile.ZipFile(path) as z:
+            for entry in z.infolist():
+                self._inside(self.tmpdir, entry.filename)
             z.extractall(self.tmpdir)
         # 1) container.xml -> OPF path
         container = os.path.join(self.tmpdir, "META-INF", "container.xml")
@@ -64,7 +83,7 @@ class EpubBook:
         if not opf_rel:
             raise ValueError("Not a valid EPUB (no OPF package found)")
 
-        opf_path = os.path.join(self.tmpdir, opf_rel)
+        opf_path = self._inside(self.tmpdir, opf_rel)
         opf_dir = os.path.dirname(opf_path)
         tree = ET.parse(opf_path).getroot()
 
@@ -84,7 +103,7 @@ class EpubBook:
             href = manifest.get(idref)
             if not href:
                 continue
-            fpath = os.path.normpath(os.path.join(opf_dir, unquote(href)))
+            fpath = self._inside(opf_dir, href)
             if os.path.exists(fpath):
                 self.chapters.append((self._nice_name(href), fpath))
 
@@ -120,7 +139,9 @@ class PdfViewer(QWidget):
         self._storage = getattr(getattr(ctx, "app", None), "storage", None)
         self._fname = os.path.basename(path)
         self._doc = QPdfDocument(self)
-        self._doc.load(path)
+        error = self._doc.load(path)
+        if error != QPdfDocument.Error.None_:
+            raise ValueError(f"Could not read PDF: {error.name}")
         self._view = QPdfView(self)
         self._view.setDocument(self._doc)
         self._view.setPageMode(QPdfView.PageMode.MultiPage)   # continuous scroll
@@ -150,6 +171,7 @@ class PdfViewer(QWidget):
         self._doc.statusChanged.connect(self._update_info)
         self._doc.statusChanged.connect(self._restore_when_ready)
         self._update_info()
+        self._restore_when_ready(self._doc.status())
 
     def _restore_when_ready(self, status) -> None:
         from PySide6.QtPdf import QPdfDocument
@@ -167,7 +189,10 @@ class PdfViewer(QWidget):
                 self._view.setZoomFactor(float(saved["zoom"]))
             except (TypeError, ValueError):
                 pass
-        page = int(saved.get("page", 0) or 0)
+        try:
+            page = int(saved.get("page", 0) or 0)
+        except (TypeError, ValueError):
+            page = 0
         if page > 0:
             try:
                 nav = self._view.pageNavigator()
@@ -207,7 +232,7 @@ class PdfViewer(QWidget):
 
     def _zoom(self, factor: float):
         self._view.setZoomMode(self._view.ZoomMode.Custom)
-        self._view.setZoomFactor(self._view.zoomFactor() * factor)
+        self._view.setZoomFactor(max(0.1, min(5.0, self._view.zoomFactor() * factor)))
 
     def _fit(self):
         from PySide6.QtPdfWidgets import QPdfView
@@ -257,13 +282,20 @@ class EpubViewer(QWidget):
                 saved = self._storage.load_reading_pos(self._module, self._fname)
             except Exception:
                 saved = {}
-        start_idx = int(saved.get("chapter", 0))
+        try:
+            start_idx = int(saved.get("chapter", 0))
+        except (TypeError, ValueError):
+            start_idx = 0
         if "zoom" in saved:
             try:
                 self._zoom = float(saved["zoom"])
             except (TypeError, ValueError):
                 pass
-        self._pending_scroll = float(saved.get("scroll", 0.0) or 0.0)
+        self._zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom))
+        try:
+            self._pending_scroll = max(0.0, min(1.0, float(saved.get("scroll", 0.0) or 0.0)))
+        except (TypeError, ValueError):
+            self._pending_scroll = 0.0
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -411,55 +443,22 @@ class EpubViewer(QWidget):
             if not word:
                 return
             if self.ctx:
-                self.ctx.add_word_requested.emit(word, sentence)
+                self.ctx.add_word_requested.emit(word, sentence, self._module or "")
         try:
             self._web.page().runJavaScript(self._SEL_JS, _done)
         except Exception:
             pass
 
     def save_position(self) -> None:
-        """Persist chapter + scroll fraction + zoom (best-effort, async scroll).
-
-        Writes chapter+zoom synchronously first so the position survives even if
-        the JS scroll callback can't complete (e.g. during app shutdown), then
-        upgrades with the precise scroll fraction when the callback returns.
-        """
+        """Read Qt's cached scroll position synchronously, including on close."""
         if not (self._storage and self._module):
             return
-        idx, zoom, fname, module, storage = (
-            self._idx, self._zoom, self._fname, self._module, self._storage)
-
-        # synchronous baseline (keeps last known scroll if we already had one)
-        base_scroll = 0.0
-        try:
-            prev = storage.load_reading_pos(module, fname)
-            if int(prev.get("chapter", -1)) == idx:
-                base_scroll = float(prev.get("scroll", 0.0) or 0.0)
-        except Exception:
-            pass
-        try:
-            storage.save_reading_pos(module, fname,
-                                     {"chapter": idx, "scroll": base_scroll, "zoom": zoom})
-        except Exception:
-            pass
-
-        def _write(frac):
-            try:
-                frac = float(frac) if frac is not None else base_scroll
-            except (TypeError, ValueError):
-                frac = base_scroll
-            try:
-                storage.save_reading_pos(module, fname,
-                                         {"chapter": idx, "scroll": frac, "zoom": zoom})
-            except Exception:
-                pass
-
-        try:
-            self._web.page().runJavaScript(
-                "document.body ? (window.scrollY / "
-                "Math.max(1, document.body.scrollHeight)) : 0", _write)
-        except Exception:
-            pass
+        page = self._web.page()
+        height = max(1.0, page.contentsSize().height())
+        fraction = self._pending_scroll or max(0.0, min(1.0, page.scrollPosition().y() / height))
+        self._storage.save_reading_pos(
+            self._module, self._fname,
+            {"chapter": self._idx, "scroll": fraction, "zoom": self._zoom})
 
     def refresh(self) -> None:
         pass

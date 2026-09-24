@@ -17,6 +17,16 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QProgressBar,
 from . import theme
 
 
+class AnswerInput(QLineEdit):
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            event.accept()
+            if not event.isAutoRepeat():
+                self.returnPressed.emit()
+            return
+        super().keyPressEvent(event)
+
+
 class StudyView(QWidget):
     TITLE = "Study"
     finished = Signal(str)   # emits the session summary text when done
@@ -25,6 +35,9 @@ class StudyView(QWidget):
         super().__init__(parent)
         self.session = session
         self._revealed = False
+        self._awaiting_next = False
+        self._ended = False
+        self.setFocusPolicy(Qt.StrongFocus)
         self._build()
         self._load_card()
 
@@ -33,7 +46,10 @@ class StudyView(QWidget):
         pass
 
     def focus_default(self) -> None:
-        self.setFocus()
+        if self.session.mechanical and not self._awaiting_next:
+            self.input.setFocus()
+        else:
+            self.setFocus()
 
     # ---- layout ---------------------------------------------------------
     def _build(self) -> None:
@@ -72,6 +88,8 @@ class StudyView(QWidget):
         root.addWidget(self.word)
 
         self.answer = QLabel("")
+        self.answer.setTextFormat(Qt.PlainText)
+        self.word.setTextFormat(Qt.PlainText)
         self.answer.setAlignment(Qt.AlignCenter)
         self.answer.setWordWrap(True)
         self.answer.setStyleSheet(f"font-size: 18px; color: {theme.INK_DIM};")
@@ -79,7 +97,7 @@ class StudyView(QWidget):
         root.addWidget(self.answer)
 
         # mechanical-mode input (hidden in reveal mode)
-        self.input = QLineEdit()
+        self.input = AnswerInput()
         self.input.setPlaceholderText("Type the definition, then press Enter...")
         self.input.returnPressed.connect(self._submit_typed)
         self.input.hide()
@@ -101,11 +119,15 @@ class StudyView(QWidget):
         self.bad_btn.setObjectName("Bad")
         self.bad_btn.clicked.connect(lambda: self._grade(False))
 
+        self.next_btn = QPushButton("Continue  (Enter)")
+        self.next_btn.clicked.connect(self._continue)
+        self.next_btn.hide()
         self.end_btn = QPushButton("End  (Esc)")
         self.end_btn.clicked.connect(self._end)
 
         btns.addWidget(self.end_btn)
         btns.addStretch(1)
+        btns.addWidget(self.next_btn)
         btns.addWidget(self.reveal_btn)
         btns.addWidget(self.bad_btn)
         btns.addWidget(self.good_btn)
@@ -125,6 +147,9 @@ class StudyView(QWidget):
             return
         view = self.session.current()
         self._revealed = False
+        self._awaiting_next = False
+        self.next_btn.hide()
+        self.input.setEnabled(True)
         self.counter.setText(f"{view.index} / {view.total}")
         self.progress.setValue(view.index - 1)
         self.list_tag.setText(view.home_list)
@@ -168,12 +193,12 @@ class StudyView(QWidget):
         if not self._revealed or self.session.done:
             return
         outcome = self.session.answer(correct)
-        self._show_box_feedback(outcome)
         self.progress.setValue(self.session.reviewed)
         self._load_card()
+        self._show_box_feedback(outcome)
 
     def _submit_typed(self) -> None:
-        if self.session.done or not self.session.mechanical:
+        if self.session.done or not self.session.mechanical or self._awaiting_next:
             return
         typed = self.input.text().strip()
         if not typed:
@@ -185,8 +210,16 @@ class StudyView(QWidget):
         self.feedback.setText(
             f"score {outcome.score:.0%} — {outcome.feedback}   ·   "
             f"box {outcome.box_before} → {outcome.box_after} ({verdict})")
-        # brief pause is unnecessary; move on immediately to next card
-        self._load_card()
+        self._awaiting_next = True
+        self.input.setEnabled(False)
+        self.progress.setValue(self.session.reviewed)
+        self.next_btn.show()
+        self.next_btn.setFocus()
+
+    def _continue(self):
+        if self._awaiting_next:
+            self._awaiting_next = False
+            self._load_card()
 
     def _show_box_feedback(self, outcome) -> None:
         arrow = "↑" if outcome.box_after > outcome.box_before else (
@@ -197,16 +230,25 @@ class StudyView(QWidget):
         self.feedback.setStyleSheet(f"color: {color};")
 
     def _end(self) -> None:
+        if self._ended:
+            return
+        self._ended = True
         summary = self.session.finish()
         self.finished.emit(summary)
 
     # ---- keyboard -------------------------------------------------------
     def keyPressEvent(self, e) -> None:
         key = e.key()
+        if e.isAutoRepeat():
+            e.accept()
+            return
         if key == Qt.Key_Escape:
             self._end()
             return
         if self.session.mechanical:
+            if self._awaiting_next and key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+                self._continue()
+                return
             super().keyPressEvent(e)
             return
         if key in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter) and not self._revealed:

@@ -1,7 +1,6 @@
 import pytest
 pytest.importorskip("PySide6")
-from PySide6.QtCore import Qt, QPointF
-from PySide6.QtGui import QPainter, QPdfWriter
+from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMessageBox, QDialog
 
@@ -178,17 +177,29 @@ def test_learning_refresh_and_resolution(window):
 
 
 def make_pdf(window):
+    # A fixed text layer isolates the reader from platform-specific font
+    # embedding in QPdfWriter (the offscreen Windows font backend differs).
     path = window.app.paths.documents_dir("Book") / "book.pdf"
-    writer = QPdfWriter(str(path))
-    # Use point coordinates; at the default 1200 DPI, Windows' font ascent
-    # can put the entire first line above the printable page at y=100.
-    writer.setResolution(72)
-    painter = QPainter(writer)
-    painter.drawText(100, 100, "first page")
-    writer.newPage()
-    painter.drawText(100, 100, "second page")
-    painter.end()
-    del writer
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    for page, text in enumerate(("first page", "second page")):
+        stream = f"BT /F1 18 Tf 72 720 Td ({text}) Tj ET".encode("ascii")
+        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents {5 + page * 2} 0 R >>".encode("ascii"))
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"\nendstream")
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode("ascii") + obj + b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii"))
+    path.write_bytes(pdf)
     return path
 
 
@@ -203,7 +214,7 @@ def test_pdf_capture_uses_viewer_module_and_page_after_module_switch(window):
     window.app.cmd_use("Other")
     viewer._capture()
     assert captures[0][0] == "Book"
-    assert "second page" in captures[0][1]
+    assert "second page" in captures[0][1], (viewer._doc.status(), viewer._doc.pageCount(), viewer._doc.getAllText(0).text(), viewer._doc.getAllText(1).text())
     assert captures[0][2] == {"kind": "pdf", "filename": "book.pdf", "page": 1}
     viewer.deleteLater()
 

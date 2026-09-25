@@ -127,7 +127,7 @@ class PdfViewer(QWidget):
 
     back_requested = Signal()
 
-    def __init__(self, path: str, ctx=None, parent=None):
+    def __init__(self, path: str, ctx=None, parent=None, module=None):
         super().__init__(parent)
         from PySide6.QtPdf import QPdfDocument
         from PySide6.QtPdfWidgets import QPdfView
@@ -135,7 +135,7 @@ class PdfViewer(QWidget):
         self.path = path
         self.TITLE = f"PDF · {os.path.basename(path)}"
         self.ctx = ctx
-        self._module = getattr(getattr(ctx, "app", None), "current_module", None)
+        self._module = module if module is not None else getattr(getattr(ctx, "app", None), "current_module", None)
         self._storage = getattr(getattr(ctx, "app", None), "storage", None)
         self._fname = os.path.basename(path)
         self._doc = QPdfDocument(self)
@@ -159,13 +159,19 @@ class PdfViewer(QWidget):
         zout = QPushButton("A−"); zout.setToolTip("Zoom out"); zout.clicked.connect(lambda: self._zoom(0.8))
         fit = QPushButton("Fit width"); fit.clicked.connect(self._fit)
         ext = QPushButton("Open externally"); ext.clicked.connect(self._open_ext)
+        capture = QPushButton("Capture page")
+        capture.setToolTip("Capture text from this PDF page, then trim it to a passage and add a question")
+        capture.clicked.connect(self._capture)
         bar.addWidget(back)
         bar.addWidget(self._info, 1)
-        for b in (zout, zin, fit, ext):
-            bar.addWidget(b)
-        for b in (back, zout, zin, fit, ext):
-            b.setFocusPolicy(Qt.NoFocus)
         lay.addLayout(bar)
+        actions = QHBoxLayout()
+        actions.setContentsMargins(6, 0, 6, 4)
+        for b in (capture, zout, zin, fit, ext):
+            actions.addWidget(b)
+        for b in (back, capture, zout, zin, fit, ext):
+            b.setFocusPolicy(Qt.NoFocus)
+        lay.addLayout(actions)
         lay.addWidget(self._view, 1)
 
         self._doc.statusChanged.connect(self._update_info)
@@ -218,6 +224,21 @@ class PdfViewer(QWidget):
         except Exception:
             pass
 
+    def source_location(self):
+        return {"kind": "pdf", "filename": self._fname,
+                "page": max(0, self._view.pageNavigator().currentPage())}
+
+    def _capture(self):
+        if self.ctx:
+            source = self.source_location()
+            quote = self._doc.getAllText(source["page"]).text()
+            self.ctx.capture_requested.emit(self._module or "", quote, source)
+
+    def go_to(self, source):
+        from PySide6.QtCore import QPointF
+        page = max(0, min(int(source.get("page", 0)), self._doc.pageCount() - 1))
+        self._view.pageNavigator().jump(page, QPointF(0, 0))
+
     def closeEvent(self, e):
         self.save_position()
         super().closeEvent(e)
@@ -257,14 +278,14 @@ class EpubViewer(QWidget):
     ZOOM_MIN = 0.5
     ZOOM_MAX = 3.0
 
-    def __init__(self, path: str, ctx=None, parent=None):
+    def __init__(self, path: str, ctx=None, parent=None, module=None):
         super().__init__(parent)
         from PySide6.QtWebEngineWidgets import QWebEngineView
 
         self.path = path
         self.ctx = ctx
         # module + storage for persisting reading position (best-effort)
-        self._module = getattr(getattr(ctx, "app", None), "current_module", None)
+        self._module = module if module is not None else getattr(getattr(ctx, "app", None), "current_module", None)
         self._storage = getattr(getattr(ctx, "app", None), "storage", None)
         self._fname = os.path.basename(path)
         self.TITLE = f"EPUB · {os.path.basename(path)}"
@@ -315,18 +336,22 @@ class EpubViewer(QWidget):
         addw = QPushButton("＋ Add word")
         addw.setToolTip("Add the highlighted word to this module's vocab (with its sentence for context)")
         addw.clicked.connect(self._add_selection)
+        capture = QPushButton("Capture")
+        capture.setToolTip("Save the highlighted passage with a question and its location")
+        capture.clicked.connect(self._capture)
         ext = QPushButton("Open externally"); ext.clicked.connect(self._open_ext)
         bar.addWidget(back)
         bar.addWidget(self._prev)
         bar.addWidget(self._next)
         bar.addWidget(self._picker, 1)
-        bar.addWidget(addw)
-        bar.addWidget(fdown)
-        bar.addWidget(fup)
-        bar.addWidget(ext)
-        for w in (back, self._prev, self._next, self._picker, fdown, fup, addw, ext):
-            w.setFocusPolicy(Qt.NoFocus)
         lay.addLayout(bar)
+        actions = QHBoxLayout()
+        actions.setContentsMargins(6, 0, 6, 4)
+        for w in (addw, capture, fdown, fup, ext):
+            actions.addWidget(w)
+        for w in (back, self._prev, self._next, self._picker, fdown, fup, addw, capture, ext):
+            w.setFocusPolicy(Qt.NoFocus)
+        lay.addLayout(actions)
 
         self._web = QWebEngineView(self)
         lay.addWidget(self._web, 1)
@@ -342,6 +367,8 @@ class EpubViewer(QWidget):
         self._apply_zoom()
 
     def _on_loaded(self, _ok: bool) -> None:
+        if not _ok:
+            return  # a cancelled chapter load must not consume a source jump
         self._apply_zoom()
         if self._pending_scroll:
             # restore vertical scroll fraction, then clear it
@@ -387,15 +414,36 @@ class EpubViewer(QWidget):
         self._next.setEnabled(i < len(self._book.chapters) - 1)
 
     def _go(self, delta: int):
+        self._pending_scroll = 0.0
         self._load(self._idx + delta)
 
     def _jump(self, i: int):
         if i != self._idx:
+            self._pending_scroll = 0.0
             self._load(i)
 
     def _open_ext(self):
         from PySide6.QtGui import QDesktopServices
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.path))
+
+    def source_location(self):
+        page = self._web.page()
+        height = max(1.0, page.contentsSize().height())
+        fraction = self._pending_scroll or max(0.0, min(1.0, page.scrollPosition().y() / height))
+        return {"kind": "epub", "filename": self._fname, "chapter": self._idx,
+                "scroll": fraction}
+
+    def _capture(self):
+        quote = self._web.selectedText().strip()
+        if self.ctx:
+            if not quote:
+                self.ctx.log.emit("Highlight a passage first, then click Capture.")
+                return
+            self.ctx.capture_requested.emit(self._module or "", quote, self.source_location())
+
+    def go_to(self, source):
+        self._pending_scroll = max(0.0, min(1.0, float(source.get("scroll", 0))))
+        self._load(max(0, min(int(source.get("chapter", 0)), len(self._book.chapters) - 1)))
 
     # JS: get the selected word + the sentence it sits in (from the selection's
     # surrounding text). Splits on sentence punctuation, keeps the piece
@@ -476,11 +524,11 @@ class EpubViewer(QWidget):
 
 
 # --------------------------------------------------------------------------- #
-def make_viewer(path: str, ctx=None):
+def make_viewer(path: str, ctx=None, module=None):
     """Return the right viewer for a file, or None if unsupported."""
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
-        return PdfViewer(path, ctx)
+        return PdfViewer(path, ctx, module=module)
     if ext == ".epub":
-        return EpubViewer(path, ctx)
+        return EpubViewer(path, ctx, module=module)
     return None

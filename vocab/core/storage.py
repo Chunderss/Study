@@ -199,6 +199,31 @@ class Storage:
         if not p.exists():
             raise ModuleNotFound(f"Note '{note}' does not exist in '{module}'.")
         p.unlink()
+        self.clear_note_draft(module, note)
+
+    # Recovery copies are separate from Markdown files so Save/Discard keeps
+    # its usual meaning. Store the baseline too, for external-edit detection.
+    def _draft_path(self, module, note):
+        return self.paths.module_dir(sanitize_module_name(module)) / "drafts" / f"{_sanitize_note_name(note)}.json"
+
+    def save_note_draft(self, module, note, baseline, content):
+        if not self.exists(module):
+            raise ModuleNotFound(f"Module '{module}' does not exist.")
+        _atomic_write(self._draft_path(module, note), {"baseline": baseline, "content": content})
+
+    def clear_note_draft(self, module, note):
+        self._draft_path(module, note).unlink(missing_ok=True)
+
+    def note_drafts(self, module):
+        directory = self.paths.module_dir(sanitize_module_name(module)) / "drafts"
+        return sorted(p.stem for p in directory.glob("*.json"))
+
+    def load_note_draft(self, module, note):
+        data = _read_json(self._draft_path(module, note), None)
+        if data is not None and (not isinstance(data, dict) or
+                not all(isinstance(data.get(k), str) for k in ("baseline", "content"))):
+            raise ValueError(f"Unreadable recovery copy for {module}/{note}; file kept on disk.")
+        return data
 
     # ---- documents (documents component) -------------------------------
     def document_names(self, module: str) -> List[str]:

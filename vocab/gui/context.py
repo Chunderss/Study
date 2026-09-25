@@ -24,6 +24,9 @@ class WorkspaceContext(QObject):
     # a component wants to log a line to the console
     log = Signal(str)
     word_added = Signal(int, bool)
+    learning_changed = Signal()
+    capture_requested = Signal(str, str, object)  # module, excerpt, source location
+    source_requested = Signal(str, object)
 
     def __init__(self, app):
         super().__init__()

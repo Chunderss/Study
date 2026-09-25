@@ -76,6 +76,30 @@ def main() -> None:
                 assert win.hotkeys._armed, "Ctrl+B did not arm the leader"
                 QTest.keyClick(native, Qt.Key_V)
                 assert len(win.workspace._panes) == 2, "Leader split did not run once"
+                # Verify that the new learning UI and recovery storage are
+                # available in the frozen build, with no model or network.
+                win.app.cmd_create("DesktopCheck")
+                win.app.cmd_use("DesktopCheck")
+                win.app.storage.save_note("DesktopCheck", "Recovery", "saved")
+                buffer = win.ctx.notes.open("DesktopCheck", "Recovery")
+                buffer.document.setPlainText("draft")
+                buffer.flush_recovery()
+                assert win.app.storage.load_note_draft("DesktopCheck", "Recovery")["content"] == "draft"
+                buffer.save()
+                from ..core.learning import LearningStore
+                from .learning import LearningComponent, ReviewDialog
+                store = LearningStore(win.app.storage)
+                item = store.save_capture("DesktopCheck", kind="concept", prompt="Explain the idea",
+                                          quote="A source passage.")
+                review = ReviewDialog(win.ctx, "DesktopCheck", item)
+                assert review.reference.isHidden()
+                review.answer.setPlainText("My explanation.")
+                review.show_source()
+                review.rate("good")
+                assert store.load("DesktopCheck")[item["id"]]["card"]["reps"] == 1
+                review.deleteLater()
+                win.workspace.set_focused_component("learning")
+                assert isinstance(win.workspace.focused.component, LearningComponent)
             except Exception:
                 report_error(*sys.exc_info())
                 app.exit(1)

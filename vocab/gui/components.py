@@ -299,7 +299,19 @@ class NotesComponent(BaseComponent):
 
     def _dirty(self) -> None:
         if self._buffer:
-            self.dirty.setText("● unsaved" if self._buffer.dirty else "")
+            b = self._buffer
+            if b.recovery_error:
+                text = "Recovery copy failed — save your note"
+            elif not b.dirty:
+                text = ""
+            elif b.recovery_pending:
+                text = "● unsaved · backing up…"
+            else:
+                text = "● unsaved · recovery copy saved"
+                if b.recovered:
+                    text = "Recovered draft · Save to keep changes"
+            self.dirty.setText(text)
+            self.dirty.setToolTip(b.recovery_error)
 
     def save(self) -> bool:
         if self._buffer is None:

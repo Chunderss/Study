@@ -387,6 +387,75 @@ class Workspace(QWidget):
         cur.set_component(self._make(key), key)
         cur.set_focused(True)
 
+    def snapshot(self, describe):
+        """Serialize the logical tree, including the slot temporarily zoomed out."""
+        def encode(widget):
+            if isinstance(widget, Pane):
+                return {"pane": describe(widget), "order": self._panes.index(widget)}
+            children = [widget.widget(i) for i in range(widget.count())]
+            sizes = widget.sizes()
+            if self.is_zoomed and widget is self._zoom_origin[0]:
+                _, index, sizes = self._zoom_origin
+                children.insert(index, self._zoomed_pane)
+            return {"direction": "h" if widget.orientation() == Qt.Horizontal else "v",
+                    "sizes": sizes, "children": [encode(child) for child in children]}
+        return {"tree": encode(self.root), "focused": self._panes.index(self._focused),
+                "zoomed": self.is_zoomed}
+
+    def restore(self, state, configure):
+        """Restore validated layout data; transient panes are mapped by the caller."""
+        count = 0
+        def validate(node, depth=0):
+            nonlocal count
+            if not isinstance(node, dict) or depth > 20:
+                raise ValueError("Invalid saved workspace layout.")
+            if "pane" in node:
+                count += 1
+                if count > 32 or not isinstance(node["pane"], dict):
+                    raise ValueError("Invalid saved workspace pane.")
+                return
+            children = node.get("children")
+            if not isinstance(children, list) or not children or len(children) > 32:
+                raise ValueError("Invalid saved workspace split.")
+            sizes = node.get("sizes", [])
+            if not isinstance(sizes, list) or not all(isinstance(n, int) and 0 <= n < 100000 for n in sizes):
+                raise ValueError("Invalid saved workspace sizes.")
+            for child in children:
+                validate(child, depth + 1)
+        tree = state["tree"]
+        validate(tree)
+        if "pane" in tree:
+            raise ValueError("Saved workspace must have a root split.")
+        if self.is_zoomed:
+            self.toggle_zoom()
+        old_root = self.root
+        self._panes = []
+        self._focused = None
+        ordered = []
+        def build(node):
+            if "pane" in node:
+                pane = self._new_pane(self._order[0])
+                configure(pane, node["pane"])
+                order = node.get("order", len(ordered))
+                ordered.append((order if isinstance(order, int) else len(ordered), pane))
+                return pane
+            splitter = QSplitter(Qt.Horizontal if node.get("direction") == "h" else Qt.Vertical)
+            for child in node["children"]:
+                splitter.addWidget(build(child))
+            if len(node.get("sizes", [])) == splitter.count():
+                splitter.setSizes(node["sizes"])
+            return splitter
+        self.root = build(tree)
+        self._panes = [pane for _, pane in sorted(ordered, key=lambda pair: pair[0])]
+        self._tree_page.layout().replaceWidget(old_root, self.root)
+        old_root.setParent(None)
+        old_root.deleteLater()
+        focused = state.get("focused", 0)
+        focused = focused if isinstance(focused, int) else 0
+        self.focus_pane(self._panes[max(0, min(focused, len(self._panes) - 1))])
+        if state.get("zoomed"):
+            self.toggle_zoom()
+
 
 # Small helper on Pane used by split(): the new pane defaults to the same
 # component as the one being split (so a split shows two of the same until you

@@ -26,7 +26,7 @@ from .hotkeys import HotkeyFilter
 from .study_view import StudyView
 from .workspace import Workspace
 
-COMPONENT_ORDER = ["vocab", "notes", "documents", "console"]
+COMPONENT_ORDER = ["vocab", "notes", "documents", "console", "learning"]
 
 
 class MainWindow(QWidget):
@@ -38,9 +38,13 @@ class MainWindow(QWidget):
         self.ctx.study_requested.connect(self._open_study)
         self.ctx.view_requested.connect(self._open_viewer)
         self.ctx.add_word_requested.connect(self._add_highlighted_word)
+        self.ctx.capture_requested.connect(self._capture)
+        self.ctx.source_requested.connect(self._open_source)
         self.setWindowTitle("Vocab Study")
         self.resize(1040, 700)
         self._build()
+        self._session_warning = ""
+        self._restore_session()
         # Keep a reference: Qt event filters must remain alive for key delivery.
         self.hotkeys = HotkeyFilter(self)
         QApplication.instance().installEventFilter(self.hotkeys)
@@ -56,6 +60,13 @@ class MainWindow(QWidget):
             self.ctx.log.emit(self.app.migration_note)
         self.ctx.log.emit("Shortcuts (tmux-style): press Ctrl+B, then a key (e.g. v split, z zoom, "
                           "x close). Press F1 for the full list.")
+        recovered = self.ctx.notes.dirty_buffers()
+        if recovered:
+            self.ctx.log.emit(f"Recovered {len(recovered)} unsaved note draft(s). Open Notes to review and save them.")
+        if self.ctx.notes.recovery_errors:
+            self.ctx.log.emit("! " + " · ".join(self.ctx.notes.recovery_errors))
+        if self._session_warning:
+            self.ctx.log.emit(self._session_warning)
 
     def _bootstrap_dictionary(self) -> None:
         # Offline data is bundled by the desktop build. Source users may install
@@ -76,6 +87,9 @@ class MainWindow(QWidget):
             return DocumentsComponent(self.ctx)
         if key == "console":
             return ConsoleComponent(self.ctx)
+        if key == "learning":
+            from .learning import LearningComponent
+            return LearningComponent(self.ctx)
         return VocabComponent(self.ctx)
 
     # ---- layout ---------------------------------------------------------
@@ -117,7 +131,8 @@ class MainWindow(QWidget):
         delb = QPushButton("Delete module"); delb.setObjectName("Bad"); delb.clicked.connect(self._delete_module)
         studyb = QPushButton("Study ▶"); studyb.clicked.connect(lambda: self._open_study([self.app.current_module] if self.app.current_module else []))
         allb = QPushButton("Study All"); allb.clicked.connect(lambda: self._open_study(None))
-        for b in (newb, delb, studyb, allb):
+        learnb = QPushButton("Learning"); learnb.clicked.connect(lambda: self.workspace.set_focused_component("learning"))
+        for b in (newb, delb, studyb, allb, learnb):
             side.addWidget(b)
         self.sidebar.setFixedWidth(210)
         body.addWidget(self.sidebar)
@@ -350,7 +365,7 @@ class MainWindow(QWidget):
         self.ctx.changed.emit()
         self._refresh_modules()
 
-    def _open_viewer(self, path: str) -> None:
+    def _open_viewer(self, path: str):
         """Open a PDF/EPUB in an in-app viewer, REPLACING the current (Documents)
         pane. A '‹ Documents' button in the viewer restores the Documents view."""
         from .viewers import make_viewer
@@ -372,6 +387,35 @@ class MainWindow(QWidget):
         pane.set_focused(True)
         self.ctx.log.emit(f"Opened {os.path.basename(path)} in this pane.")
         self._refresh_status()
+        return viewer
+
+    def _capture(self, module, quote, source):
+        from .learning import CaptureDialog
+        if not module or not self.app.storage.exists(module):
+            self.ctx.log.emit("! The source module is no longer available.")
+            return
+        CaptureDialog(self.ctx, module, quote, source, parent=self).exec()
+
+    def _open_source(self, module, source):
+        try:
+            if not self.app.storage.exists(module):
+                raise ValueError("The source module was deleted.")
+            filename = source.get("filename", "")
+            if not filename:
+                raise ValueError("This is a manual capture without a linked document.")
+            directory = self.app.paths.documents_dir(module).resolve()
+            path = (directory / filename).resolve()
+            if path.parent != directory or not path.is_file():
+                raise ValueError("The source document was moved or deleted.")
+            if path.suffix.lower() not in (".pdf", ".epub"):
+                raise ValueError("This source cannot be opened in the reader.")
+            self.app.cmd_use(module)
+            self.ctx.module_changed.emit(module)
+            viewer = self._open_viewer(str(path))
+            if viewer:
+                viewer.go_to(source)
+        except Exception as error:
+            self.ctx.log.emit(f"! {error}")
 
     def _close_viewer(self, pane) -> None:
         """Restore a viewer pane back to the Documents component."""
@@ -390,6 +434,73 @@ class MainWindow(QWidget):
             self.ctx.add_word(word, sentence=sentence, target=module or None)
         except Exception as e:
             self.ctx.log.emit(f"! Could not add '{word}': {e}")
+
+    def _describe_pane(self, pane):
+        component = pane.component
+        state = {"component": pane.factory_key}
+        if isinstance(component, NotesComponent):
+            state.update(note=component._current,
+                         preview=not component.markdown._preview_panel.isHidden())
+        elif pane.factory_key == "viewer":
+            state.update(module=component._module, filename=component._fname)
+        return state
+
+    def _restore_pane(self, pane, state):
+        key = state.get("component", "vocab")
+        if key == "viewer":
+            from .viewers import make_viewer
+            try:
+                module, filename = state["module"], state["filename"]
+                if not self.app.storage.exists(module):
+                    raise ValueError("Source module was deleted.")
+                directory = self.app.paths.documents_dir(module).resolve()
+                path = (directory / filename).resolve()
+                if path.parent != directory or not path.is_file():
+                    raise ValueError("Source document was moved or deleted.")
+                component = make_viewer(str(path), self.ctx, module=module)
+                if component is None:
+                    raise ValueError("Unsupported document format.")
+                component.back_requested.connect(lambda p=pane: self._close_viewer(p))
+                pane.set_component(component, key)
+                return
+            except Exception as error:
+                self._session_warning = f"Could not restore a reader: {error}"
+                key = "documents"
+        if key not in COMPONENT_ORDER:
+            key = "vocab"
+        pane.set_component(self._make_component(key), key)
+        if key == "notes":
+            component = pane.component
+            note = state.get("note")
+            if isinstance(note, str):
+                matches = component.note_list.findItems(note, Qt.MatchExactly)
+                if matches:
+                    component.note_list.setCurrentItem(matches[0])
+            if state.get("preview") is False:
+                component.toggle_preview()
+
+    def _restore_session(self):
+        from ..core.storage import _read_json
+        try:
+            state = _read_json(self.app.paths.root / "workspace.json", {})
+            if not state:
+                return
+            if not isinstance(state, dict) or state.get("schema") != 1:
+                raise ValueError("Unrecognized workspace file.")
+            module = state.get("module")
+            if isinstance(module, str) and self.app.storage.exists(module):
+                self.app.cmd_use(module)
+            self.workspace.restore(state["workspace"], self._restore_pane)
+            self.sidebar.setVisible(state.get("sidebar", True) is not False)
+        except Exception as error:
+            self._session_warning = f"Could not restore the previous workspace: {error}"
+
+    def _save_session(self):
+        from ..core.storage import _atomic_write
+        _atomic_write(self.app.paths.root / "workspace.json", {
+            "schema": 1, "module": self.app.current_module,
+            "sidebar": not self.sidebar.isHidden(),
+            "workspace": self.workspace.snapshot(self._describe_pane)})
 
 
     # ---- keep status live on any focus change --------------------------
@@ -421,6 +532,14 @@ class MainWindow(QWidget):
                     QMessageBox.warning(self, "Could not save notes", str(error))
                     e.ignore()
                     return
+            elif choice == QMessageBox.Discard:
+                try:
+                    for buffer in drafts:
+                        self.ctx.notes.discard(buffer.module, buffer.note)
+                except Exception as error:
+                    QMessageBox.warning(self, "Could not discard recovery copy", str(error))
+                    e.ignore()
+                    return
         QApplication.instance().removeEventFilter(self.hotkeys)
         # persist reading position for any open document viewer before quitting
         for pane in list(self.workspace._panes):
@@ -430,6 +549,12 @@ class MainWindow(QWidget):
                     saver()
                 except Exception:
                     pass
+        try:
+            self._save_session()
+        except Exception as error:
+            QMessageBox.warning(self, "Could not save workspace layout", str(error))
+        for buffer in self.ctx.notes.buffers.values():
+            buffer._timer.stop()
         super().closeEvent(e)
 
     def resizeEvent(self, e):

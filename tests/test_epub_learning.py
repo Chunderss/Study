@@ -36,7 +36,10 @@ def wait_for(check):
     for _ in range(500):
         if check(): return
         QTest.qWait(20)
-    raise AssertionError("Browser callback did not finish")
+    diagnostics = []
+    viewer._web.page().runJavaScript('JSON.stringify({scroll: window.scrollY, height: document.body.scrollHeight, viewport: window.innerHeight})', lambda value: diagnostics.append(value))
+    QTest.qWait(200)
+    raise AssertionError(f"Browser callback did not finish: title={viewer._web.title()}, cached_scroll={viewer._web.page().scrollPosition().y()}, pending={viewer._pending_scroll}, DOM={diagnostics}")
 
 wait_for(lambda: viewer._web.title() == "one")
 loaded = []
@@ -67,6 +70,10 @@ app.processEvents()
 '''
     env = dict(os.environ)
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # Chromium needs a functioning compositor to publish cached scroll/selection
+    # geometry. Use the runner's native Windows desktop for this browser test.
+    if sys.platform == "win32":
+        env["QT_QPA_PLATFORM"] = "windows"
     env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
                             env=env, capture_output=True, text=True, timeout=45)

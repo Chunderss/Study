@@ -180,6 +180,9 @@ def test_learning_refresh_and_resolution(window):
 def make_pdf(window):
     path = window.app.paths.documents_dir("Book") / "book.pdf"
     writer = QPdfWriter(str(path))
+    # Use point coordinates; at the default 1200 DPI, Windows' font ascent
+    # can put the entire first line above the printable page at y=100.
+    writer.setResolution(72)
     painter = QPainter(writer)
     painter.drawText(100, 100, "first page")
     writer.newPage()

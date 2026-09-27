@@ -22,7 +22,7 @@ def restore(qt, tmp_path):
     viewer = EpubViewer.__new__(EpubViewer)
     QWidget.__init__(viewer)
     page = DeferredPage()
-    viewer._web = SimpleNamespace(page=lambda: page)
+    viewer._web = SimpleNamespace(page=lambda: page, isVisible=lambda: True)
     viewer._requested_url = QUrl.fromLocalFile(str(tmp_path / "chapter.html"))
     viewer._load_generation = 1
     viewer._pending_scroll = 0.25
@@ -37,6 +37,28 @@ def test_current_exhausted_restore_releases_pending_scroll(restore):
     assert viewer._pending_scroll == 0.25
     page.complete(False)
     assert viewer._pending_scroll == 0.0
+
+
+def test_hidden_reader_preserves_pending_without_running_javascript(restore, monkeypatch):
+    viewer, page = restore
+    scripts = []
+    monkeypatch.setattr(page, "runJavaScript", lambda *args: scripts.append(args))
+    viewer._web.isVisible = lambda: False
+    viewer._restore_scroll(1)
+    assert viewer._pending_scroll == 0.25
+    assert scripts == []
+
+
+@pytest.mark.parametrize("applied", [False, True])
+def test_reader_hidden_during_callback_preserves_pending_without_retry(restore, monkeypatch, applied):
+    viewer, page = restore
+    scheduled = []
+    monkeypatch.setattr("vocab.gui.viewers.QTimer.singleShot", lambda *args: scheduled.append(args))
+    viewer._restore_scroll(1, attempt=viewer.MAX_RESTORE_RETRIES)
+    viewer._web.isVisible = lambda: False
+    page.complete(applied)
+    assert viewer._pending_scroll == 0.25
+    assert scheduled == []
 
 
 @pytest.mark.parametrize("changed", ["generation", "fraction"])

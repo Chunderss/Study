@@ -306,6 +306,7 @@ class EpubViewer(QWidget):
         self._current_path = None
         self._requested_url = QUrl()
         self._load_generation = 0
+        self._document_loaded = False
         if self._book.title:
             self.TITLE = f"EPUB · {self._book.title}"
 
@@ -384,7 +385,14 @@ class EpubViewer(QWidget):
             self._next.setEnabled(False)
         self._apply_zoom()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._document_loaded and self._pending_scroll:
+            generation = self._load_generation
+            QTimer.singleShot(0, self, lambda: self._restore_scroll(generation))
+
     def _on_loaded(self) -> None:
+        self._document_loaded = True
         self._web.show()
         self._apply_zoom()
         if self._pending_scroll:
@@ -394,11 +402,17 @@ class EpubViewer(QWidget):
     def _restore_scroll(self, generation, attempt=0):
         if not isValid(self) or generation != self._load_generation or not self._pending_scroll:
             return
+        # Hidden WebEngine views have no reliable viewport or cached scroll geometry.
+        # Preserve the saved position until showEvent can restore it visibly.
+        if not self._web.isVisible():
+            return
         expected = json.dumps(self._requested_url.toString(QUrl.FullyEncoded))
         fraction = self._pending_scroll
 
         def restored(applied):
             if not isValid(self) or generation != self._load_generation or fraction != self._pending_scroll:
+                return
+            if not self._web.isVisible():
                 return
             if applied or attempt >= self.MAX_RESTORE_RETRIES:
                 # Once retries end, captures and saves must use the live position.
@@ -484,6 +498,7 @@ class EpubViewer(QWidget):
         self._error.hide()
         self._requested_url = url
         self._load_generation += 1
+        self._document_loaded = False
         self._web.load(url)
         self._apply_zoom()
 
@@ -532,8 +547,11 @@ class EpubViewer(QWidget):
         if info.status() == QWebEngineLoadingInfo.LoadStatus.LoadSucceededStatus:
             self._on_loaded()
         elif info.status() == QWebEngineLoadingInfo.LoadStatus.LoadFailedStatus:
+            self._document_loaded = False
             self._web.hide()
             self._show_error(f"Could not read chapter: {info.errorString()}")
+        elif info.status() == QWebEngineLoadingInfo.LoadStatus.LoadStartedStatus:
+            self._document_loaded = False
 
     def _go(self, delta: int):
         self._pending_scroll = 0.0

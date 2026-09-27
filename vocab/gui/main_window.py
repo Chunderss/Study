@@ -363,12 +363,12 @@ class MainWindow(QWidget):
         self.ctx.changed.emit()
         self._refresh_modules()
 
-    def _open_viewer(self, path: str):
+    def _open_viewer(self, path: str, source=None):
         """Open a PDF/EPUB in an in-app viewer, REPLACING the current (Documents)
         pane. A '‹ Documents' button in the viewer restores the Documents view."""
         from .viewers import make_viewer
         try:
-            viewer = make_viewer(path, self.ctx)
+            viewer = make_viewer(path, self.ctx, source=source)
         except Exception as e:
             self.ctx.log.emit(f"! Could not open document: {e}")
             return
@@ -409,9 +409,7 @@ class MainWindow(QWidget):
                 raise ValueError("This source cannot be opened in the reader.")
             self.app.cmd_use(module)
             self.ctx.module_changed.emit(module)
-            viewer = self._open_viewer(str(path))
-            if viewer:
-                viewer.go_to(source)
+            self._open_viewer(str(path), source=source)
         except Exception as error:
             self.ctx.log.emit(f"! {error}")
 

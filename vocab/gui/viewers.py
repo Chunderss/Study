@@ -284,7 +284,7 @@ class EpubViewer(QWidget):
     ZOOM_MAX = 3.0
     MAX_RESTORE_RETRIES = 20
 
-    def __init__(self, path: str, ctx=None, parent=None, module=None):
+    def __init__(self, path: str, ctx=None, parent=None, module=None, source=None):
         super().__init__(parent)
         from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -317,8 +317,11 @@ class EpubViewer(QWidget):
                 saved = self._storage.load_reading_pos(self._module, self._fname)
             except Exception:
                 saved = {}
+        # A capture supplies the initial location, while saved preferences still
+        # provide zoom. Load once so an outgoing navigation cannot reset the target.
+        location = saved if source is None else source
         try:
-            start_idx = int(saved.get("chapter", 0))
+            start_idx = int(location.get("chapter", 0))
         except (TypeError, ValueError):
             start_idx = 0
         if "zoom" in saved:
@@ -328,7 +331,7 @@ class EpubViewer(QWidget):
                 pass
         self._zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom))
         try:
-            self._pending_scroll = max(0.0, min(1.0, float(saved.get("scroll", 0.0) or 0.0)))
+            self._pending_scroll = max(0.0, min(1.0, float(location.get("scroll", 0.0) or 0.0)))
         except (TypeError, ValueError):
             self._pending_scroll = 0.0
 
@@ -379,7 +382,7 @@ class EpubViewer(QWidget):
         self._web.installEventFilter(self)
 
         if self._book.chapters:
-            self._load(max(0, min(start_idx, len(self._book.chapters) - 1)), href=saved.get("href"))
+            self._load(max(0, min(start_idx, len(self._book.chapters) - 1)), href=location.get("href"))
         else:
             self._show_error("Could not read this EPUB's chapters.")
             self._prev.setEnabled(False)
@@ -695,11 +698,14 @@ class EpubViewer(QWidget):
 
 
 # --------------------------------------------------------------------------- #
-def make_viewer(path: str, ctx=None, module=None):
+def make_viewer(path: str, ctx=None, module=None, source=None):
     """Return the right viewer for a file, or None if unsupported."""
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
-        return PdfViewer(path, ctx, module=module)
+        viewer = PdfViewer(path, ctx, module=module)
+        if source is not None:
+            viewer.go_to(source)
+        return viewer
     if ext == ".epub":
-        return EpubViewer(path, ctx, module=module)
+        return EpubViewer(path, ctx, module=module, source=source)
     return None

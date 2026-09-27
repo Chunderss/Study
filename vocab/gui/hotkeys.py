@@ -1,11 +1,14 @@
-"""Application-level hotkey filter with a tmux-style LEADER mode.
+"""Window-scoped hotkey filter with a tmux-style LEADER mode.
 
 Why leader mode? Direct chords (Ctrl+Shift+X, +J, ...) collide with OS/driver
 global hotkeys that grab them before our app sees them, and the set of
 offenders differs per machine. A leader sequence dodges this: press ONE leader
 chord, then a PLAIN letter (no modifiers). Nothing else in the OS grabs a bare
-letter, and — because this filter is installed on the QApplication — we consume
-that letter before the focused text box can type it.
+letter, and the filter on the focused widget consumes that letter before its
+text box can type it. Do not install Python event filters on QApplication:
+they caused native QtWebEngine crashes in our PySide6 6.11 tests.
+Following keyboard focus covers Chromium's
+input widgets without filtering every application event.
 
 Two binding kinds:
   * direct chords  : (modifiers, key) -> action     (kept for arrows etc.)
@@ -25,6 +28,8 @@ from __future__ import annotations
 from typing import Callable, Dict, Optional, Tuple
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtWidgets import QApplication, QWidget
+from shiboken6 import isValid
 
 _SHIFT_ALIASES = {
     Qt.Key_Backslash: Qt.Key_Bar, Qt.Key_Minus: Qt.Key_Underscore,
@@ -62,6 +67,65 @@ class HotkeyFilter(QObject):
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._disarm)
+        self._app = None
+        self._focused_widgets = []
+
+    # ---- scoped installation -------------------------------------------
+    def start(self) -> None:
+        """Follow keyboard focus within the owning window until stop()."""
+        if self._app is not None:
+            return
+        self._app = QApplication.instance()
+        owner = self.parent()
+        owner.installEventFilter(self)
+        self._app.focusChanged.connect(self._focus_changed)
+        self._app.applicationStateChanged.connect(self._application_state_changed)
+        self._focus_changed(None, self._app.focusWidget())
+
+    def stop(self) -> None:
+        if self._app is None:
+            return
+        self._app.focusChanged.disconnect(self._focus_changed)
+        self._app.applicationStateChanged.disconnect(self._application_state_changed)
+        self._app = None
+        self._clear_focus_filters()
+        owner = self.parent()
+        if owner is not None and isValid(owner):
+            owner.removeEventFilter(self)
+        self._disarm()
+        self._consumed_keys.clear()
+
+    def _clear_focus_filters(self) -> None:
+        for widget in self._focused_widgets:
+            if isValid(widget):
+                widget.removeEventFilter(self)
+        self._focused_widgets.clear()
+
+    def _focus_changed(self, _old, new) -> None:
+        self._clear_focus_filters()
+        if new is None:
+            # Replacing/reparenting a pane briefly clears focus while a command
+            # key is still held. Keep suppressing its repeats until key release;
+            # leaving the application/window is handled separately.
+            return
+        owner = self.parent()
+        if (not isinstance(new, QWidget) or not isValid(new) or
+                not isinstance(owner, QWidget) or not isValid(owner) or
+                new.window() is not owner.window() or
+                QApplication.activeModalWidget() is not None):
+            self._disarm()
+            self._consumed_keys.clear()
+            return
+        # Qt reports the actual focus receiver, including a control's focus
+        # proxy, so there is no need to traverse the control's children.
+        if new is not owner:
+            new.installEventFilter(self)
+            self._focused_widgets.append(new)
+
+    def _application_state_changed(self, state) -> None:
+        if state != Qt.ApplicationActive:
+            self._disarm()
+            self._consumed_keys.clear()
 
     # ---- registration ---------------------------------------------------
     def bind_direct(self, modifiers, key, action) -> None:
@@ -97,8 +161,10 @@ class HotkeyFilter(QObject):
 
     # ---- event handling -------------------------------------------------
     def eventFilter(self, obj, ev):
-        from PySide6.QtWidgets import QApplication, QWidget
-        if ev.type() == QEvent.ApplicationDeactivate:
+        if (ev.type() in (QEvent.ApplicationDeactivate, QEvent.WindowDeactivate) or
+                (ev.type() == QEvent.FocusOut and ev.reason() == Qt.PopupFocusReason)):
+            # Popup menus can grab the keyboard without changing focusWidget().
+            # Their Escape must not leave a workspace command armed underneath.
             self._disarm()
             self._consumed_keys.clear()
             return False
@@ -111,8 +177,8 @@ class HotkeyFilter(QObject):
         if not isinstance(obj, QWidget):
             return False
         owner = self.parent()
-        # Application filters also see dialogs and other windows. Workspace
-        # commands must never steal keys from those controls.
+        # A previously focused widget can move into a dialog before the focus
+        # notification arrives. Workspace commands must stay in their window.
         if isinstance(owner, QWidget) and (
                 obj.window() is not owner.window()
                 or QApplication.activeModalWidget() is not None):

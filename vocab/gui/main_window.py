@@ -47,8 +47,8 @@ class MainWindow(QWidget):
         self._restore_session()
         # Keep a reference: Qt event filters must remain alive for key delivery.
         self.hotkeys = HotkeyFilter(self)
-        QApplication.instance().installEventFilter(self.hotkeys)
         self._install_shortcuts()
+        self.hotkeys.start()
         # keep the pane highlight in sync with the REAL keyboard focus, whether
         # it moves by click or by keyboard (fixes "focus only changes on click")
         QApplication.instance().focusChanged.connect(self._on_focus_changed)
@@ -538,7 +538,7 @@ class MainWindow(QWidget):
                     QMessageBox.warning(self, "Could not discard recovery copy", str(error))
                     e.ignore()
                     return
-        QApplication.instance().removeEventFilter(self.hotkeys)
+        self.hotkeys.stop()
         # persist reading position for any open document viewer before quitting
         for pane in list(self.workspace._panes):
             saver = getattr(pane.component, "save_position", None)

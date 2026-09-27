@@ -18,7 +18,7 @@ from urllib.parse import quote as quote_url, unquote, urlsplit
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from PySide6.QtCore import Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
                                QVBoxLayout, QWidget)
 from shiboken6 import isValid
@@ -376,6 +376,7 @@ class EpubViewer(QWidget):
         self._web.page().navigationRequested.connect(self._navigate)
         self._web.page().loadingChanged.connect(self._loading_changed)
         lay.addWidget(self._web, 1)
+        self._web.installEventFilter(self)
 
         if self._book.chapters:
             self._load(max(0, min(start_idx, len(self._book.chapters) - 1)), href=saved.get("href"))
@@ -384,6 +385,26 @@ class EpubViewer(QWidget):
             self._prev.setEnabled(False)
             self._next.setEnabled(False)
         self._apply_zoom()
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind not in (QEvent.KeyPress, QEvent.Wheel, QEvent.TouchBegin, QEvent.MouseButtonPress):
+            return False
+        if kind == QEvent.KeyPress and event.key() not in (
+                Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right,
+                Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Home, Qt.Key_End, Qt.Key_Space):
+            return False
+        if kind == QEvent.KeyPress:
+            modifiers = event.modifiers()
+            if modifiers & (Qt.AltModifier | Qt.MetaModifier):
+                return False
+            if modifiers & Qt.ControlModifier and event.key() not in (Qt.Key_Home, Qt.Key_End):
+                return False
+        if (self._document_loaded and self._pending_scroll and isValid(self._web) and isinstance(watched, QWidget) and
+                (watched is self._web or self._web.isAncestorOf(watched))):
+            # Explicit reader interaction takes precedence over saved-position retries.
+            self._pending_scroll = 0.0
+        return False
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -394,6 +415,10 @@ class EpubViewer(QWidget):
     def _on_loaded(self) -> None:
         self._document_loaded = True
         self._web.show()
+        # Chromium delivers input to its child widgets, including the focus proxy.
+        # Refresh these filters after loading in case the renderer replaced them.
+        for child in self._web.findChildren(QWidget):
+            child.installEventFilter(self)
         self._apply_zoom()
         if self._pending_scroll:
             generation = self._load_generation

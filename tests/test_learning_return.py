@@ -159,6 +159,9 @@ def test_deleted_module_keeps_reader_open_when_learning_return_is_unavailable(wi
     component, _item = learning_entry(window)
     component.open_source()
     viewer = window.workspace.focused.component
+    # Windows locks an open PDF. Release its file handle while retaining the
+    # reader widget and return context to simulate an externally removed module.
+    viewer._doc.close()
     window.app.cmd_delete("Book")
     back_button(viewer).click()
     assert window.workspace.focused.component is viewer

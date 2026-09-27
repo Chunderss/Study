@@ -1,5 +1,5 @@
 """Capture, revisit an open question, or explain a concept before seeing its source."""
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMessageBox,
@@ -194,6 +194,35 @@ class LearningComponent(BaseComponent):
         row = self.entries.currentItem()
         return self.items.get(row.data(Qt.UserRole)) if row else None
 
+    def navigation_state(self):
+        item = self.selected()
+        return {"module": self.module, "capture_id": item["id"] if item else None,
+                "entries_scroll": self.entries.verticalScrollBar().value(),
+                "details_scroll": self.details.verticalScrollBar().value()}
+
+    def restore_navigation_state(self, state):
+        if not isinstance(state, dict) or state.get("module") != self.module:
+            return
+        capture_id = state.get("capture_id")
+        for index in range(self.entries.count()):
+            row = self.entries.item(index)
+            if row.data(Qt.UserRole) == capture_id:
+                self.entries.setCurrentItem(row)
+                break
+
+        def restore_scroll():
+            selected = self.selected()
+            if (self.module != state.get("module") or
+                    (selected["id"] if selected else None) != capture_id):
+                return
+            for key, widget in (("entries_scroll", self.entries), ("details_scroll", self.details)):
+                value = state.get(key)
+                if isinstance(value, int) and value >= 0:
+                    widget.verticalScrollBar().setValue(value)
+
+        # Scroll ranges settle after the component is inserted into its pane.
+        QTimer.singleShot(0, self, restore_scroll)
+
     def refresh(self):
         old = self.selected()
         old_id = old["id"] if old and self.module == self.app.current_module else None
@@ -246,7 +275,10 @@ class LearningComponent(BaseComponent):
     def open_source(self):
         item = self.selected()
         if item:
-            self.ctx.source_requested.emit(self.module, item["source"])
+            source = dict(item["source"])
+            source.update(capture_id=item["id"], quote=item["quote"],
+                          _learning_origin=self, _learning_return=self.navigation_state())
+            self.ctx.source_requested.emit(self.module, source)
 
     def delete(self):
         item = self.selected()

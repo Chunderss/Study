@@ -363,10 +363,12 @@ class MainWindow(QWidget):
         self.ctx.changed.emit()
         self._refresh_modules()
 
-    def _open_viewer(self, path: str, source=None):
-        """Open a PDF/EPUB in an in-app viewer, REPLACING the current (Documents)
-        pane. A '‹ Documents' button in the viewer restores the Documents view."""
+    def _open_viewer(self, path: str, source=None, pane=None, learning_return=None):
+        """Open a reader in a specific pane and retain its return destination."""
         from .viewers import make_viewer
+        pane = pane or self.workspace.focused
+        if pane not in self.workspace._panes:
+            return
         try:
             viewer = make_viewer(path, self.ctx, source=source)
         except Exception as e:
@@ -375,14 +377,12 @@ class MainWindow(QWidget):
         if viewer is None:
             self.ctx.log.emit("! No in-app viewer for that file type.")
             return
-        pane = self.workspace.focused
-        if pane is None:
-            self.workspace.split_vertical()
-            pane = self.workspace.focused
-        viewer.back_requested.connect(lambda p=pane: self._close_viewer(p))
+        self._bind_viewer_return(pane, viewer, learning_return)
         pane.set_component(viewer, "viewer")
         pane.title.setText(getattr(viewer, "TITLE", "Document"))
-        pane.set_focused(True)
+        if self.workspace.is_zoomed and self.workspace.focused is not pane:
+            self.workspace.toggle_zoom()
+        self.workspace.focus_pane(pane)
         self.ctx.log.emit(f"Opened {os.path.basename(path)} in this pane.")
         self._refresh_status()
         return viewer
@@ -396,6 +396,21 @@ class MainWindow(QWidget):
 
     def _open_source(self, module, source):
         try:
+            from .learning import LearningComponent
+            source = dict(source)
+            origin = source.pop("_learning_origin", None)
+            return_state = source.pop("_learning_return", None)
+            pane = next((p for p in self.workspace._panes if p.component is origin), None)
+            if origin is not None and pane is None:
+                return  # a delayed action must not replace an unrelated pane
+            pane = pane or self.workspace.focused
+            if pane is None:
+                return
+            if isinstance(pane.component, LearningComponent):
+                if not isinstance(return_state, dict):
+                    return_state = pane.component.navigation_state()
+            else:
+                return_state = getattr(pane.component, "_learning_return", None)
             if not self.app.storage.exists(module):
                 raise ValueError("The source module was deleted.")
             filename = source.get("filename", "")
@@ -409,15 +424,46 @@ class MainWindow(QWidget):
                 raise ValueError("This source cannot be opened in the reader.")
             self.app.cmd_use(module)
             self.ctx.module_changed.emit(module)
-            self._open_viewer(str(path), source=source)
+            self._open_viewer(str(path), source=source, pane=pane, learning_return=return_state)
         except Exception as error:
             self.ctx.log.emit(f"! {error}")
 
-    def _close_viewer(self, pane) -> None:
-        """Restore a viewer pane back to the Documents component."""
-        pane.set_component(self._make_component("documents"), "documents")
-        pane.title.setText("Documents")
-        pane.set_focused(True)
+    def _bind_viewer_return(self, pane, viewer, state=None):
+        return_state = None
+        if isinstance(state, dict) and state.get("module") == viewer._module:
+            capture_id = state.get("capture_id")
+            if capture_id is None or isinstance(capture_id, str):
+                return_state = {"module": viewer._module, "capture_id": capture_id}
+                for key in ("entries_scroll", "details_scroll"):
+                    value = state.get(key)
+                    if isinstance(value, int) and value >= 0:
+                        return_state[key] = value
+        viewer._learning_return = return_state
+        if return_state is not None:
+            viewer.set_back_label("‹ Learning")
+        viewer.back_requested.connect(lambda p=pane, v=viewer: self._close_viewer(p, v))
+
+    def _close_viewer(self, pane, viewer=None) -> None:
+        """Return to Learning or Documents in the reader's original pane."""
+        if pane not in self.workspace._panes or (viewer is not None and pane.component is not viewer):
+            return
+        state = getattr(pane.component, "_learning_return", None)
+        if state is not None:
+            try:
+                self.app.cmd_use(state["module"])
+            except Exception as error:
+                self.ctx.log.emit(f"! Cannot return to Learning: {error}")
+                return
+            self.ctx.module_changed.emit(self.app.current_module)
+        key = "learning" if state is not None else "documents"
+        component = self._make_component(key)
+        pane.set_component(component, key)
+        pane.title.setText(component.TITLE)
+        if self.workspace.is_zoomed and self.workspace.focused is not pane:
+            self.workspace.toggle_zoom()
+        self.workspace.focus_pane(pane)
+        if state is not None:
+            component.restore_navigation_state(state)
         self._refresh_status()
 
     def _add_highlighted_word(self, word: str, sentence: str, module: str = "") -> None:
@@ -432,6 +478,7 @@ class MainWindow(QWidget):
             self.ctx.log.emit(f"! Could not add '{word}': {e}")
 
     def _describe_pane(self, pane):
+        from .learning import LearningComponent
         component = pane.component
         state = {"component": pane.factory_key}
         if isinstance(component, NotesComponent):
@@ -439,6 +486,10 @@ class MainWindow(QWidget):
                          preview=not component.markdown._preview_panel.isHidden())
         elif pane.factory_key == "viewer":
             state.update(module=component._module, filename=component._fname)
+            if getattr(component, "_learning_return", None) is not None:
+                state["learning_return"] = dict(component._learning_return)
+        elif isinstance(component, LearningComponent):
+            state["learning"] = component.navigation_state()
         return state
 
     def _restore_pane(self, pane, state):
@@ -456,7 +507,7 @@ class MainWindow(QWidget):
                 component = make_viewer(str(path), self.ctx, module=module)
                 if component is None:
                     raise ValueError("Unsupported document format.")
-                component.back_requested.connect(lambda p=pane: self._close_viewer(p))
+                self._bind_viewer_return(pane, component, state.get("learning_return"))
                 pane.set_component(component, key)
                 return
             except Exception as error:
@@ -474,6 +525,8 @@ class MainWindow(QWidget):
                     component.note_list.setCurrentItem(matches[0])
             if state.get("preview") is False:
                 component.toggle_preview()
+        elif key == "learning":
+            pane.component.restore_navigation_state(state.get("learning"))
 
     def _restore_session(self):
         from ..core.storage import _read_json

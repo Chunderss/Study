@@ -41,17 +41,22 @@ Ctrl+B, release it, then `v` to split, `n` to cycle components, `z` to zoom,
 2. Write a question about the passage: why something happens, how concepts differ,
    an example, or how you would apply the idea. Choose **Concept to review** or
    **Open question to revisit**. Your own notes are optional.
+   Saving an EPUB capture keeps the original passage highlighted when you reopen
+   the book. Deleting the capture removes its highlight.
 3. Open **Learning** from the sidebar or View menu. Open questions appear first;
    edit one to mark it resolved. You can also paste a passage using **+ Capture**.
 4. Choose **Review next due concept**. Write an explanation from memory, then
    **Compare with source**. Rate yourself **Needs work** or **Understood** to save
    the attempt and schedule the next review. Closing an unfinished review leaves
    the schedule unchanged and asks before discarding an explanation.
-5. Select a capture and click **Source** to return to its PDF page or EPUB chapter
-   and approximate scroll position. Links stay attached to the original module.
+5. Select a capture and click **Source** to return to its PDF page or highlighted
+   EPUB passage. Older captures fall back to their saved position when the passage
+   cannot be matched. Click **‹ Learning** to return to the same capture and list
+   position. Links stay attached to the original module.
 
 Concept reviews are separate from vocabulary Study/Study All. Captures, explanations,
 and review history are stored locally. This workflow requires no AI or network access.
+EPUB highlights live with the module's captures; the original EPUB file is unchanged.
 An optional tutor has not been added yet; no model is downloaded or sent your passages.
 
 The app reopens the selected module, pane layout, selected notes, preview visibility,

@@ -70,6 +70,7 @@ data.cmd_use("Other")
 captures = []
 ctx.capture_requested.connect(lambda *args: captures.append(args))
 viewer._capture()
+wait_for(lambda: bool(captures))
 assert captures[0][0] == "Book"
 assert captures[0][1] == "Passage two"
 assert captures[0][2]["chapter"] == 1

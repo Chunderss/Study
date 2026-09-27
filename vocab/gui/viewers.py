@@ -24,6 +24,9 @@ from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
 from shiboken6 import isValid
 
 from . import theme
+from .epub_highlights import SELECTION_ANCHOR_JS, render_highlights_js
+from ..core.learning import LearningStore
+from ..core.storage import ModuleNotFound
 
 
 # --------------------------------------------------------------------------- #
@@ -158,7 +161,7 @@ class PdfViewer(QWidget):
 
         bar = QHBoxLayout()
         bar.setContentsMargins(6, 4, 6, 4)
-        back = QPushButton("‹ Documents"); back.clicked.connect(self.back_requested.emit)
+        back = self._back = QPushButton("‹ Documents"); back.clicked.connect(self.back_requested.emit)
         self._info = QLabel(objectName="Muted")
         zin = QPushButton("A+"); zin.setToolTip("Zoom in"); zin.clicked.connect(lambda: self._zoom(1.25))
         zout = QPushButton("A−"); zout.setToolTip("Zoom out"); zout.clicked.connect(lambda: self._zoom(0.8))
@@ -228,6 +231,9 @@ class PdfViewer(QWidget):
                                            {"page": int(page), "zoom": zoom})
         except Exception:
             pass
+
+    def set_back_label(self, text):
+        self._back.setText(text)
 
     def source_location(self):
         return {"kind": "pdf", "filename": self._fname,
@@ -307,6 +313,10 @@ class EpubViewer(QWidget):
         self._requested_url = QUrl()
         self._load_generation = 0
         self._document_loaded = False
+        self._active_capture_id = None
+        self._source_highlight = None
+        self._pending_highlight = None
+        self._set_highlight_source(source)
         if self._book.title:
             self.TITLE = f"EPUB · {self._book.title}"
 
@@ -341,7 +351,7 @@ class EpubViewer(QWidget):
 
         bar = QHBoxLayout()
         bar.setContentsMargins(6, 4, 6, 4)
-        back = QPushButton("‹ Documents"); back.clicked.connect(self.back_requested.emit)
+        back = self._back = QPushButton("‹ Documents"); back.clicked.connect(self.back_requested.emit)
         self._prev = QPushButton("‹ Prev"); self._prev.clicked.connect(lambda: self._go(-1))
         self._next = QPushButton("Next ›"); self._next.clicked.connect(lambda: self._go(1))
         self._picker = QComboBox()
@@ -354,7 +364,7 @@ class EpubViewer(QWidget):
         addw.setToolTip("Add the highlighted word to this module's vocab (with its sentence for context)")
         addw.clicked.connect(self._add_selection)
         capture = QPushButton("Capture")
-        capture.setToolTip("Save the highlighted passage with a question and its location")
+        capture.setToolTip("Save this passage with a question and keep it highlighted in the book")
         capture.clicked.connect(self._capture)
         ext = QPushButton("Open externally"); ext.clicked.connect(self._open_ext)
         bar.addWidget(back)
@@ -380,6 +390,8 @@ class EpubViewer(QWidget):
         self._web.page().loadingChanged.connect(self._loading_changed)
         lay.addWidget(self._web, 1)
         self._web.installEventFilter(self)
+        if self.ctx:
+            self.ctx.learning_changed.connect(self._refresh_highlights)
 
         if self._book.chapters:
             self._load(max(0, min(start_idx, len(self._book.chapters) - 1)), href=location.get("href"))
@@ -403,17 +415,18 @@ class EpubViewer(QWidget):
                 return False
             if modifiers & Qt.ControlModifier and event.key() not in (Qt.Key_Home, Qt.Key_End):
                 return False
-        if (self._document_loaded and self._pending_scroll and isValid(self._web) and isinstance(watched, QWidget) and
+        if (self._document_loaded and isValid(self._web) and isinstance(watched, QWidget) and
                 (watched is self._web or self._web.isAncestorOf(watched))):
             # Explicit reader interaction takes precedence over saved-position retries.
             self._pending_scroll = 0.0
+            self._pending_highlight = None
         return False
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self._document_loaded and self._pending_scroll:
+        if self._document_loaded:
             generation = self._load_generation
-            QTimer.singleShot(0, self, lambda: self._restore_scroll(generation))
+            QTimer.singleShot(0, self, lambda: self._restore_location(generation))
 
     def _on_loaded(self) -> None:
         self._document_loaded = True
@@ -423,9 +436,106 @@ class EpubViewer(QWidget):
         for child in self._web.findChildren(QWidget):
             child.installEventFilter(self)
         self._apply_zoom()
-        if self._pending_scroll:
-            generation = self._load_generation
-            QTimer.singleShot(0, self, lambda: self._restore_scroll(generation))
+        generation = self._load_generation
+        QTimer.singleShot(0, self, lambda: self._restore_location(generation))
+
+    def _set_highlight_source(self, source):
+        source = source or {}
+        capture_id = source.get("capture_id")
+        anchor = source.get("anchor")
+        if not isinstance(anchor, dict) and source.get("quote"):
+            anchor = {"exact": source["quote"]}
+        self._active_capture_id = capture_id or ("source" if anchor else None)
+        self._source_highlight = ({"id": "source", "anchor": anchor}
+                                  if anchor and not capture_id else None)
+        self._pending_highlight = self._active_capture_id
+
+    def _restore_location(self, generation, attempt=0):
+        if isValid(self) and generation == self._load_generation:
+            self._refresh_highlights(restore=True, attempt=attempt)
+
+    def _highlight_records(self):
+        records = []
+        if self._storage and self._module:
+            try:
+                items = LearningStore(self._storage).load(self._module)
+                for item in items.values():
+                    source = item["source"]
+                    if source.get("kind") != "epub" or source.get("filename") != self._fname:
+                        continue
+                    try:
+                        if source.get("href") is not None:
+                            if not isinstance(source["href"], str):
+                                continue
+                            path = self._book._inside(self._book.tmpdir, source["href"])
+                        else:
+                            chapter = int(source.get("chapter", 0))
+                            if not 0 <= chapter < len(self._book.chapters):
+                                continue
+                            path = self._book.chapters[chapter][1]
+                        if str(Path(path).resolve()) != self._current_path:
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+                    anchor = source.get("anchor")
+                    records.append({"id": item["id"], "anchor": anchor if isinstance(anchor, dict)
+                                    else {"exact": item["quote"]}})
+            except (OSError, ValueError, ModuleNotFound) as error:
+                if self.ctx:
+                    self.ctx.log.emit(f"Could not load EPUB highlights: {error}")
+        if self._source_highlight:
+            records.append(self._source_highlight)
+        return records
+
+    def _refresh_highlights(self, *, restore=False, attempt=0):
+        if not self._document_loaded or not isValid(self._web):
+            return
+        # A hidden-load reply may arrive after showEvent starts its own restore.
+        # Only the request made with a visible viewport can consume that target.
+        restore = restore and self._web.isVisible()
+        generation = self._load_generation
+        pending = self._pending_highlight if restore else None
+        script = render_highlights_js(self._highlight_records(), self._active_capture_id, pending)
+        expected = json.dumps(self._requested_url.toString(QUrl.FullyEncoded))
+        viewport = json.dumps({"width": self._web.width() / self._zoom,
+                               "height": self._web.height() / self._zoom})
+
+        def rendered(result):
+            if not isValid(self) or generation != self._load_generation or not restore:
+                return
+            if not self._web.isVisible():
+                return
+            if pending and pending == self._pending_highlight:
+                try:
+                    report = json.loads(result)
+                except (TypeError, ValueError):
+                    report = {}
+                if report.get("ready") is False and attempt < self.MAX_RESTORE_RETRIES:
+                    QTimer.singleShot(16, self, lambda: self._restore_location(generation, attempt + 1))
+                    return
+                self._pending_highlight = None
+                if report.get("focused", False):
+                    self._pending_scroll = 0.0
+            # A missing passage falls back to the capture's saved scroll location.
+            self._restore_scroll(generation)
+
+        self._web.page().runJavaScript(f"""
+            (() => {{
+                const expected = new URL({expected});
+                const current = new URL(location.href);
+                expected.hash = current.hash = '';
+                if (current.href !== expected.href || document.readyState !== 'complete')
+                    return '';
+                const viewport = {viewport};
+                // Qt can reveal a pane before Chromium receives its final size.
+                // Focusing in the old tiny viewport moves again during layout.
+                if ({json.dumps(bool(pending))} && (document.visibilityState === 'hidden' ||
+                        Math.abs(innerWidth - viewport.width) > 2 ||
+                        Math.abs(innerHeight - viewport.height) > 2))
+                    return JSON.stringify({{ready: false}});
+                return {script.rstrip().rstrip(';')};
+            }})();
+        """, rendered)
 
     def _restore_scroll(self, generation, attempt=0):
         if not isValid(self) or generation != self._load_generation or not self._pending_scroll:
@@ -518,6 +628,7 @@ class EpubViewer(QWidget):
             url = self._chapter_url(i, fragment, href)
         except (OSError, ValueError) as error:
             self._pending_scroll = 0.0
+            self._pending_highlight = None
             self._set_chapter(self._idx)
             self._show_error(f"Could not read chapter: {error}")
             return
@@ -555,6 +666,7 @@ class EpubViewer(QWidget):
             # Leave Chromium's navigation callback before starting another load.
             request.reject()
             self._pending_scroll = 0.0
+            self._set_highlight_source(None)
             QTimer.singleShot(0, self, lambda: self._load(i, url.fragment(), href))
             return
         if i != self._idx:
@@ -563,6 +675,7 @@ class EpubViewer(QWidget):
         if url != self._requested_url:
             self._load_generation += 1
             self._pending_scroll = 0.0
+            self._set_highlight_source(None)
         self._current_path = str(source)
         self._error.hide()
         self._requested_url = url
@@ -583,16 +696,21 @@ class EpubViewer(QWidget):
 
     def _go(self, delta: int):
         self._pending_scroll = 0.0
+        self._set_highlight_source(None)
         self._load(self._idx + delta)
 
     def _jump(self, i: int):
         if i != self._idx:
             self._pending_scroll = 0.0
+            self._set_highlight_source(None)
             self._load(i)
 
     def _open_ext(self):
         from PySide6.QtGui import QDesktopServices
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.path))
+
+    def set_back_label(self, text):
+        self._back.setText(text)
 
     def source_location(self):
         page = self._web.page()
@@ -607,15 +725,30 @@ class EpubViewer(QWidget):
         return source
 
     def _capture(self):
-        quote = self._web.selectedText().strip()
-        if self.ctx:
-            if not quote:
+        if not self.ctx or not self._document_loaded:
+            return
+        generation = self._load_generation
+        source = self.source_location()
+
+        def selected(result):
+            if not isValid(self) or generation != self._load_generation or not self._document_loaded:
+                return
+            try:
+                anchor = json.loads(result)
+                quote = anchor.pop("quote").strip()
+                source["scroll"] = anchor.pop("scroll")
+            except (TypeError, ValueError, KeyError):
                 self.ctx.log.emit("Highlight a passage first, then click Capture.")
                 return
-            self.ctx.capture_requested.emit(self._module or "", quote, self.source_location())
+            source["anchor"] = anchor
+            self.ctx.capture_requested.emit(self._module or "", quote, source)
+
+        # Text and DOM offsets must come from the same renderer snapshot.
+        self._web.page().runJavaScript(SELECTION_ANCHOR_JS, selected)
 
     def go_to(self, source):
         self._pending_scroll = max(0.0, min(1.0, float(source.get("scroll", 0))))
+        self._set_highlight_source(source)
         self._load(max(0, min(int(source.get("chapter", 0)), len(self._book.chapters) - 1)),
                    href=source.get("href"))
 
@@ -694,6 +827,10 @@ class EpubViewer(QWidget):
 
     def on_replaced(self) -> None:
         """Called by Pane.set_component when this viewer is swapped out."""
+        # A renderer reply can arrive between pane replacement and deleteLater.
+        # Invalidate it even if saving fails and the pane still replaces us.
+        self._load_generation += 1
+        self._document_loaded = False
         self.save_position()
 
 

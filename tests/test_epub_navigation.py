@@ -94,6 +94,7 @@ ctx.capture_requested.connect(lambda *args: captures.append(args))
 js('var range=document.createRange(); range.selectNodeContents(document.getElementById("target")); var selection=window.getSelection(); selection.removeAllRanges(); selection.addRange(range); true;')
 wait_for(lambda: viewer._web.selectedText() == "Café passage")
 viewer._capture()
+wait_for(lambda: bool(captures))
 assert captures[-1][0:2] == ("Book", "Café passage")
 assert captures[-1][2]["chapter"] == 1
 assert captures[-1][2]["scroll"] > 0
@@ -249,6 +250,7 @@ try:
     js('var range=document.createRange(); range.selectNodeContents(document.getElementById("s72")); var selection=window.getSelection(); selection.removeAllRanges(); selection.addRange(range); true;')
     wait_for(lambda: viewer._web.selectedText() == "Passage 72")
     viewer._capture()
+    wait_for(lambda: bool(captures))
     assert captures[-1][0:2] == ("Book", "Passage 72")
     assert captures[-1][2]["chapter"] == 1
     assert abs(captures[-1][2]["scroll"] - actual) < 0.000001

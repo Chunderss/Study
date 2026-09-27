@@ -11,7 +11,8 @@ def test_epub_capture_and_source_navigation(tmp_path):
     script = r'''
 import sys
 import zipfile
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QUrl
+from PySide6.QtWebEngineCore import QWebEngineLoadingInfo
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from vocab.cli.app import App
@@ -44,9 +45,23 @@ def wait_for(check):
 wait_for(lambda: viewer._web.title() == "one")
 loaded = []
 viewer._web.loadFinished.connect(lambda ok: loaded.append(ok))
+outgoing_url = QUrl(viewer._web.url())
 viewer.go_to({"chapter": 1, "scroll": 0.25})
+# An outgoing chapter can finish after a source jump has already been issued.
+# Neither the unqualified signal nor the old URL may consume the new position.
+viewer._web.loadFinished.emit(True)
+assert viewer._pending_scroll == 0.25
+loaded.clear()
+class OutgoingLoad:
+    def status(self):
+        return QWebEngineLoadingInfo.LoadStatus.LoadSucceededStatus
+    def url(self):
+        return outgoing_url
+viewer._loading_changed(OutgoingLoad())
+assert viewer._pending_scroll == 0.25
 wait_for(lambda: True in loaded and viewer._web.title() == "two")
 wait_for(lambda: viewer._web.page().scrollPosition().y() > 0)
+wait_for(lambda: viewer._pending_scroll == 0)
 selected = []
 viewer._web.page().runJavaScript('var r=document.createRange(); r.selectNodeContents(document.getElementById("passage")); var s=window.getSelection(); s.removeAllRanges(); s.addRange(r); true;', lambda value: selected.append(value))
 wait_for(lambda: selected and viewer._web.selectedText() == "Passage two")

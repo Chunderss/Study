@@ -7,6 +7,27 @@ import pytest
 pytest.importorskip("PySide6")
 
 
+def test_epub_uses_canonical_temp_directory(tmp_path, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+    import zipfile
+    from vocab.gui.viewers import EpubBook
+
+    (tmp_path / "alias_parent").mkdir()
+    root = tmp_path / "extracted"
+    root.mkdir()
+    alias = str(tmp_path / "alias_parent" / ".." / "extracted")
+    monkeypatch.setattr("vocab.gui.viewers.tempfile.TemporaryDirectory",
+                        lambda **kwargs: SimpleNamespace(name=alias, cleanup=lambda: None))
+    path = tmp_path / "book.epub"
+    with zipfile.ZipFile(path, "w") as book:
+        book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="one" href="one.html"/></manifest><spine><itemref idref="one"/></spine></package>')
+        book.writestr("one.html", "<html><body>Text</body></html>")
+    book = EpubBook(str(path))
+    assert book.tmpdir == str(root.resolve())
+    assert Path(book.chapters[0][1]).relative_to(book.tmpdir).as_posix() == "one.html"
+
+
 def test_epub_links_large_xhtml_assets_and_load_errors(tmp_path):
     script = r'''
 import sys

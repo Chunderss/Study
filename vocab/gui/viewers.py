@@ -9,6 +9,7 @@ Both viewers are pane components: TITLE / refresh() / focus_default().
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -20,6 +21,7 @@ from xml.etree import ElementTree as ET
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
                                QVBoxLayout, QWidget)
+from shiboken6 import isValid
 
 from . import theme
 
@@ -40,7 +42,9 @@ class EpubBook:
     def __init__(self, path: str):
         self.src = path
         self._temp = tempfile.TemporaryDirectory(prefix="vocab_epub_")
-        self.tmpdir = self._temp.name
+        # Windows temp paths may use an 8.3 username while resolved chapter
+        # paths use the long name. Keep one canonical root for relative paths.
+        self.tmpdir = str(Path(self._temp.name).resolve())
         self.title = os.path.splitext(os.path.basename(path))[0]
         self.chapters: list[tuple[str, str]] = []
         try:
@@ -300,6 +304,7 @@ class EpubViewer(QWidget):
         self._source_paths = {}
         self._current_path = None
         self._requested_url = QUrl()
+        self._load_generation = 0
         if self._book.title:
             self.TITLE = f"EPUB · {self._book.title}"
 
@@ -369,8 +374,6 @@ class EpubViewer(QWidget):
         self._web.page().navigationRequested.connect(self._navigate)
         self._web.page().loadingChanged.connect(self._loading_changed)
         lay.addWidget(self._web, 1)
-        # re-apply zoom + restore scroll whenever a chapter finishes loading
-        self._web.loadFinished.connect(self._on_loaded)
 
         if self._book.chapters:
             self._load(max(0, min(start_idx, len(self._book.chapters) - 1)), href=saved.get("href"))
@@ -380,17 +383,44 @@ class EpubViewer(QWidget):
             self._next.setEnabled(False)
         self._apply_zoom()
 
-    def _on_loaded(self, _ok: bool) -> None:
-        if not _ok:
-            return  # a cancelled chapter load must not consume a source jump
+    def _on_loaded(self) -> None:
         self._web.show()
         self._apply_zoom()
         if self._pending_scroll:
-            # restore vertical scroll fraction, then clear it
-            frac = self._pending_scroll
-            self._pending_scroll = 0.0
-            self._web.page().runJavaScript(
-                f"window.scrollTo(0, document.body.scrollHeight * {frac});")
+            generation = self._load_generation
+            QTimer.singleShot(0, self, lambda: self._restore_scroll(generation))
+
+    def _restore_scroll(self, generation, attempt=0):
+        if not isValid(self) or generation != self._load_generation or not self._pending_scroll:
+            return
+        expected = json.dumps(self._requested_url.toString(QUrl.FullyEncoded))
+        fraction = self._pending_scroll
+
+        def restored(applied):
+            if not isValid(self) or generation != self._load_generation or fraction != self._pending_scroll:
+                return
+            if applied:
+                self._pending_scroll = 0.0
+            elif attempt < 20:
+                QTimer.singleShot(16, self, lambda: self._restore_scroll(generation, attempt + 1))
+
+        # A title or an outgoing document's loadFinished can arrive before the
+        # requested chapter is ready. Confirm both the document and actual
+        # renderer scroll before consuming its saved position.
+        self._web.page().runJavaScript(f"""
+            (() => {{
+                const expected = new URL({expected});
+                const current = new URL(location.href);
+                expected.hash = current.hash = '';
+                if (current.href !== expected.href || document.readyState !== 'complete')
+                    return false;
+                const root = document.scrollingElement || document.documentElement;
+                const target = Math.max(0, Math.min(root.scrollHeight * {fraction},
+                                                   root.scrollHeight - innerHeight));
+                window.scrollTo(0, target);
+                return Math.abs(window.scrollY - target) <= 1;
+            }})();
+        """, restored)
 
     def _bump(self, factor: float) -> None:
         self._zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom * factor))
@@ -451,6 +481,7 @@ class EpubViewer(QWidget):
         self._current_path = self._source_paths[str(Path(url.toLocalFile()).resolve())]
         self._error.hide()
         self._requested_url = url
+        self._load_generation += 1
         self._web.load(url)
         self._apply_zoom()
 
@@ -484,14 +515,21 @@ class EpubViewer(QWidget):
         if i != self._idx:
             self._pending_scroll = 0.0
             self._set_chapter(i)
+        if url != self._requested_url:
+            self._load_generation += 1
+            self._pending_scroll = 0.0
         self._current_path = str(source)
         self._error.hide()
         self._requested_url = url
 
     def _loading_changed(self, info):
         from PySide6.QtWebEngineCore import QWebEngineLoadingInfo
-        if (info.status() == QWebEngineLoadingInfo.LoadStatus.LoadFailedStatus and
-                info.url().toLocalFile() == self._requested_url.toLocalFile()):
+        if (not info.url().isLocalFile() or not self._requested_url.isLocalFile() or
+                Path(info.url().toLocalFile()).resolve() != Path(self._requested_url.toLocalFile()).resolve()):
+            return
+        if info.status() == QWebEngineLoadingInfo.LoadStatus.LoadSucceededStatus:
+            self._on_loaded()
+        elif info.status() == QWebEngineLoadingInfo.LoadStatus.LoadFailedStatus:
             self._web.hide()
             self._show_error(f"Could not read chapter: {info.errorString()}")
 

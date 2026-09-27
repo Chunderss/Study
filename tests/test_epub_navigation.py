@@ -181,3 +181,92 @@ app.processEvents()
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
                             env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_scroll_restore_exhaustion_uses_live_position_for_capture_and_save(tmp_path):
+    script = r'''
+import sys
+import zipfile
+from PySide6.QtCore import QEvent
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+from vocab.cli.app import App
+from vocab.gui.context import WorkspaceContext
+from vocab.gui.viewers import EpubViewer
+
+app = QApplication([])
+data = App(sys.argv[1])
+data.cmd_create("Book")
+data.cmd_use("Book")
+path = data.paths.documents_dir("Book") / "snap.epub"
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="start" href="start.html"/><item id="snap" href="snap.html"/></manifest><spine><itemref idref="start"/><itemref idref="snap"/></spine></package>')
+    book.writestr("start.html", '<html><head><title>start</title></head><body>Start</body></html>')
+    book.writestr("snap.html", '<html><head><title>snap</title><style>html {scroll-snap-type:y mandatory} body {margin:0} section {height:100px;scroll-snap-align:start}</style></head><body>' + ''.join(f'<section id="s{i}">Passage {i}</section>' for i in range(90)) + '</body></html>')
+
+ctx = WorkspaceContext(data)
+viewer = EpubViewer(str(path), ctx)
+viewer.resize(900, 600)
+viewer.show()
+
+attempts = []
+
+def wait_for(check):
+    for _ in range(400):
+        if check():
+            return
+        QTest.qWait(20)
+    raise AssertionError(f"Timed out: pending={viewer._pending_scroll}, title={viewer._web.title()}, attempts={attempts}")
+
+def js(code):
+    result = []
+    viewer._web.page().runJavaScript(code, result.append)
+    wait_for(lambda: bool(result))
+    return result[0]
+
+try:
+    wait_for(lambda: viewer._web.title() == "start" and not viewer._web.page().isLoading())
+    restore = viewer._restore_scroll
+    def counted_restore(generation, attempt=0):
+        attempts.append(attempt)
+        restore(generation, attempt)
+    viewer._restore_scroll = counted_restore
+
+    # Mandatory scroll snapping prevents the requested 37% position from being
+    # reached exactly. Exercise the real renderer and the entire retry budget.
+    viewer.go_to({"chapter": 1, "scroll": 0.37})
+    wait_for(lambda: attempts and attempts[-1] == viewer.MAX_RESTORE_RETRIES)
+    wait_for(lambda: viewer._pending_scroll == 0)
+
+    # Reading on after an unsuccessful restoration must supersede the old 37%.
+    js('window.scrollTo(0,7200); true;')
+    wait_for(lambda: viewer._web.page().scrollPosition().y() / viewer._web.page().contentsSize().height() > 0.7)
+    actual = viewer._web.page().scrollPosition().y() / viewer._web.page().contentsSize().height()
+    assert abs(viewer.source_location()["scroll"] - actual) < 0.000001
+
+    captures = []
+    ctx.capture_requested.connect(lambda *args: captures.append(args))
+    js('var range=document.createRange(); range.selectNodeContents(document.getElementById("s72")); var selection=window.getSelection(); selection.removeAllRanges(); selection.addRange(range); true;')
+    wait_for(lambda: viewer._web.selectedText() == "Passage 72")
+    viewer._capture()
+    assert captures[-1][0:2] == ("Book", "Passage 72")
+    assert captures[-1][2]["chapter"] == 1
+    assert abs(captures[-1][2]["scroll"] - actual) < 0.000001
+    viewer.save_position()
+    saved = data.storage.load_reading_pos("Book", "snap.epub")
+    assert saved["chapter"] == 1
+    assert abs(saved["scroll"] - actual) < 0.000001
+finally:
+    viewer.close()
+    viewer.deleteLater()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+'''
+    env = dict(os.environ)
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if sys.platform == "win32":
+        env["QT_QPA_PLATFORM"] = "windows"
+    env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
+    result = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
+                            env=env, capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stdout + result.stderr

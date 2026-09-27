@@ -282,6 +282,7 @@ class EpubViewer(QWidget):
     ZOOM_STEP = 1.15
     ZOOM_MIN = 0.5
     ZOOM_MAX = 3.0
+    MAX_RESTORE_RETRIES = 20
 
     def __init__(self, path: str, ctx=None, parent=None, module=None):
         super().__init__(parent)
@@ -399,9 +400,10 @@ class EpubViewer(QWidget):
         def restored(applied):
             if not isValid(self) or generation != self._load_generation or fraction != self._pending_scroll:
                 return
-            if applied:
+            if applied or attempt >= self.MAX_RESTORE_RETRIES:
+                # Once retries end, captures and saves must use the live position.
                 self._pending_scroll = 0.0
-            elif attempt < 20:
+            else:
                 QTimer.singleShot(16, self, lambda: self._restore_scroll(generation, attempt + 1))
 
         # A title or an outgoing document's loadFinished can arrive before the

@@ -80,6 +80,16 @@ class Storage:
     # New canonical alias.
     module_names = list_names
 
+    def canonical_name(self, name: str) -> str:
+        """Return the stored spelling without changing filesystem case rules."""
+        name = sanitize_module_name(name)
+        if not self.exists(name):
+            raise ModuleNotFound(f"Module '{name}' does not exist.")
+        names = self.list_names()
+        if name in names:
+            return name
+        return next((stored for stored in names if stored.casefold() == name.casefold()), name)
+
     def exists(self, name: str) -> bool:
         name = sanitize_module_name(name)
         # Let the filesystem apply its own case rules (especially on Windows).

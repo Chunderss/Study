@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QProgressBar,
                                QPushButton, QVBoxLayout, QWidget)
 
 from . import theme
+from ..study.session import StudyCardUnavailable
 
 
 class AnswerInput(QLineEdit):
@@ -192,7 +193,9 @@ class StudyView(QWidget):
     def _grade(self, correct: bool) -> None:
         if not self._revealed or self.session.done:
             return
-        outcome = self.session.answer(correct)
+        outcome = self._record_answer(self.session.answer, correct)
+        if outcome is None:
+            return
         self.progress.setValue(self.session.reviewed)
         self._load_card()
         self._show_box_feedback(outcome)
@@ -203,7 +206,9 @@ class StudyView(QWidget):
         typed = self.input.text().strip()
         if not typed:
             return
-        outcome = self.session.answer_text(typed)
+        outcome = self._record_answer(self.session.answer_text, typed)
+        if outcome is None:
+            return
         view_def = outcome.reference
         verdict = "correct" if outcome.correct else "not quite"
         self.answer.setText(f"reference:  {view_def}")
@@ -215,6 +220,17 @@ class StudyView(QWidget):
         self.progress.setValue(self.session.reviewed)
         self.next_btn.show()
         self.next_btn.setFocus()
+
+    def _record_answer(self, answer, value):
+        try:
+            return answer(value)
+        except StudyCardUnavailable as error:
+            self._load_card()
+            self.feedback.setText(str(error))
+        except (OSError, ValueError) as error:
+            # Keep this card and the typed answer available for a save retry.
+            self.feedback.setText(f"Could not save review: {error}")
+        return None
 
     def _continue(self):
         if self._awaiting_next:

@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, NoReturn
 
 from ..algorithms.base import Review, Scheduler
 from ..core.models import Word
-from ..core.storage import Storage
+from ..core.storage import ModuleNotFound, Storage
+
+
+class StudyCardUnavailable(ValueError):
+    """The displayed card was skipped because it changed outside this session."""
 
 
 @dataclass
@@ -27,6 +31,7 @@ class StudyCard:
 class SessionResult:
     reviewed: int = 0
     correct: int = 0
+    skipped: int = 0
     # home_list -> {word_key -> updated card}; flushed by the caller
     dirty: Dict[str, Dict[str, dict]] = field(default_factory=dict)
 
@@ -164,16 +169,31 @@ class StudySession:
         )
 
     # ---- actions --------------------------------------------------------
+    def _unavailable(self, reason: str) -> NoReturn:
+        word = self.queue[self._i].word.word
+        self._i += 1
+        self.result.skipped += 1
+        raise StudyCardUnavailable(f"Skipped '{word}': {reason}")
+
     def _apply(self, correct: bool, *, score=None, feedback="", reference="") -> AnswerOutcome:
         sc = self.queue[self._i]
+        key = sc.word.word.strip().lower()
+        try:
+            wl = self.storage.load_words(sc.home_list)
+        except ModuleNotFound:
+            self._unavailable("the module was deleted.")
+        if not wl.has(key):
+            self._unavailable("the word was deleted.")
+        stats = self.storage.load_stats(sc.home_list)
+        current_word = wl.words[key]
+        # Legacy words without an added timestamp get a default on each load;
+        # compare the answer content rather than that generated metadata.
+        if (stats.get(key) != sc.card or current_word.senses != sc.word.senses or
+                current_word.dictionary != sc.word.dictionary):
+            self._unavailable("the word or its progress changed in another session.")
         box_before = int(sc.card.get("box", 1))
         new_card = self.scheduler.review(
             sc.card, Review.GOOD if correct else Review.AGAIN, time.time())
-        key = sc.word.word.strip().lower()
-        wl = self.storage.load_words(sc.home_list)
-        if not wl.has(key):
-            raise ValueError(f"'{sc.word.word}' was deleted during this session.")
-        stats = self.storage.load_stats(sc.home_list)
         stats[key] = new_card
         self.storage.save_stats(sc.home_list, stats)
         self.result.mark(sc.home_list, key, new_card, correct)
@@ -212,4 +232,7 @@ class StudySession:
         # overwrite progress from another session or resurrect deleted words.
         self.result.dirty.clear()
         acc = (self.result.correct / self.result.reviewed * 100) if self.result.reviewed else 0.0
-        return f"Session done: {self.result.correct}/{self.result.reviewed} correct ({acc:.0f}%)."
+        summary = f"Session done: {self.result.correct}/{self.result.reviewed} correct ({acc:.0f}%)."
+        if self.result.skipped:
+            summary += f" Skipped {self.result.skipped} changed or deleted card(s)."
+        return summary

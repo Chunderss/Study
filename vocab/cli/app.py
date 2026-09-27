@@ -18,7 +18,7 @@ from ..core.paths import InvalidListName, get_paths, sanitize_list_name, sanitiz
 from ..core.storage import ListExists, ListNotFound, ModuleExists, ModuleNotFound, Storage
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
 from ..study.judge import get_judge
-from ..study.session import SessionResult, StudySession, build_session
+from ..study.session import SessionResult, StudyCardUnavailable, StudySession, build_session
 
 # Callbacks the REPL supplies so STUDY can be interactive while staying testable.
 Prompt = Callable[[str], str]        # prompt(text) -> user input line
@@ -163,9 +163,12 @@ class App:
         return f"Created list '{sanitize_list_name(name)}'.  (USE it to make it current)"
 
     def cmd_delete(self, name: str) -> str:
-        name = sanitize_list_name(name)
+        name = self.storage.canonical_name(name)
+        selected = self.current_list
+        if selected and self.storage.exists(selected):
+            selected = self.storage.canonical_name(selected)
         self.storage.delete(name)
-        if self.current_list == name:
+        if selected == name:
             self.current_list = None
         return f"Deleted list '{name}'."
 
@@ -184,10 +187,7 @@ class App:
         name = sanitize_list_name(name)
         if not self.storage.exists(name):
             raise ListNotFound(f"List '{name}' does not exist. (CREATE it first)")
-        names = self.storage.list_names()
-        if name not in names:
-            name = next((n for n in names if n.casefold() == name.casefold()), name)
-        self.current_list = name
+        self.current_list = name = self.storage.canonical_name(name)
         return f"Now using '{name}'."
 
     def cmd_where(self) -> str:
@@ -389,10 +389,19 @@ class App:
         return f"Imported module '{name}' ({prog}). USE it to start."
 
     # ---- stats ----------------------------------------------------------
+    def vocabulary_cards(self, name: str):
+        """Return words and their current cards, including unstudied imports."""
+        wl = self.storage.load_words(name)
+        stats = self.storage.load_stats(name)
+        return wl, {key: stats.get(key) or self.scheduler.new_card() for key in wl.words}
+
+    def due_count(self, name: str) -> int:
+        _wl, cards = self.vocabulary_cards(name)
+        return len(self.scheduler.due_order(cards, time.time()))
+
     def cmd_stats(self, name: Optional[str]) -> str:
         target = self._resolve_target(name)
-        wl = self.storage.load_words(target)
-        stats = self.storage.load_stats(target)
+        wl, stats = self.vocabulary_cards(target)
         now = time.time()
         sched = self.scheduler
         due = sched.due_order(stats, now)
@@ -429,7 +438,11 @@ class App:
                 ans = prompt("  your definition (or 'q'): ").strip()
                 if ans.lower() == "q":
                     break
-                outcome = session.answer_text(ans)
+                try:
+                    outcome = session.answer_text(ans)
+                except StudyCardUnavailable as error:
+                    echo(str(error))
+                    continue
                 echo(f"  score {outcome.score:.0%} — {outcome.feedback}")
                 echo(f"  reference: {outcome.reference}")
             else:
@@ -439,7 +452,10 @@ class App:
                 pos = f"{view.pos}: " if view.pos else ""
                 echo(f"  {pos}{view.definition}")
                 verdict = prompt("  did you get it? [y/N]: ").strip().lower()
-                session.answer(verdict in ("y", "yes"))
+                try:
+                    session.answer(verdict in ("y", "yes"))
+                except StudyCardUnavailable as error:
+                    echo(str(error))
 
         summary = session.finish()
         return f"\n{summary}"

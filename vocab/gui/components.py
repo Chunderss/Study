@@ -463,11 +463,13 @@ class ConsoleComponent(BaseComponent):
             QMessageBox.No) == QMessageBox.Yes
         previous_module = self.app.current_module
         try:
+            deleted = None
+            if cmd.verb == "DELETE" and cmd.args:
+                deleted = self.app.storage.canonical_name(" ".join(cmd.args))
             result = repl.dispatch(cmd)
             if result:
                 self.log(result)
-            if cmd.verb == "DELETE" and cmd.args:
-                deleted = " ".join(cmd.args)
+            if deleted:
                 if not self.app.storage.exists(deleted):
                     self.ctx.notes.discard(deleted)
             if cmd.verb == "NOTE" and cmd.args and cmd.args[0].upper() in ("DEL", "DELETE", "RM"):

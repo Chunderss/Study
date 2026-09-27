@@ -96,6 +96,8 @@ other than the main Vocab/reader lookup path run synchronously.
 Leitner schedules reviews across five boxes (1, 3, 7, 16, 35 days). Each answer saves
 progress immediately. Mechanical mode keeps the reference answer and score visible
 until **Continue**. Study All writes each review to its original module.
+Cards changed, deleted, or reviewed in another session are skipped with a notice,
+preserving the newer progress.
 
 ## Your data
 
@@ -121,7 +123,9 @@ Data is separate from the executable:
 ```
 
 Legacy `lists/` data is backed up and migrated on startup. Replacing the application
-folder does not replace your data. Notes and JSON writes use atomic replacement.
+folder does not replace your data. Interrupted migrations can be retried; conflicting
+existing modules remain intact and are reported for recovery. Notes and JSON writes
+use atomic replacement.
 Errors in the packaged app appear in a dialog and are logged to `desktop.log` in the data folder.
 
 Vocabulary sharing remains available through Console commands:

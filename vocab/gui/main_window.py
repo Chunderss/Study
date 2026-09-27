@@ -282,9 +282,7 @@ class MainWindow(QWidget):
         dic, _ = self.app.effective_dictionary()
         due = "—"
         if self.app.current_module:
-            import time as _t
-            stats = self.app.storage.load_stats(self.app.current_module)
-            due = str(len(self.app.scheduler.due_order(stats, _t.time())))
+            due = str(self.app.due_count(self.app.current_module))
         net = "offline" if not dic.requires_network else "ONLINE"
         z = "  ·  ZOOM" if self.workspace.is_zoomed else ""
         sense = f"    ·    sense: {self.app.config.disambiguator}"

@@ -227,7 +227,11 @@ class Workspace(QWidget):
         if not isinstance(parent, QSplitter):
             return
         idx = parent.indexOf(cur)
-        new_pane = self._new_pane(cur.factory_key_next_default())
+        # Readers and study sessions need instance state that the ordinary
+        # component factory cannot duplicate. Give their new sibling a regular
+        # component and the matching key so it can be serialized and restored.
+        key = cur.factory_key if cur.factory_key in self._order else self._order[0]
+        new_pane = self._new_pane(key)
 
         if parent.orientation() == orientation:
             # same orientation: insert a sibling, then distribute evenly
@@ -284,11 +288,25 @@ class Workspace(QWidget):
 
     # ---- close ----------------------------------------------------------
     def close_focused(self) -> None:
-        if self.is_zoomed:
-            self.toggle_zoom()
         if len(self._panes) <= 1:
             return  # never close the last pane
         cur = self._focused
+        if cur is None:
+            return
+        # Persist before changing the logical tree or zoom state. If this fails,
+        # the pane must stay usable so the user can retry after fixing storage.
+        hook = getattr(cur.component, "on_replaced", None)
+        if callable(hook):
+            try:
+                hook()
+            except Exception as error:
+                context = getattr(cur.component, "ctx", None)
+                if context is None:
+                    raise
+                context.log.emit(f"! Could not close pane: {error}")
+                return
+        if self.is_zoomed:
+            self.toggle_zoom()
         parent = cur.parentWidget()
         self._panes.remove(cur)
         neighbor = None
@@ -298,9 +316,6 @@ class Workspace(QWidget):
             if 0 <= neighbor_idx < parent.count():
                 w = parent.widget(neighbor_idx)
                 neighbor = self._first_pane_in(w)
-        hook = getattr(cur.component, "on_replaced", None)
-        if callable(hook):
-            hook()
         cur.setParent(None)
         cur.deleteLater()
         self._collapse_empty_splitters()
@@ -455,13 +470,3 @@ class Workspace(QWidget):
         self.focus_pane(self._panes[max(0, min(focused, len(self._panes) - 1))])
         if state.get("zoomed"):
             self.toggle_zoom()
-
-
-# Small helper on Pane used by split(): the new pane defaults to the same
-# component as the one being split (so a split shows two of the same until you
-# cycle one). Defined here to keep Pane lean.
-def _factory_key_next_default(self):
-    return self.factory_key
-
-
-Pane.factory_key_next_default = _factory_key_next_default

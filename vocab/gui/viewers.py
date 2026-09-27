@@ -10,13 +10,14 @@ Both viewers are pane components: TITLE / refresh() / focus_default().
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import zipfile
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote as quote_url, unquote, urlsplit
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
                                QVBoxLayout, QWidget)
 
@@ -293,6 +294,12 @@ class EpubViewer(QWidget):
         self._zoom = 1.25   # start a bit larger — default EPUB text runs small
         self._pending_scroll = 0.0   # scroll to restore once the chapter loads
         self._book = EpubBook(path)
+        self._chapter_paths = {str(Path(p).resolve()): i
+                               for i, (_name, p) in enumerate(self._book.chapters)}
+        self._html_paths = {}
+        self._source_paths = {}
+        self._current_path = None
+        self._requested_url = QUrl()
         if self._book.title:
             self.TITLE = f"EPUB · {self._book.title}"
 
@@ -353,22 +360,30 @@ class EpubViewer(QWidget):
             w.setFocusPolicy(Qt.NoFocus)
         lay.addLayout(actions)
 
+        self._error = QLabel()
+        self._error.setTextFormat(Qt.PlainText)
+        self._error.setWordWrap(True)
+        self._error.hide()
+        lay.addWidget(self._error)
         self._web = QWebEngineView(self)
+        self._web.page().navigationRequested.connect(self._navigate)
+        self._web.page().loadingChanged.connect(self._loading_changed)
         lay.addWidget(self._web, 1)
         # re-apply zoom + restore scroll whenever a chapter finishes loading
         self._web.loadFinished.connect(self._on_loaded)
 
         if self._book.chapters:
-            self._load(max(0, min(start_idx, len(self._book.chapters) - 1)))
+            self._load(max(0, min(start_idx, len(self._book.chapters) - 1)), href=saved.get("href"))
         else:
-            self._web.setHtml("<body style='background:#1f1f1f;color:#eee;"
-                              "font-family:sans-serif;padding:2em'>"
-                              "<h3>Could not read this EPUB's chapters.</h3></body>")
+            self._show_error("Could not read this EPUB's chapters.")
+            self._prev.setEnabled(False)
+            self._next.setEnabled(False)
         self._apply_zoom()
 
     def _on_loaded(self, _ok: bool) -> None:
         if not _ok:
             return  # a cancelled chapter load must not consume a source jump
+        self._web.show()
         self._apply_zoom()
         if self._pending_scroll:
             # restore vertical scroll fraction, then clear it
@@ -384,34 +399,101 @@ class EpubViewer(QWidget):
     def _apply_zoom(self) -> None:
         self._web.setZoomFactor(self._zoom)
 
-    def _load(self, i: int):
-        if not (0 <= i < len(self._book.chapters)):
-            return
+    def _show_error(self, message):
+        self._error.setText(message)
+        self._error.show()
+
+    def _chapter_url(self, i, fragment="", href=None):
+        source = Path(self._book._inside(self._book.tmpdir, href) if href is not None
+                      else self._book.chapters[i][1]).resolve()
+        if str(source) not in self._chapter_paths and source.suffix.lower() not in (".xhtml", ".html", ".htm"):
+            raise ValueError("This link does not point to a readable page in this EPUB.")
+        target = self._html_paths.get(str(source))
+        if target is None:
+            # File-backed HTML avoids setContent's encoded 2 MB limit. XHTML
+            # needs an .html sibling so Chromium renders it instead of XML;
+            # keeping the directory preserves relative images, CSS and fonts.
+            with source.open("rb") as reader, tempfile.NamedTemporaryFile(
+                    dir=source.parent, prefix=".vocab-", suffix=".html", delete=False) as writer:
+                prefix = reader.read(3)
+                # EPUB defaults to UTF-8; file URLs otherwise guess legacy
+                # encodings. Keep an existing UTF-8/UTF-16 byte-order mark.
+                if not prefix.startswith((b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")):
+                    writer.write(b"\xef\xbb\xbf")
+                writer.write(prefix)
+                shutil.copyfileobj(reader, writer)
+                target = writer.name
+            self._html_paths[str(source)] = target
+            self._source_paths[str(Path(target).resolve())] = str(source)
+        url = QUrl.fromLocalFile(target)
+        url.setFragment(fragment)
+        return url
+
+    def _set_chapter(self, i):
         self._idx = i
-        _name, fpath = self._book.chapters[i]
-        # Load the chapter bytes and hand them to Chromium as HTML (text/html),
-        # NOT by URL — loading an .xhtml by URL makes QtWebEngine treat it as raw
-        # XML and show the source tree ("no style information") instead of the
-        # rendered page. A base URL (the chapter's own file URL) keeps relative
-        # CSS / images / fonts resolving correctly.
-        from PySide6.QtCore import QByteArray
-        try:
-            with open(fpath, "rb") as fh:
-                data = fh.read()
-        except OSError as e:
-            self._web.setHtml(f"<body style='color:#eee;background:#1f1f1f;padding:2em'>"
-                              f"Could not read chapter: {e}</body>")
-        else:
-            base = QUrl.fromLocalFile(fpath)
-            self._web.setContent(QByteArray(data), "text/html;charset=utf-8", base)
-        # zoom factor can reset on new content — re-apply immediately (a one-time
-        # loadFinished handler wired in __init__ re-applies after it settles too)
-        self._apply_zoom()
         self._picker.blockSignals(True)
         self._picker.setCurrentIndex(i)
         self._picker.blockSignals(False)
         self._prev.setEnabled(i > 0)
         self._next.setEnabled(i < len(self._book.chapters) - 1)
+
+    def _load(self, i: int, fragment="", href=None):
+        if not (0 <= i < len(self._book.chapters)):
+            return
+        try:
+            url = self._chapter_url(i, fragment, href)
+        except (OSError, ValueError) as error:
+            self._pending_scroll = 0.0
+            self._set_chapter(self._idx)
+            self._show_error(f"Could not read chapter: {error}")
+            return
+        self._set_chapter(i)
+        self._current_path = self._source_paths[str(Path(url.toLocalFile()).resolve())]
+        self._error.hide()
+        self._requested_url = url
+        self._web.load(url)
+        self._apply_zoom()
+
+    def _navigate(self, request):
+        if not request.isMainFrame():
+            return
+        url = request.url()
+        path = Path(url.toLocalFile()).resolve() if url.isLocalFile() else None
+        source = Path(self._source_paths.get(str(path), str(path))) if path else None
+        try:
+            href = quote_url(source.relative_to(Path(self._book.tmpdir).resolve()).as_posix(), safe="/") if source else None
+        except ValueError:
+            href = None
+        if href is None:
+            request.reject()
+            self._show_error("This link points outside this EPUB.")
+            return
+        i = self._chapter_paths.get(str(source), self._idx)
+        try:
+            target = self._chapter_url(i, url.fragment(), href)
+        except (OSError, ValueError) as error:
+            request.reject()
+            self._show_error(f"Could not read chapter: {error}")
+            return
+        if target != url:
+            # Leave Chromium's navigation callback before starting another load.
+            request.reject()
+            self._pending_scroll = 0.0
+            QTimer.singleShot(0, self, lambda: self._load(i, url.fragment(), href))
+            return
+        if i != self._idx:
+            self._pending_scroll = 0.0
+            self._set_chapter(i)
+        self._current_path = str(source)
+        self._error.hide()
+        self._requested_url = url
+
+    def _loading_changed(self, info):
+        from PySide6.QtWebEngineCore import QWebEngineLoadingInfo
+        if (info.status() == QWebEngineLoadingInfo.LoadStatus.LoadFailedStatus and
+                info.url().toLocalFile() == self._requested_url.toLocalFile()):
+            self._web.hide()
+            self._show_error(f"Could not read chapter: {info.errorString()}")
 
     def _go(self, delta: int):
         self._pending_scroll = 0.0
@@ -430,8 +512,13 @@ class EpubViewer(QWidget):
         page = self._web.page()
         height = max(1.0, page.contentsSize().height())
         fraction = self._pending_scroll or max(0.0, min(1.0, page.scrollPosition().y() / height))
-        return {"kind": "epub", "filename": self._fname, "chapter": self._idx,
-                "scroll": fraction}
+        source = {"kind": "epub", "filename": self._fname, "chapter": self._idx,
+                  "scroll": fraction}
+        # Footnotes and tables of contents can be outside the reading spine.
+        # Keep their actual file so captures and reopening return to that page.
+        if self._current_path and self._current_path not in self._chapter_paths:
+            source["href"] = quote_url(Path(self._current_path).relative_to(self._book.tmpdir).as_posix(), safe="/")
+        return source
 
     def _capture(self):
         quote = self._web.selectedText().strip()
@@ -443,7 +530,8 @@ class EpubViewer(QWidget):
 
     def go_to(self, source):
         self._pending_scroll = max(0.0, min(1.0, float(source.get("scroll", 0))))
-        self._load(max(0, min(int(source.get("chapter", 0)), len(self._book.chapters) - 1)))
+        self._load(max(0, min(int(source.get("chapter", 0)), len(self._book.chapters) - 1)),
+                   href=source.get("href"))
 
     # JS: get the selected word + the sentence it sits in (from the selection's
     # surrounding text). Splits on sentence punctuation, keeps the piece
@@ -501,12 +589,12 @@ class EpubViewer(QWidget):
         """Read Qt's cached scroll position synchronously, including on close."""
         if not (self._storage and self._module):
             return
-        page = self._web.page()
-        height = max(1.0, page.contentsSize().height())
-        fraction = self._pending_scroll or max(0.0, min(1.0, page.scrollPosition().y() / height))
+        source = self.source_location()
+        pos = {"chapter": self._idx, "scroll": source["scroll"], "zoom": self._zoom}
+        if "href" in source:
+            pos["href"] = source["href"]
         self._storage.save_reading_pos(
-            self._module, self._fname,
-            {"chapter": self._idx, "scroll": fraction, "zoom": self._zoom})
+            self._module, self._fname, pos)
 
     def refresh(self) -> None:
         pass

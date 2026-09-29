@@ -35,9 +35,11 @@ jobs:
           # Keep the home: the windowed exe has no stderr, so desktop.log is the only record.
           home = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vocab-smoke-home'
           home.mkdir(parents=True, exist_ok=True)
+          # The smoke opens real EPUB/PDF readers; like the WebEngine tests, use
+          # native Windows rendering rather than the offscreen platform.
           try:
               code = subprocess.run([r'dist\VocabStudy\VocabStudy.exe', '--home', str(home), '--smoke-test'],
-                                    timeout=60, env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen'}).returncode
+                                    timeout=90, env={**os.environ, 'QT_QPA_PLATFORM': 'windows'}).returncode
           except subprocess.TimeoutExpired:
               code = 'timeout'
           if code != 0:

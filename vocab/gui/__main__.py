@@ -73,6 +73,48 @@ def main() -> None:
         raise SystemExit(1)
 
     if args.smoke_test:
+        def check_documents(win):
+            """Open real documents: the bundle must ship QtWebEngine's process
+            and resources and the PDF module, not only their Python imports."""
+            import zipfile
+            from PySide6.QtGui import QPainter, QPdfWriter
+            from PySide6.QtTest import QTest
+            docs = win.app.paths.documents_dir("DesktopCheck")
+            docs.mkdir(parents=True, exist_ok=True)
+
+            def wait_for(check, what, seconds=30):
+                for _ in range(seconds * 20):
+                    if check():
+                        return
+                    QTest.qWait(50)
+                raise AssertionError(f"Timed out: {what}")
+
+            epub = docs / "check.epub"
+            with zipfile.ZipFile(epub, "w") as book:
+                book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                              '<item id="one" href="one.html"/></manifest>'
+                              '<spine><itemref idref="one"/></spine></package>')
+                # The script must stay inert: book JavaScript is disabled.
+                book.writestr("one.html", '<html><head><title>Ready</title>'
+                              '<script>document.title = "script ran"</script></head>'
+                              '<body><p id="check">Offline reader ready</p></body></html>')
+            reader = win._open_viewer(str(epub))
+            assert reader is not None, "EPUB reader did not open"
+            wait_for(lambda: reader._document_loaded, "EPUB chapter load")
+            result = []
+            reader._run_js("document.getElementById('check').textContent + '|' + document.title",
+                           result.append)
+            wait_for(lambda: result, "EPUB reader script")
+            assert result[0] == "Offline reader ready|Ready", result
+
+            pdf = docs / "check.pdf"
+            writer = QPdfWriter(str(pdf))
+            painter = QPainter(writer)
+            painter.drawText(200, 200, "Offline PDF ready")
+            painter.end()
+            viewer = win._open_viewer(str(pdf))
+            assert viewer is not None and viewer._doc.pageCount() == 1, "PDF did not load"
+
         def smoke():
             try:
                 from PySide6 import QtPdf, QtPdfWidgets, QtWebEngineWidgets
@@ -118,6 +160,7 @@ def main() -> None:
                 review.rate("good")
                 assert store.load("DesktopCheck")[item["id"]]["card"]["reps"] == 1
                 review.deleteLater()
+                check_documents(win)
                 win.workspace.set_focused_component("learning")
                 assert isinstance(win.workspace.focused.component, LearningComponent)
             except Exception:

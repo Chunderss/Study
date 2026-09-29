@@ -62,8 +62,10 @@ An optional tutor has not been added yet; no model is downloaded or sent your pa
 The EPUB reader does not run a book's own JavaScript, because a script inside a
 downloaded book could otherwise read files on your computer. Books render with their
 own styles, images and fonts, and `<noscript>` fallback text is shown. Content that a
-book builds with scripts, such as MathJax equations, is not rendered. Remote resources
-are not loaded either.
+book builds with scripts, such as MathJax equations, is not rendered. Remote images,
+stylesheets, fonts and frames are not loaded, and frames only show pages from the book.
+This is not a full sandbox: a book can still point images at other files on your
+computer, or ask the browser to open a connection to a server it names.
 
 The app reopens the selected module, pane layout, selected notes, preview visibility,
 and document readers after a normal exit. A vocabulary quiz reopens as a Vocab pane;

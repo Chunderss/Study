@@ -72,6 +72,9 @@ chapter = f"""<html><head><title>Isolated</title>
 <img id="pic" src="pic.png"/>
 <img src="{remote}/tracker.png"/>
 <noscript><p id="fallback">Fallback words</p></noscript>
+<iframe id="outside" src="{sentinel.as_uri()}"></iframe>
+<iframe id="folder" src="{root.as_uri()}/"></iframe>
+<iframe id="inside" src="frame.html"></iframe>
 <p id="sentence">The quick brown fox jumps. Another sentence follows here.</p>
 </body></html>"""
 path = data.paths.documents_dir("Book") / "isolated.epub"
@@ -82,6 +85,7 @@ with zipfile.ZipFile(path, "w") as book:
     book.writestr("style.css", "p.styled { color: rgb(12, 34, 56); }")
     book.writestr("evil.js", "document.title = 'HACKED-FILE';")
     book.writestr("pic.png", bytes(png))
+    book.writestr("frame.html", "<html><body>Inside frame</body></html>")
 
 ctx = WorkspaceContext(data)
 captures, words = [], []
@@ -136,6 +140,10 @@ try:
         text: document.getElementById('styled').textContent,
         image: document.getElementById('pic').naturalWidth,
         noscript: !!document.getElementById('fallback'),
+        frames: ['outside', 'folder', 'inside'].map(id => {
+            const doc = document.getElementById(id).contentDocument;
+            return doc && doc.body ? doc.body.innerText.trim() : '';
+        }),
     })"""))
     print("STATE", json.dumps(state), flush=True)
     assert state["title"] == "Isolated", state
@@ -149,6 +157,8 @@ try:
     assert state["text"] == "Styled ünïcödé text ✓", state
     # Nothing is fetched from outside the book (tracking pixels, remote CSS).
     assert requests == [], requests
+    # Frames show pages from the book only, not other files or folder listings.
+    assert state["frames"] == ["", "", "Inside frame"], state
     # <noscript> content is shown now, and it can be captured.
     assert state["noscript"], state
     select("fallback")

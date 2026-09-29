@@ -661,6 +661,14 @@ class EpubViewer(QWidget):
 
     def _navigate(self, request):
         if not request.isMainFrame():
+            # Frames (iframe, object) may show pages from this book only, never
+            # other local files or folder listings.
+            url = request.url()
+            if url.isLocalFile():
+                try:
+                    Path(url.toLocalFile()).resolve().relative_to(Path(self._book.tmpdir).resolve())
+                except (OSError, ValueError):
+                    request.reject()
             return
         url = request.url()
         path = Path(url.toLocalFile()).resolve() if url.isLocalFile() else None

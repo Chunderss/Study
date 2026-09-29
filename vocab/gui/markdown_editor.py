@@ -1,8 +1,29 @@
 """Plain Markdown source plus a debounced, local Qt preview (no browser/LLM)."""
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QImage, QTextDocument
+from PySide6.QtCore import QSizeF, QTimer, Qt
+from PySide6.QtGui import (QFontMetricsF, QImage, QPyTextObject, QTextDocument,
+                           QTextFormat)
 from PySide6.QtWidgets import (QLabel, QSplitter, QTextBrowser, QPlainTextEdit,
                                QVBoxLayout, QWidget)
+
+
+class _ImageLabel(QPyTextObject):
+    """Draws "[image: alt]" instead of an image.
+
+    Replaces Qt's image handler, which looks for "<name>@2x" files on disk on
+    every paint at display scaling above 100%, before loadResource is asked.
+    """
+
+    @staticmethod
+    def _text(fmt):
+        alt = fmt.property(QTextFormat.Property.ImageAltText)
+        return f"[image: {alt}]" if alt else "[image]"
+
+    def intrinsicSize(self, doc, position, fmt):
+        metrics = QFontMetricsF(fmt.toCharFormat().font())
+        return QSizeF(metrics.horizontalAdvance(self._text(fmt)) + 2, metrics.height())
+
+    def drawObject(self, painter, rect, doc, position, fmt):
+        painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, self._text(fmt))
 
 
 class MarkdownPreview(QTextBrowser):
@@ -12,12 +33,17 @@ class MarkdownPreview(QTextBrowser):
         self.setAccessibleName("Rendered Markdown preview")
         self.setOpenLinks(False)
         self.setOpenExternalLinks(False)
+        # Keep a reference: the layout does not own Python handlers.
+        self._image_label = _ImageLabel(self)
+        self.document().documentLayout().registerHandler(
+            QTextFormat.ObjectTypes.ImageObject, self._image_label)
 
     _placeholder = None
 
     def loadResource(self, resource_type, url):
         # A note preview must not fetch remote resources, arbitrary local files
-        # or UNC paths (on Windows those contact the named server). Returning
+        # or UNC paths (on Windows those contact the named server). _ImageLabel
+        # means images are not requested at all; as a fallback, returning
         # nothing would let Qt load the file itself, so images get a blank
         # placeholder, which Qt caches instead of asking again on each repaint.
         if resource_type == QTextDocument.ResourceType.ImageResource:

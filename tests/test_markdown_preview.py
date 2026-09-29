@@ -202,6 +202,52 @@ def test_preview_never_loads_or_paints_image_files(notes, qt, tmp_path, monkeypa
     painted = sum(shot.pixelColor(x, y) == QColor(12, 200, 34)
                   for x in range(0, shot.width(), 4) for y in range(0, shot.height(), 4))
     assert painted == 0
-    # One placeholder per image, then Qt's cache: no re-probing on repaint.
-    assert sorted(set(requests)) == sorted(requests) and len(requests) == 4, requests
+    # Images are drawn as "[image: alt]" labels and never requested at all.
+    assert requests == []
     assert notes.editor.toPlainText().count("](") == 4  # the Markdown source is unchanged
+
+
+HIDPI = r'''
+import sys
+from pathlib import Path
+from PySide6.QtGui import QColor, QImage
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+from vocab.gui.markdown_editor import MarkdownEditor, MarkdownPreview
+folder = Path(sys.argv[1])
+for name in ("private.png", "private@2x.png"):
+    picture = QImage(300, 200, QImage.Format_RGB32)
+    picture.fill(QColor(12, 200, 34))
+    picture.save(str(folder / name))
+requests = []
+load = MarkdownPreview.loadResource
+MarkdownPreview.loadResource = lambda self, kind, url: requests.append(url.toString()) or load(self, kind, url)
+editor = MarkdownEditor()
+editor.resize(700, 500)
+editor.show()
+editor.editor.setPlainText(f"![private]({(folder / 'private.png').as_uri()})")
+editor.render()
+for _ in range(3):
+    editor.preview.viewport().repaint()
+    app.processEvents()
+shot = editor.preview.viewport().grab().toImage()
+painted = sum(shot.pixelColor(x, y) == QColor(12, 200, 34)
+              for x in range(0, shot.width(), 4) for y in range(0, shot.height(), 4))
+print("RESULT", app.devicePixelRatio(), len(requests), painted, flush=True)
+'''
+
+
+def test_preview_does_not_probe_hidpi_image_variants(tmp_path):
+    # Qt's own image handler looks for "<name>@2x" files at scaling above 100%;
+    # an existing sibling would then be requested even though the note never names it.
+    import subprocess, sys
+    from pathlib import Path
+    env = dict(os.environ, QT_SCALE_FACTOR="2")
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    result = subprocess.run([sys.executable, "-c", HIDPI, str(tmp_path)], env=env,
+                            cwd=Path(__file__).resolve().parents[1],
+                            capture_output=True, text=True, timeout=60)
+    line = next((l for l in result.stdout.splitlines() if l.startswith("RESULT")), None)
+    assert line, result.stdout + result.stderr
+    _, ratio, requests, painted = line.split()
+    assert float(ratio) == 2.0 and requests == "0" and painted == "0", line

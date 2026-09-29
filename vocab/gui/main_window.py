@@ -6,6 +6,7 @@ r toggles the live preview. Components share one UI-agnostic App.
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from PySide6.QtCore import Qt, QTimer
@@ -59,7 +60,8 @@ class MainWindow(QWidget):
         if self.app.migration_note:
             self.ctx.log.emit(self.app.migration_note)
         if self.app.config.load_error:
-            self.ctx.log.emit("! " + self.app.config.load_error)
+            # The status bar keeps a marker while settings run on defaults.
+            logging.error(self.app.config.load_error)
         self.ctx.log.emit("Shortcuts (tmux-style): press Ctrl+B, then a key (e.g. v split, z zoom, "
                           "x close). Press F1 for the full list.")
         recovered = self.ctx.notes.dirty_buffers()
@@ -314,6 +316,9 @@ class MainWindow(QWidget):
                 due = "?"
                 labels.append("unreadable module data")
                 problems.append(str(error))
+        if self.app.config.load_error:
+            labels.append("settings file unreadable, using defaults")
+            problems.append(self.app.config.load_error)
         try:
             dic, _ = self.app.effective_dictionary()
             dictionary = f"{dic.id} ({'offline' if not dic.requires_network else 'ONLINE'})"

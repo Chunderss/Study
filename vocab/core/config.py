@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -49,16 +48,26 @@ class Config:
         known = {k: data[k] for k in data if k in cls.__dataclass_fields__}
         return cls(**known)
 
+    def change(self, paths: Paths, **values) -> None:
+        """Apply and save setting changes.
+
+        While an unreadable config.json is still on disk, refuse instead of
+        replacing it with defaults: the user repairs or deletes it deliberately.
+        """
+        self._check_writable(paths)
+        for key, value in values.items():
+            setattr(self, key, value)
+        self.save(paths)
+
     def save(self, paths: Paths) -> None:
         from .storage import _atomic_write
-        p = paths.config_file
-        if self.load_error and p.exists():
-            # Saving settings replaces an unreadable file: keep a copy first.
-            backup = p.with_name("config.unreadable.json")
-            n = 1
-            while backup.exists():
-                backup = p.with_name(f"config.unreadable-{n}.json")
-                n += 1
-            shutil.copy2(p, backup)
-            self.load_error = ""
-        _atomic_write(p, asdict(self))
+        self._check_writable(paths)
+        _atomic_write(paths.config_file, asdict(self))
+
+    def _check_writable(self, paths: Paths) -> None:
+        if not self.load_error:
+            return
+        if paths.config_file.exists():
+            raise ValueError(f"Settings were not changed: {paths.config_file} could not be read "
+                             "at startup. Fix or delete that file, then restart Vocab Study.")
+        self.load_error = ""  # the file was removed, so saving starts a fresh one

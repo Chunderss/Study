@@ -199,8 +199,7 @@ class Repl:
             state = "ON" if cfg.mechanical_repetition else "OFF"
             return f"Mechanical repetition (write-the-definition): {state}  (judge: {cfg.judge_backend})"
         if a[0].lower() == "mech" and len(a) > 1:
-            cfg.mechanical_repetition = a[1].lower() in ("on", "true", "1", "yes")
-            cfg.save(self.app.paths)
+            cfg.change(self.app.paths, mechanical_repetition=a[1].lower() in ("on", "true", "1", "yes"))
             return f"Mechanical repetition {'ON' if cfg.mechanical_repetition else 'OFF'}."
         return "Usage: MODE [MECH ON|OFF]"
 

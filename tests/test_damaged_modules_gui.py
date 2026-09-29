@@ -105,3 +105,24 @@ def test_module_folder_that_cannot_be_opened_keeps_startup_and_sidebar(qt, tmp_p
             qt.processEvents()
     finally:
         folder.chmod(0o755)
+
+
+def test_unreadable_config_stays_visible_in_the_desktop(qt, tmp_path, slot_errors):
+    App(tmp_path).cmd_create("Book")
+    config = tmp_path / "config.json"
+    config.write_text('{"judge_backend": ', encoding="utf-8")
+    win = MainWindow(root=tmp_path)
+    logged = []
+    win.ctx.log.connect(logged.append)
+    try:
+        win.show()
+        for _ in range(2):
+            move_focus(win, qt)
+        assert "settings file unreadable, using defaults" in win.status.text()
+        assert str(config) in win.status.toolTip()
+        assert logged.count("! " + win.app.config.load_error) <= 1
+        assert slot_errors == []
+    finally:
+        win.close()
+        win.deleteLater()
+        qt.processEvents()

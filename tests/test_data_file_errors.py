@@ -74,16 +74,22 @@ def test_permission_errors_name_the_file(tmp_path):
 def test_unreadable_config_runs_on_defaults_and_keeps_the_original(tmp_path):
     App(tmp_path)
     config = tmp_path / "config.json"
-    original = b'{"active_dictionary": "wordnet",'
+    original = b'{"active_dictionary": "wordnet", "mechanical_repetition": true,'
     config.write_bytes(original)
     app = App(tmp_path)
     assert str(config) in app.config.load_error
-    assert app.config.judge_backend == "keyword"
+    assert app.config.mechanical_repetition is False
+    # Settings changes must not silently replace the file with defaults.
+    with pytest.raises(ValueError, match="Fix or delete that file"):
+        app.cmd_disambig("base")
+    with pytest.raises(ValueError, match="Fix or delete that file"):
+        app.config.change(app.paths, mechanical_repetition=True)
+    assert app.config.disambiguator == "nlp" and app.config.mechanical_repetition is False
     assert config.read_bytes() == original
-    # An explicit settings change may replace it, but only after keeping a copy.
-    app.config.save(app.paths)
-    assert (tmp_path / "config.unreadable.json").read_bytes() == original
-    assert json.loads(config.read_text(encoding="utf-8"))["judge_backend"] == "keyword"
+    # Deleting the file is an explicit reset: saving then starts a fresh one.
+    config.unlink()
+    app.config.change(app.paths, mechanical_repetition=True)
+    assert json.loads(config.read_text(encoding="utf-8"))["mechanical_repetition"] is True
     assert not App(tmp_path).config.load_error
 
 

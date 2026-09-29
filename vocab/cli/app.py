@@ -316,8 +316,7 @@ class App:
             return "\n".join(lines)
         if arg not in valid:
             return f"Unknown engine '{arg}'. Choose: nlp | ollama | base."
-        self.config.disambiguator = arg
-        self.config.save(self.paths)
+        self.config.change(self.paths, disambiguator=arg)
         if arg == "ollama":
             st = self.disambig_status()
             warn = "" if st["ollama_up"] else \
@@ -355,8 +354,7 @@ class App:
         if not dic.available():
             return (f"'{dict_id}' is not installed yet. "
                     f"Run:  dict install {dict_id}  (cost: {dic.install_cost or 'none'})")
-        self.config.active_dictionary = dict_id
-        self.config.save(self.paths)
+        self.config.change(self.paths, active_dictionary=dict_id)
         return f"Active dictionary is now '{dict_id}'."
 
     # ---- notes (notes component) ---------------------------------------

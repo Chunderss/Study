@@ -29,9 +29,17 @@ def main() -> None:
     logging.basicConfig(filename=logfile, level=logging.ERROR,
                         format="%(asctime)s %(levelname)s %(message)s")
 
+    # Smoke failures must stick: a later app.exit(0) cannot report success.
+    smoke_failures = []
+
     def report_error(kind, error, traceback):
         logging.error("Desktop error", exc_info=(kind, error, traceback))
         if args.smoke_test:
+            smoke_failures.append(error)
+            # The windowed executable has no stderr; desktop.log keeps the details.
+            if sys.stderr:
+                import traceback as tb
+                sys.stderr.write("".join(tb.format_exception(kind, error, traceback)))
             app.exit(1)
         else:
             QMessageBox.critical(None, "Vocab Study error",
@@ -105,9 +113,12 @@ def main() -> None:
                 app.exit(1)
             else:
                 win.close()
-                app.exit(0)
+                app.exit(1 if smoke_failures else 0)
         QTimer.singleShot(100, smoke)
-    raise SystemExit(app.exec())
+    code = app.exec()
+    if args.smoke_test and smoke_failures:
+        code = code or 1
+    raise SystemExit(code)
 
 
 if __name__ == "__main__":

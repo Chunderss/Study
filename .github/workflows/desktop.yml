@@ -31,11 +31,19 @@ jobs:
       - name: Smoke test packaged desktop and offline dictionary
         shell: python
         run: |
-          import os, subprocess, tempfile
-          with tempfile.TemporaryDirectory() as home:
-              subprocess.run([r'dist\VocabStudy\VocabStudy.exe', '--home', home, '--smoke-test'],
-                             check=True, timeout=60,
-                             env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen'})
+          import os, pathlib, subprocess, sys
+          # Keep the home: the windowed exe has no stderr, so desktop.log is the only record.
+          home = pathlib.Path(os.environ['RUNNER_TEMP']) / 'vocab-smoke-home'
+          home.mkdir(parents=True, exist_ok=True)
+          try:
+              code = subprocess.run([r'dist\VocabStudy\VocabStudy.exe', '--home', str(home), '--smoke-test'],
+                                    timeout=60, env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen'}).returncode
+          except subprocess.TimeoutExpired:
+              code = 'timeout'
+          if code != 0:
+              log = home / 'desktop.log'
+              print(log.read_text(encoding='utf-8', errors='replace') if log.exists() else 'No desktop.log was written.')
+              sys.exit(f'Packaged smoke test failed: {code}')
       - uses: actions/upload-artifact@v4
         with:
           name: VocabStudy-Windows

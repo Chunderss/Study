@@ -140,8 +140,6 @@ def test_narrow_notes_moves_file_picker_above_editing_area(notes, qt):
 
 
 def test_supported_formats_safe_links_and_preview_scroll(notes, qt):
-    from PySide6.QtGui import QTextDocument
-    from PySide6.QtCore import QUrl
     preview = notes.findChild(QTextBrowser, "MarkdownPreview")
     raw = ("# Guide\n\n- First\n- Second\n\n"
            "| Term | Meaning |\n| --- | --- |\n| ephemeral | brief |\n\n"
@@ -155,8 +153,6 @@ def test_supported_formats_safe_links_and_preview_scroll(notes, qt):
     assert "print('hello')" in preview.toPlainText()
     assert doc.find("Link").charFormat().isAnchor()
     assert not preview.openLinks() and not preview.openExternalLinks()
-    assert preview.loadResource(QTextDocument.ImageResource, QUrl("file:///secret.png")) is None
-    assert preview.loadResource(QTextDocument.ImageResource, QUrl("https://example.com/a.png")) is None
     bar = preview.verticalScrollBar()
     bar.setValue(bar.maximum() // 2)
     before = bar.value()
@@ -180,3 +176,32 @@ def test_unrelated_refresh_does_not_erase_live_draft(notes, qt):
     notes.ctx.module_changed.emit("Other")
     assert notes.editor.toPlainText() == "# Different book"
     assert "Different book" in notes.markdown.preview.toPlainText()
+
+
+def test_preview_never_loads_or_paints_image_files(notes, qt, tmp_path, monkeypatch):
+    from PySide6.QtGui import QColor, QImage
+    from vocab.gui.markdown_editor import MarkdownPreview
+    preview = notes.findChild(QTextBrowser, "MarkdownPreview")
+    image = tmp_path / "private.png"
+    picture = QImage(300, 200, QImage.Format_RGB32)
+    picture.fill(QColor(12, 200, 34))
+    assert picture.save(str(image))
+    requests = []
+    load = MarkdownPreview.loadResource
+    monkeypatch.setattr(MarkdownPreview, "loadResource",
+                        lambda self, kind, url: requests.append(url.toString()) or load(self, kind, url))
+    notes.editor.setPlainText(f"# Note\n\n![private]({image.as_uri()})\n\n"
+                              "![unc](file://server/share/pixel.png)\n\n"
+                              "![missing](file:///no/such/file.png)\n\n"
+                              "![remote](https://example.com/pixel.png)\n")
+    QTest.qWait(250)
+    for _ in range(3):
+        preview.viewport().repaint()
+        qt.processEvents()
+    shot = preview.viewport().grab().toImage()
+    painted = sum(shot.pixelColor(x, y) == QColor(12, 200, 34)
+                  for x in range(0, shot.width(), 4) for y in range(0, shot.height(), 4))
+    assert painted == 0
+    # One placeholder per image, then Qt's cache: no re-probing on repaint.
+    assert sorted(set(requests)) == sorted(requests) and len(requests) == 4, requests
+    assert notes.editor.toPlainText().count("](") == 4  # the Markdown source is unchanged

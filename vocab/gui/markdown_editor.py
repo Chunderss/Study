@@ -1,6 +1,6 @@
 """Plain Markdown source plus a debounced, local Qt preview (no browser/LLM)."""
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QTextDocument
+from PySide6.QtGui import QImage, QTextDocument
 from PySide6.QtWidgets import (QLabel, QSplitter, QTextBrowser, QPlainTextEdit,
                                QVBoxLayout, QWidget)
 
@@ -13,9 +13,20 @@ class MarkdownPreview(QTextBrowser):
         self.setOpenLinks(False)
         self.setOpenExternalLinks(False)
 
+    _placeholder = None
+
     def loadResource(self, resource_type, url):
-        # A note preview must not fetch remote resources or arbitrary local files.
-        return None
+        # A note preview must not fetch remote resources, arbitrary local files
+        # or UNC paths (on Windows those contact the named server). Returning
+        # nothing would let Qt load the file itself, so images get a blank
+        # placeholder, which Qt caches instead of asking again on each repaint.
+        if resource_type == QTextDocument.ResourceType.ImageResource:
+            if MarkdownPreview._placeholder is None:
+                image = QImage(1, 1, QImage.Format_ARGB32)
+                image.fill(Qt.transparent)
+                MarkdownPreview._placeholder = image
+            return MarkdownPreview._placeholder
+        return ""
 
 
 class MarkdownEditor(QWidget):

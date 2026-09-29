@@ -141,12 +141,13 @@ class Storage:
         if not self.exists(name):
             raise ModuleNotFound(f"Module '{name}' does not exist.")
         path = self.paths.manifest_file(name)
-        raw = _read_json(path, None)
-        if raw is None:
+        if not path.exists():
             # tolerate a module with no manifest yet (e.g. freshly migrated)
             mod = Module(name=name)
             self.save_module(mod)
             return mod
+        # A manifest that exists but holds JSON null or a list is damaged, not absent.
+        raw = _read_json_object(path, None)
         try:
             mod = Module.from_dict(raw, fallback_name=name)
         except (AttributeError, KeyError, TypeError, ValueError) as error:

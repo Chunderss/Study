@@ -118,3 +118,22 @@ def test_module_folder_that_cannot_be_opened_is_listed_as_unreadable(tmp_path):
         assert app.cmd_use("Beta") == "Now using 'Beta'."
     finally:
         folder.chmod(0o755)
+
+
+@pytest.mark.parametrize("content", [b"null", b"[]", b'"module"'])
+def test_manifest_with_non_object_json_is_reported_not_replaced(tmp_path, content):
+    app = make(tmp_path, "Book")
+    manifest = app.paths.manifest_file("Book")
+    manifest.write_bytes(content)
+    with pytest.raises(DataFileError) as info:
+        app.storage.load_module("Book")
+    assert info.value.path == manifest
+    assert manifest.read_bytes() == content
+
+
+def test_missing_manifest_is_still_created(tmp_path):
+    app = make(tmp_path, "Book")
+    manifest = app.paths.manifest_file("Book")
+    manifest.unlink()
+    assert app.storage.load_module("Book").name == "Book"
+    assert manifest.is_file()

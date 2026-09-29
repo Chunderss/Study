@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QInputDialog, QLabel,
                                QPushButton, QVBoxLayout, QWidget, QMenuBar)
 
 from ..cli.app import App
+from ..core.storage import ModuleNotFound
 from ..dictionaries import get_dictionary
 from ..study.judge import get_judge
 from ..study.session import StudySession
@@ -40,6 +41,7 @@ class MainWindow(QWidget):
         self.ctx.add_word_requested.connect(self._add_highlighted_word)
         self.ctx.capture_requested.connect(self._capture)
         self.ctx.source_requested.connect(self._open_source)
+        self._status_problem = ""
         self.setWindowTitle("Vocab Study")
         self.resize(1040, 700)
         self._build()
@@ -49,15 +51,14 @@ class MainWindow(QWidget):
         self.hotkeys = HotkeyFilter(self)
         self._install_shortcuts()
         self.hotkeys.start()
-        # keep the pane highlight in sync with the REAL keyboard focus, whether
-        # it moves by click or by keyboard (fixes "focus only changes on click")
-        QApplication.instance().focusChanged.connect(self._on_focus_changed)
         self.ctx.changed.connect(self._refresh_modules)
         self.ctx.module_changed.connect(self._refresh_modules)
         self.ctx.log.connect(self._show_message)
         self._refresh_modules()
         if self.app.migration_note:
             self.ctx.log.emit(self.app.migration_note)
+        if self.app.config.load_error:
+            self.ctx.log.emit("! " + self.app.config.load_error)
         self.ctx.log.emit("Shortcuts (tmux-style): press Ctrl+B, then a key (e.g. v split, z zoom, "
                           "x close). Press F1 for the full list.")
         recovered = self.ctx.notes.dirty_buffers()
@@ -67,6 +68,10 @@ class MainWindow(QWidget):
             self.ctx.log.emit("! " + " · ".join(self.ctx.notes.recovery_errors))
         if self._session_warning:
             self.ctx.log.emit(self._session_warning)
+        # Keep the pane highlight in sync with the REAL keyboard focus, whether
+        # it moves by click or by keyboard. Connect last: a window that failed
+        # to finish construction must not keep receiving focus changes.
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
 
     def _bootstrap_dictionary(self) -> None:
         # Offline data is bundled by the desktop build. Source users may install
@@ -225,16 +230,29 @@ class MainWindow(QWidget):
 
     def _refresh_modules(self) -> None:
         self.module_list.blockSignals(True)
-        self.module_list.clear()
-        for name in self.app.storage.list_names():
-            wl = self.app.storage.load_words(name)
-            n_notes = len(self.app.storage.note_names(name))
-            item = QListWidgetItem(f"{name}  ({len(wl.words)}w · {n_notes}n)")
-            item.setData(Qt.UserRole, name)
-            self.module_list.addItem(item)
-            if name == self.app.current_module:
-                self.module_list.setCurrentItem(item)
-        self.module_list.blockSignals(False)
+        try:
+            self.module_list.clear()
+            for name in self.app.storage.list_names():
+                try:
+                    wl = self.app.storage.load_words(name)
+                    n_notes = len(self.app.storage.note_names(name))
+                except Exception as error:  # one damaged module must not hide the rest
+                    item = QListWidgetItem(f"{name}  (unreadable)")
+                    item.setToolTip(str(error))
+                else:
+                    item = QListWidgetItem(f"{name}  ({len(wl.words)}w · {n_notes}n)")
+                item.setData(Qt.UserRole, name)
+                self.module_list.addItem(item)
+                if name == self.app.current_module:
+                    self.module_list.setCurrentItem(item)
+            for name in self.app.storage.unsupported_module_dirs():
+                item = QListWidgetItem(f"{name}  (unsupported folder name)")
+                item.setFlags(Qt.NoItemFlags)
+                item.setToolTip("Rename this folder in the modules folder using only "
+                                "letters, numbers, spaces and _ . - ( ) '")
+                self.module_list.addItem(item)
+        finally:
+            self.module_list.blockSignals(False)
         self._refresh_status()
 
     def _on_module_selected(self, _text: str) -> None:
@@ -278,16 +296,41 @@ class MainWindow(QWidget):
         self.ctx.module_changed.emit(self.app.current_module or "")
 
     def _refresh_status(self) -> None:
+        # Runs on every focus change, so it must never raise: an error dialog
+        # takes focus, which would run this again.
         cur = self.app.current_module or "—"
-        dic, _ = self.app.effective_dictionary()
+        problems, labels = [], []
         due = "—"
         if self.app.current_module:
-            due = str(self.app.due_count(self.app.current_module))
-        net = "offline" if not dic.requires_network else "ONLINE"
+            try:
+                due = str(self.app.due_count(self.app.current_module))
+            except ModuleNotFound:
+                due = "?"
+                labels.append("module missing")
+                problems.append(f"Module '{cur}' is no longer available.")
+            except Exception as error:
+                due = "?"
+                labels.append("unreadable module data")
+                problems.append(str(error))
+        try:
+            dic, _ = self.app.effective_dictionary()
+            dictionary = f"{dic.id} ({'offline' if not dic.requires_network else 'ONLINE'})"
+        except Exception as error:
+            dictionary = "?"
+            labels.append("dictionary setting")
+            problems.append(str(error))
+        problem = " · ".join(problems)
+        if problem and problem != self._status_problem:
+            self.ctx.log.emit("! " + problem)  # once per distinct problem
+        self._status_problem = problem
         z = "  ·  ZOOM" if self.workspace.is_zoomed else ""
         sense = f"    ·    sense: {self.app.config.disambiguator}"
-        self.status.setText(
-            f"module: {cur}    ·    due: {due}    ·    dict: {dic.id} ({net}){sense}{z}")
+        text = f"module: {cur}    ·    due: {due}    ·    dict: {dictionary}{sense}{z}"
+        if labels:
+            # Details (with file paths) stay in the tooltip so the bar never widens the window.
+            text += f"    ·    ! {', '.join(labels)} (hover for details)"
+        self.status.setText(text)
+        self.status.setToolTip(problem or text)
 
     # ---- help panel -----------------------------------------------------
     def _toggle_help(self) -> None:

@@ -97,7 +97,12 @@ class NoteBuffers(QObject):
         self.buffers = {}
         self.recovery_errors = []
         for module in storage.list_names():
-            for note in storage.note_drafts(module):
+            try:
+                drafts = storage.note_drafts(module)
+            except Exception as error:
+                self.recovery_errors.append(f"{module}: {error}")
+                continue
+            for note in drafts:
                 try:
                     self.open(module, note)
                 except Exception as error:

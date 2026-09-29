@@ -5,6 +5,7 @@ import argparse
 import logging
 from pathlib import Path
 import sys
+import time
 
 
 def main() -> None:
@@ -31,6 +32,9 @@ def main() -> None:
 
     # Smoke failures must stick: a later app.exit(0) cannot report success.
     smoke_failures = []
+    # A dialog moves focus, and focus changes run slots that may fail again.
+    # Show one dialog at a time and skip an identical error repeated at once.
+    dialog = {"open": False, "last": "", "at": 0.0}
 
     def report_error(kind, error, traceback):
         logging.error("Desktop error", exc_info=(kind, error, traceback))
@@ -41,9 +45,17 @@ def main() -> None:
                 import traceback as tb
                 sys.stderr.write("".join(tb.format_exception(kind, error, traceback)))
             app.exit(1)
-        else:
+            return
+        message = str(error)
+        now = time.monotonic()
+        if dialog["open"] or (message == dialog["last"] and now - dialog["at"] < 5):
+            return  # already logged to desktop.log
+        dialog.update(open=True, last=message)
+        try:
             QMessageBox.critical(None, "Vocab Study error",
                                  f"{error}\n\nDetails were saved to {logfile}")
+        finally:
+            dialog.update(open=False, at=time.monotonic())
 
     sys.excepthook = report_error
     try:

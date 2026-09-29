@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QInputDialog, QLabel, QLineEdit,
 
 from ..cli.parser import parse
 from ..cli.repl import Repl
+from ..core.storage import ModuleNotFound
 from . import theme
 from .markdown_editor import MarkdownEditor
 
@@ -99,7 +100,14 @@ class VocabComponent(BaseComponent):
         if not name:
             self.words.setPlainText("No module selected.")
             return
-        wl = self.app.storage.load_words(name)
+        try:
+            wl = self.app.storage.load_words(name)
+        except ModuleNotFound:
+            self.words.setPlainText(f"Module '{name}' is no longer available.")
+            return
+        except Exception as error:  # refresh runs on every change; never raise here
+            self.words.setPlainText(f"Could not read this module's vocabulary.\n\n{error}")
+            return
         if not wl.words:
             self.words.setPlainText("(no vocab yet) — add your first word below.")
             return
@@ -405,7 +413,14 @@ class DocumentsComponent(BaseComponent):
         name = self.app.current_module
         if not name:
             return
-        for d in self.app.storage.document_names(name):
+        try:
+            names = self.app.storage.document_names(name)
+        except Exception as error:  # refresh runs on every change; never raise here
+            item = QListWidgetItem(f"(could not list documents: {error})")
+            item.setFlags(Qt.NoItemFlags)
+            self.docs.addItem(item)
+            return
+        for d in names:
             self.docs.addItem(d)
         if self.docs.count() == 0:
             item = QListWidgetItem("(no documents yet — click + Add file)")

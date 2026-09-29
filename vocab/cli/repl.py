@@ -259,6 +259,8 @@ class Repl:
         self.echo(BANNER)
         if getattr(self.app, "migration_note", ""):
             self.echo(self.app.migration_note + "\n")
+        if self.app.config.load_error:
+            self.echo("! " + self.app.config.load_error + "\n")
         self._startup_checks()
         while True:
             try:

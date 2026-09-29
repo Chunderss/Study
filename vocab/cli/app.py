@@ -174,13 +174,20 @@ class App:
 
     def cmd_lists(self) -> str:
         names = self.storage.list_names()
-        if not names:
+        unsupported = self.storage.unsupported_module_dirs()
+        if not names and not unsupported:
             return "No lists yet. Create one with:  CREATE <name>"
         out = []
         for n in names:
-            wl = self.storage.load_words(n)
             marker = "*" if n == self.current_list else " "
+            try:
+                wl = self.storage.load_words(n)
+            except Exception as error:  # one damaged module must not hide the rest
+                out.append(f" {marker} {n}  (unreadable: {error})")
+                continue
             out.append(f" {marker} {n}  ({len(wl.words)} words)")
+        for n in unsupported:
+            out.append(f"   {n}  (folder name not supported; rename it in the modules folder)")
         return "Lists:\n" + "\n".join(out)
 
     def cmd_use(self, name: str) -> str:

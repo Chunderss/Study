@@ -38,11 +38,30 @@ def _atomic_write(path: Path, data: dict) -> None:
             os.unlink(tmp)
 
 
+class DataFileError(ValueError):
+    """A stored file exists but cannot be used. The file is left untouched."""
+
+    def __init__(self, path, reason):
+        super().__init__(f"Could not read {path}: {reason}")
+        self.path = Path(path)
+
+
 def _read_json(path: Path, default):
     if not path.exists():
         return default
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    # Windows editors often save UTF-8 with a BOM; accept it on read.
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return json.load(f)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DataFileError(path, error) from error
+
+
+def _read_json_object(path: Path, default):
+    data = _read_json(path, default)
+    if not isinstance(data, dict):
+        raise DataFileError(path, "expected a JSON object")
+    return data
 
 
 class ModuleExists(Exception):
@@ -51,6 +70,13 @@ class ModuleExists(Exception):
 
 class ModuleNotFound(Exception):
     pass
+
+
+def _addressable(name: str) -> bool:
+    try:
+        return sanitize_module_name(name) == name
+    except ValueError:
+        return False
 
 
 # Backwards-compatible aliases (old code/tests referenced these names).
@@ -63,8 +89,8 @@ class Storage:
         self.paths = paths
 
     # ---- module lifecycle ----------------------------------------------
-    def list_names(self) -> List[str]:
-        """Names of all modules (a module is any dir with a module.json OR a
+    def _module_dirs(self) -> List[str]:
+        """Folder names that look like modules (a module.json OR a
         vocab/words.json, tolerating a half-written module)."""
         d = self.paths.modules_dir
         if not d.exists():
@@ -76,6 +102,14 @@ class Storage:
             if (p / "module.json").exists() or (p / "vocab" / "words.json").exists():
                 names.append(p.name)
         return sorted(names)
+
+    def list_names(self) -> List[str]:
+        """Names of all modules the app can address."""
+        return [name for name in self._module_dirs() if _addressable(name)]
+
+    def unsupported_module_dirs(self) -> List[str]:
+        """Module folders renamed outside the app to a name it cannot use."""
+        return [name for name in self._module_dirs() if not _addressable(name)]
 
     # New canonical alias.
     module_names = list_names
@@ -100,13 +134,17 @@ class Storage:
         name = sanitize_module_name(name)
         if not self.exists(name):
             raise ModuleNotFound(f"Module '{name}' does not exist.")
-        raw = _read_json(self.paths.manifest_file(name), None)
+        path = self.paths.manifest_file(name)
+        raw = _read_json(path, None)
         if raw is None:
             # tolerate a module with no manifest yet (e.g. freshly migrated)
             mod = Module(name=name)
             self.save_module(mod)
             return mod
-        mod = Module.from_dict(raw, fallback_name=name)
+        try:
+            mod = Module.from_dict(raw, fallback_name=name)
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            raise DataFileError(path, f"unexpected content ({error})") from error
         mod.name = name  # directory identity is authoritative
         return mod
 
@@ -142,8 +180,12 @@ class Storage:
         name = sanitize_module_name(name)
         if not self.exists(name):
             raise ModuleNotFound(f"Module '{name}' does not exist.")
-        raw = _read_json(self.paths.words_file(name), {"name": name, "words": {}})
-        wl = WordList.from_dict(raw, fallback_name=name)
+        path = self.paths.words_file(name)
+        raw = _read_json_object(path, {"name": name, "words": {}})
+        try:
+            wl = WordList.from_dict(raw, fallback_name=name)
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            raise DataFileError(path, f"unexpected content ({error})") from error
         wl.name = name
         return wl
 
@@ -152,7 +194,7 @@ class Storage:
 
     # ---- stats (scheduler state) ---------------------------------------
     def load_stats(self, name: str) -> Dict[str, dict]:
-        return _read_json(self.paths.stats_file(sanitize_module_name(name)), {})
+        return _read_json_object(self.paths.stats_file(sanitize_module_name(name)), {})
 
     def save_stats(self, name: str, stats: Dict[str, dict]) -> None:
         _atomic_write(self.paths.stats_file(sanitize_module_name(name)), stats)

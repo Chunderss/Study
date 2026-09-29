@@ -8,15 +8,28 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QDialog, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox
 
 from .test_markdown_preview import qt, notes
 from vocab.gui.components import NotesComponent, VocabComponent
 from vocab.gui.main_window import MainWindow
 
 
+# Windows whose lookup outlived the teardown drain; closed once it finishes.
+_OUTLIVED = []
+
+
+def _close_finished_outlived_windows():
+    for win in list(_OUTLIVED):
+        if not win.ctx.busy:
+            win.close()
+            win.deleteLater()
+            _OUTLIVED.remove(win)
+
+
 @pytest.fixture
 def window(qt, tmp_path, monkeypatch):
+    _close_finished_outlived_windows()
     win = MainWindow(root=tmp_path)
     win.app.cmd_create("Book")
     win.app.cmd_use("Book")
@@ -28,7 +41,7 @@ def window(qt, tmp_path, monkeypatch):
     # A failed test can leave a lookup registered. Drain it within a bound so
     # closing never stops at the busy-lookup dialog, and keep teardown-only
     # dialogs from blocking the offscreen event loop.
-    win.ctx._pool.waitForDone(5000)
+    drained = win.ctx._pool.waitForDone(5000)
     for _ in range(200):
         if not win.ctx.busy:
             break
@@ -36,6 +49,15 @@ def window(qt, tmp_path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.Discard)
     for dialog in ("information", "warning", "critical"):
         monkeypatch.setattr(QMessageBox, dialog, lambda *a, **k: QMessageBox.Ok)
+    if not drained or win.ctx.busy:
+        # The worker may still deliver its callback, so the window must stay
+        # alive; keep it from taking focus or keys in later tests instead.
+        _OUTLIVED.append(win)
+        QApplication.instance().focusChanged.disconnect(win._on_focus_changed)
+        win.hotkeys.stop()
+        win.hide()
+        pytest.fail("A lookup worker was still running after the 5 s teardown drain; "
+                    "tests must release their worker gates.", pytrace=False)
     win.close()
     win.deleteLater()
     qt.processEvents()

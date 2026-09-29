@@ -117,9 +117,13 @@ def test_unreadable_json_is_not_published(tmp_path, filename, content):
     source = legacy_list(paths)
     (source / filename).write_text(content, encoding="utf-8")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as info:
         migrate.migrate(paths)
 
+    # The message names the list and its file, not the discarded staging copy.
+    message = str(info.value)
+    assert "'Book'" in message and filename in message
+    assert ".lists-migration-" not in message
     assert not paths.module_dir("Book").exists()
     assert migrate.needs_migration(paths)
     backup = next(tmp_path.glob("lists.backup-*"))

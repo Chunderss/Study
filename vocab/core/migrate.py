@@ -25,7 +25,7 @@ from typing import List
 
 from .module import Module
 from .paths import Paths
-from .storage import Storage, _atomic_write
+from .storage import DataFileError, Storage, _atomic_write
 
 
 def _stamp() -> str:
@@ -83,9 +83,14 @@ def _verify(paths: Paths, name: str, fingerprint: dict) -> None:
         if _digest(destination) != expected:
             raise RuntimeError(f"Migration verify failed for '{name}': {relative} changed.")
     storage = Storage(paths)
-    storage.load_words(name)
-    stats = storage.load_stats(name)
-    if not isinstance(stats, dict) or not all(isinstance(card, dict) for card in stats.values()):
+    try:
+        storage.load_words(name)
+        stats = storage.load_stats(name)
+    except DataFileError as error:
+        # Name the legacy file: the staged copy is discarded after a failure.
+        raise ValueError(f"Migration verify failed for '{name}': "
+                         f"{error.path.name} is unreadable ({error.reason}).") from error
+    if not all(isinstance(card, dict) for card in stats.values()):
         raise ValueError(f"Migration verify failed for '{name}': invalid stats.json.")
 
 

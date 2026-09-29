@@ -137,3 +137,26 @@ def test_missing_manifest_is_still_created(tmp_path):
     manifest.unlink()
     assert app.storage.load_module("Book").name == "Book"
     assert manifest.is_file()
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs POSIX permissions and symlinks for this user")
+def test_config_that_cannot_even_be_checked_is_treated_as_unreadable(tmp_path):
+    home = tmp_path / "home"
+    App(home)
+    config = home / "config.json"
+    config.unlink()
+    folder = tmp_path / "locked"
+    folder.mkdir()
+    (folder / "settings.json").write_text('{"mechanical_repetition": true}', encoding="utf-8")
+    config.symlink_to(folder / "settings.json")
+    folder.chmod(0)
+    try:
+        app = App(home)
+        assert str(config) in app.config.load_error
+        with pytest.raises(ValueError, match="Fix or delete that file"):
+            app.config.change(app.paths, mechanical_repetition=False)
+        assert config.is_symlink()
+    finally:
+        folder.chmod(0o700)
+    assert (folder / "settings.json").read_text(encoding="utf-8") == '{"mechanical_repetition": true}'

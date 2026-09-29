@@ -44,6 +44,7 @@ class DataFileError(ValueError):
     def __init__(self, path, reason):
         super().__init__(f"Could not read {path}: {reason}")
         self.path = Path(path)
+        self.reason = str(reason)
 
 
 def _read_json(path: Path, default):
@@ -97,9 +98,14 @@ class Storage:
             return []
         names = []
         for p in d.iterdir():
-            if not p.is_dir():
-                continue
-            if (p / "module.json").exists() or (p / "vocab" / "words.json").exists():
+            try:
+                if not p.is_dir():
+                    continue
+                if (p / "module.json").exists() or (p / "vocab" / "words.json").exists():
+                    names.append(p.name)
+            except OSError:
+                # A folder the user cannot open is still listed, so its loads
+                # report the error instead of hiding or breaking every module.
                 names.append(p.name)
         return sorted(names)
 

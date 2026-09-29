@@ -96,3 +96,19 @@ def test_folders_with_unsupported_names_are_reported_not_used(tmp_path):
     assert app.storage.unsupported_module_dirs() == ["Beta [old]"]
     assert app.study_targets_all() == ["Good"]
     assert "Beta [old]  (folder name not supported" in app.cmd_lists()
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs POSIX permissions enforced for this user")
+def test_module_folder_that_cannot_be_opened_is_listed_as_unreadable(tmp_path):
+    app = make(tmp_path, "Alpha", "Beta")
+    folder = app.paths.module_dir("Alpha")
+    folder.chmod(0)
+    try:
+        assert app.storage.list_names() == ["Alpha", "Beta"]
+        listing = app.cmd_lists()
+        assert "Alpha  (unreadable:" in listing and str(folder) in listing
+        assert "Beta  (1 words)" in listing
+        assert app.cmd_use("Beta") == "Now using 'Beta'."
+    finally:
+        folder.chmod(0o755)

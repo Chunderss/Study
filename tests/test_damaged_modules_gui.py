@@ -1,4 +1,5 @@
 """Damaged module data must not break focus handling, the sidebar or panes."""
+import os
 import sys
 
 import pytest
@@ -7,7 +8,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
 from .test_gui_reliability import qt, window
+from vocab.cli.app import App
 from vocab.gui.components import VocabComponent
+from vocab.gui.main_window import MainWindow
 
 
 @pytest.fixture
@@ -75,3 +78,30 @@ def test_unknown_dictionary_setting_does_not_break_the_status_bar(window, qt, sl
     assert slot_errors == []
     assert "dict: ?" in window.status.text()
     assert "missing-dictionary" in window.status.toolTip()
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs POSIX permissions enforced for this user")
+def test_module_folder_that_cannot_be_opened_keeps_startup_and_sidebar(qt, tmp_path, slot_errors):
+    app = App(tmp_path)
+    for name in ("Alpha", "Beta"):
+        app.cmd_create(name)
+    folder = app.paths.module_dir("Alpha")
+    folder.chmod(0)
+    try:
+        win = MainWindow(root=tmp_path)
+        try:
+            labels = [win.module_list.item(i).text() for i in range(win.module_list.count())]
+            assert labels[0] == "Alpha  (unreadable)" and labels[1].startswith("Beta  (0w")
+            win.module_list.setCurrentRow(1)
+            assert win.app.current_module == "Beta"
+            win.ctx.changed.emit()
+            qt.processEvents()
+            assert win.module_list.count() == 2
+            assert slot_errors == []
+        finally:
+            win.close()
+            win.deleteLater()
+            qt.processEvents()
+    finally:
+        folder.chmod(0o755)

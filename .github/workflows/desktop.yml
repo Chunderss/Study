@@ -10,6 +10,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,6 +21,7 @@ jobs:
       - name: Download offline test dictionary
         run: python -m nltk.downloader -q -d build/nltk_data wordnet
       - name: GUI and storage regressions
+        timeout-minutes: 20
         env:
           QT_QPA_PLATFORM: offscreen
           NLTK_DATA: ${{ github.workspace }}/build/nltk_data

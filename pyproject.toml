@@ -30,3 +30,5 @@ include = ["vocab*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+# Print every thread's stack if one test runs this long; CI timeouts stop the job.
+faulthandler_timeout = 300

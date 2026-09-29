@@ -25,7 +25,17 @@ def window(qt, tmp_path, monkeypatch):
     win.show()
     qt.processEvents()
     yield win
+    # A failed test can leave a lookup registered. Drain it within a bound so
+    # closing never stops at the busy-lookup dialog, and keep teardown-only
+    # dialogs from blocking the offscreen event loop.
+    win.ctx._pool.waitForDone(5000)
+    for _ in range(200):
+        if not win.ctx.busy:
+            break
+        QTest.qWait(10)
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.Discard)
+    for dialog in ("information", "warning", "critical"):
+        monkeypatch.setattr(QMessageBox, dialog, lambda *a, **k: QMessageBox.Ok)
     win.close()
     win.deleteLater()
     qt.processEvents()

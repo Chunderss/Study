@@ -11,8 +11,9 @@ wordnet = ["nltk>=3.8"]              # offline dictionary (~40 MB corpus downloa
 repl = ["prompt_toolkit>=3.0"]       # history + tab-completion for power users
 embeddings = ["sentence-transformers>=2.2"]  # phase-2 semantic judge (~250 MB via torch)
 test = ["pytest>=8,<10"]
-desktop-build = ["PySide6>=6.8,<7", "nltk>=3.9,<4", "pyinstaller>=6.20,<7"]
-gui = ["PySide6>=6.8,<7"]               # standalone desktop app (Qt); ~100 MB
+# PySide6 6.8.0 and 6.8.0.1 freeze the event loop when a Qt slot raises.
+desktop-build = ["PySide6>=6.8.0.2,<7", "nltk>=3.9,<4", "pyinstaller>=6.20,<7"]
+gui = ["PySide6>=6.8.0.2,<7"]           # standalone desktop app (Qt); ~100 MB
 
 [project.scripts]
 vocab = "vocab.__main__:main"

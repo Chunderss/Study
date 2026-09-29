@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 pytest.importorskip("PySide6")
@@ -35,6 +36,21 @@ elif sys.argv[2] == "book-script-runs":
         self._web.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         self._load(0)
     EpubViewer.__init__ = scripts_enabled
+elif sys.argv[2] == "qt-fatal":
+    # Qt aborts on fatal messages (e.g. a bundle missing QtWebEngineProcess).
+    from PySide6.QtCore import qFatal
+    from vocab.gui.main_window import MainWindow
+    show = MainWindow._show_message
+    def fatal(self, text):
+        show(self, text)
+        if text.startswith("Explanation saved"):
+            qFatal("injected qt fatal")
+    MainWindow._show_message = fatal
+elif sys.argv[2] == "reader-error":
+    from vocab.gui.viewers import EpubViewer
+    def unreadable(self, *args, **kwargs):
+        raise OSError("injected chapter failure")
+    EpubViewer._chapter_url = unreadable
 from vocab.gui.__main__ import main
 sys.argv = ["VocabStudy", "--home", sys.argv[1], "--smoke-test"]
 main()
@@ -51,10 +67,15 @@ def run_smoke(home, mode):
                           capture_output=True, text=True, timeout=120)
 
 
-@pytest.mark.parametrize("mode, code", [("clean", 0), ("slot-error", 1), ("book-script-runs", 1)])
+@pytest.mark.parametrize("mode, code", [("clean", 0), ("slot-error", 1), ("book-script-runs", 1),
+                                        ("reader-error", 1), ("qt-fatal", None)])
 def test_smoke_exit_status_reflects_failures(tmp_path, mode, code):
+    started = time.monotonic()
     result = run_smoke(tmp_path, mode)
-    assert result.returncode == code, result.stdout + result.stderr
+    if code is None:
+        assert result.returncode != 0, result.stdout + result.stderr  # aborted
+    else:
+        assert result.returncode == code, result.stdout + result.stderr
     # Every run reaches the learning review; a clean run also opens both documents.
     assert (tmp_path / "modules" / "DesktopCheck" / "learning.json").is_file()
     if mode == "clean":
@@ -66,5 +87,13 @@ def test_smoke_exit_status_reflects_failures(tmp_path, mode, code):
         assert "injected slot failure" in log.read_text(encoding="utf-8")
     elif mode == "book-script-runs":
         assert "Offline reader ready|script ran" in result.stderr
+    elif mode == "reader-error":
+        # The reader's own error ends the wait early and names the cause.
+        assert "EPUB chapter load failed" in result.stderr
+        assert "injected chapter failure" in result.stderr
+        assert time.monotonic() - started < 25
+    elif mode == "qt-fatal":
+        # PySide words a qFatal() made from Python itself; Qt's own keep their text.
+        assert "ERROR Qt QtFatalMsg:" in log.read_text(encoding="utf-8")
     else:
         assert not log.exists() or not log.read_text(encoding="utf-8").strip()

@@ -29,6 +29,18 @@ def main() -> None:
     logfile = paths.root / "desktop.log"
     logging.basicConfig(filename=logfile, level=logging.ERROR,
                         format="%(asctime)s %(levelname)s %(message)s")
+    # Some Qt failures (a missing QtWebEngineProcess, for one) are fatal
+    # messages that abort without reaching sys.excepthook. Keep them in
+    # desktop.log too: the windowed executable has no console.
+    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+
+    def qt_message(kind, _context, message):
+        if kind in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+            logging.error("Qt %s: %s", kind.name, message)
+        if sys.stderr:
+            sys.stderr.write(message + "\n")
+
+    qInstallMessageHandler(qt_message)
 
     # Smoke failures must stick: a later app.exit(0) cannot report success.
     smoke_failures = []
@@ -82,12 +94,18 @@ def main() -> None:
             docs = win.app.paths.documents_dir("DesktopCheck")
             docs.mkdir(parents=True, exist_ok=True)
 
+            # Collect the readers' own reports so a failure says why, early.
+            problems = []
+            win.ctx.log.connect(lambda text: text.startswith("!") and problems.append(text))
+
             def wait_for(check, what, seconds=30):
                 for _ in range(seconds * 20):
                     if check():
                         return
+                    if problems:
+                        break
                     QTest.qWait(50)
-                raise AssertionError(f"Timed out: {what}")
+                raise AssertionError(f"{what} failed: " + ("; ".join(problems) or "timed out"))
 
             epub = docs / "check.epub"
             with zipfile.ZipFile(epub, "w") as book:
@@ -99,8 +117,16 @@ def main() -> None:
                               '<script>document.title = "script ran"</script></head>'
                               '<body><p id="check">Offline reader ready</p></body></html>')
             reader = win._open_viewer(str(epub))
-            assert reader is not None, "EPUB reader did not open"
-            wait_for(lambda: reader._document_loaded, "EPUB chapter load")
+            assert reader is not None, "EPUB reader did not open: " + "; ".join(problems)
+            reader._web.page().renderProcessTerminated.connect(
+                lambda status, code: problems.append(f"renderer ended: {status.name} ({code})"))
+
+            def loaded():
+                if reader._error.isVisibleTo(reader):
+                    problems.append(reader._error.text())
+                return reader._document_loaded
+
+            wait_for(loaded, "EPUB chapter load")
             result = []
             reader._run_js("document.getElementById('check').textContent + '|' + document.title",
                            result.append)
@@ -113,7 +139,8 @@ def main() -> None:
             painter.drawText(200, 200, "Offline PDF ready")
             painter.end()
             viewer = win._open_viewer(str(pdf))
-            assert viewer is not None and viewer._doc.pageCount() == 1, "PDF did not load"
+            assert viewer is not None and viewer._doc.pageCount() == 1, \
+                "PDF did not load: " + ("; ".join(problems) or "no pages")
 
         def smoke():
             try:

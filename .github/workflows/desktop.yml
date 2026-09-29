@@ -39,7 +39,8 @@ jobs:
           # native Windows rendering rather than the offscreen platform.
           try:
               code = subprocess.run([r'dist\VocabStudy\VocabStudy.exe', '--home', str(home), '--smoke-test'],
-                                    timeout=90, env={**os.environ, 'QT_QPA_PLATFORM': 'windows'}).returncode
+                                    timeout=90, env={**os.environ, 'QT_QPA_PLATFORM': 'windows',
+                                                     'QTWEBENGINE_CHROMIUM_FLAGS': '--disable-gpu'}).returncode
           except subprocess.TimeoutExpired:
               code = 'timeout'
           if code != 0:

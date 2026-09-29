@@ -59,6 +59,12 @@ and review history are stored locally. This workflow requires no AI or network a
 EPUB highlights live with the module's captures; the original EPUB file is unchanged.
 An optional tutor has not been added yet; no model is downloaded or sent your passages.
 
+The EPUB reader does not run a book's own JavaScript, because a script inside a
+downloaded book could otherwise read files on your computer. Books render with their
+own styles, images and fonts, and `<noscript>` fallback text is shown. Content that a
+book builds with scripts, such as MathJax equations, is not rendered. Remote resources
+are not loaded either.
+
 The app reopens the selected module, pane layout, selected notes, preview visibility,
 and document readers after a normal exit. A vocabulary quiz reopens as a Vocab pane;
 its completed reviews are already saved. Reader positions remain saved per document.

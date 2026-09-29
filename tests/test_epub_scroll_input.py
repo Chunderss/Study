@@ -102,7 +102,7 @@ def wait_for(check):
 
 def js(code):
     result = []
-    viewer._web.page().runJavaScript(code, result.append)
+    viewer._run_js(code, result.append)
     wait_for(lambda: bool(result))
     return result[0]
 
@@ -219,7 +219,7 @@ try:
 
     wait_for(lambda: viewer._document_loaded and viewer._pending_scroll == 0)
     positions = []
-    viewer._web.page().runJavaScript(
+    viewer._run_js(
         'JSON.stringify({y:scrollY,height:document.scrollingElement.scrollHeight})',
         positions.append)
     wait_for(lambda: bool(positions))

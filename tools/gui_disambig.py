@@ -115,11 +115,11 @@ def main() -> int:
         })();
         """
         def after_select(_):
-            ev._web.page().runJavaScript(ev._SEL_JS, capture)
+            ev._run_js(ev._SEL_JS, capture)
         def capture(payload):
             got["payload"] = payload
             app_qt.quit()
-        ev._web.page().runJavaScript(js_select, after_select)
+        ev._run_js(js_select, after_select)
     for _ in range(10):
         app_qt.processEvents()
     QTimer.singleShot(1500, run_sel)

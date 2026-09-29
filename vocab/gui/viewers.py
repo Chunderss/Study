@@ -386,6 +386,14 @@ class EpubViewer(QWidget):
         self._error.hide()
         lay.addWidget(self._error)
         self._web = QWebEngineView(self)
+        # Books are untrusted: their scripts could read local files through the
+        # file:// chapter pages and send them out. Disable them before the first
+        # load. The reader's own scripts run in an isolated world (_run_js).
+        from PySide6.QtWebEngineCore import QWebEngineSettings
+        settings = self._web.settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         self._web.page().navigationRequested.connect(self._navigate)
         self._web.page().loadingChanged.connect(self._loading_changed)
         lay.addWidget(self._web, 1)
@@ -519,7 +527,7 @@ class EpubViewer(QWidget):
             # A missing passage falls back to the capture's saved scroll location.
             self._restore_scroll(generation)
 
-        self._web.page().runJavaScript(f"""
+        self._run_js(f"""
             (() => {{
                 const expected = new URL({expected});
                 const current = new URL(location.href);
@@ -536,6 +544,16 @@ class EpubViewer(QWidget):
                 return {script.rstrip().rstrip(';')};
             }})();
         """, rendered)
+
+    def _run_js(self, script, callback):
+        """Run reader code in Qt's ApplicationWorld.
+
+        It shares the book's DOM but not its JavaScript globals, and it still
+        runs while the book's own scripts are disabled.
+        """
+        from PySide6.QtWebEngineCore import QWebEngineScript
+        self._web.page().runJavaScript(
+            script, QWebEngineScript.ScriptWorldId.ApplicationWorld.value, callback)
 
     def _restore_scroll(self, generation, attempt=0):
         if not isValid(self) or generation != self._load_generation or not self._pending_scroll:
@@ -561,7 +579,7 @@ class EpubViewer(QWidget):
         # A title or an outgoing document's loadFinished can arrive before the
         # requested chapter is ready. Confirm both the document and actual
         # renderer scroll before consuming its saved position.
-        self._web.page().runJavaScript(f"""
+        self._run_js(f"""
             (() => {{
                 const expected = new URL({expected});
                 const current = new URL(location.href);
@@ -744,7 +762,7 @@ class EpubViewer(QWidget):
             self.ctx.capture_requested.emit(self._module or "", quote, source)
 
         # Text and DOM offsets must come from the same renderer snapshot.
-        self._web.page().runJavaScript(SELECTION_ANCHOR_JS, selected)
+        self._run_js(SELECTION_ANCHOR_JS, selected)
 
     def go_to(self, source):
         self._pending_scroll = max(0.0, min(1.0, float(source.get("scroll", 0))))
@@ -800,7 +818,7 @@ class EpubViewer(QWidget):
             if self.ctx:
                 self.ctx.add_word_requested.emit(word, sentence, self._module or "")
         try:
-            self._web.page().runJavaScript(self._SEL_JS, _done)
+            self._run_js(self._SEL_JS, _done)
         except Exception:
             pass
 

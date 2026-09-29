@@ -38,7 +38,7 @@ def wait_for(check):
         if check(): return
         QTest.qWait(20)
     diagnostics = []
-    viewer._web.page().runJavaScript('JSON.stringify({scroll: window.scrollY, height: document.body.scrollHeight, viewport: window.innerHeight})', lambda value: diagnostics.append(value))
+    viewer._run_js('JSON.stringify({scroll: window.scrollY, height: document.body.scrollHeight, viewport: window.innerHeight})', lambda value: diagnostics.append(value))
     QTest.qWait(200)
     raise AssertionError(f"Browser callback did not finish: title={viewer._web.title()}, cached_scroll={viewer._web.page().scrollPosition().y()}, pending={viewer._pending_scroll}, DOM={diagnostics}")
 
@@ -63,7 +63,7 @@ wait_for(lambda: True in loaded and viewer._web.title() == "two")
 wait_for(lambda: viewer._web.page().scrollPosition().y() > 0)
 wait_for(lambda: viewer._pending_scroll == 0)
 selected = []
-viewer._web.page().runJavaScript('var r=document.createRange(); r.selectNodeContents(document.getElementById("passage")); var s=window.getSelection(); s.removeAllRanges(); s.addRange(r); true;', lambda value: selected.append(value))
+viewer._run_js('var r=document.createRange(); r.selectNodeContents(document.getElementById("passage")); var s=window.getSelection(); s.removeAllRanges(); s.addRange(r); true;', lambda value: selected.append(value))
 wait_for(lambda: selected and viewer._web.selectedText() == "Passage two")
 data.cmd_create("Other")
 data.cmd_use("Other")

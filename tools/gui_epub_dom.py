@@ -37,7 +37,7 @@ def check():
     def got(text):
         result["body"] = text or ""
         app.quit()
-    v._web.page().runJavaScript("document.body ? document.body.innerText : ''", got)
+    v._run_js("document.body ? document.body.innerText : ''", got)
 
 for _ in range(10):
     app.processEvents()

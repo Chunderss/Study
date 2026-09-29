@@ -72,7 +72,7 @@ def loaded(title):
 
 def js(code):
     result = []
-    viewer._web.page().runJavaScript(code, result.append)
+    viewer._run_js(code, result.append)
     wait_for(lambda: bool(result))
     return result[0]
 
@@ -221,7 +221,7 @@ def wait_for(check):
 
 def js(code):
     result = []
-    viewer._web.page().runJavaScript(code, result.append)
+    viewer._run_js(code, result.append)
     wait_for(lambda: bool(result))
     return result[0]
 

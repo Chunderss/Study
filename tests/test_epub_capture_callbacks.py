@@ -22,7 +22,7 @@ def test_capture_callback_keeps_original_location_and_ignores_stale_reader(qt, c
     viewer._load_generation = 4
     viewer._document_loaded = True
     viewer._web = SimpleNamespace(page=lambda: SimpleNamespace(
-        runJavaScript=lambda script, callback: callbacks.append(callback)))
+        runJavaScript=lambda script, *rest: callbacks.append(rest[-1])))
     viewer.source_location = lambda: {"kind": "epub", "filename": "book.epub", "chapter": 2, "scroll": 0.1}
     viewer.save_position = lambda: None
     anchor = {"version": 1, "exact": "First.Second.", "prefix": "Before", "suffix": "After",

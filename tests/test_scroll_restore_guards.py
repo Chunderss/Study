@@ -15,8 +15,8 @@ from vocab.gui.viewers import EpubViewer
 @pytest.fixture
 def restore(qt, tmp_path):
     class DeferredPage:
-        def runJavaScript(self, script, callback):
-            self.complete = callback
+        def runJavaScript(self, script, *rest):
+            self.complete = rest[-1]  # (script, world, callback)
 
     # Keep Qt lifetime checks real while controlling renderer callback delivery.
     viewer = EpubViewer.__new__(EpubViewer)

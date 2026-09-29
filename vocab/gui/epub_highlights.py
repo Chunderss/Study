@@ -22,7 +22,7 @@ function textIndex() {
     let node;
     while ((node = walker.nextNode())) {
         if (!node.length || !node.parentElement ||
-            node.parentElement.closest('script,style,noscript,template,[hidden],textarea,select'))
+            node.parentElement.closest('script,style,template,[hidden],textarea,select'))
             continue;
         const style = getComputedStyle(node.parentElement);
         if (style.visibility === 'hidden' || style.visibility === 'collapse') continue;

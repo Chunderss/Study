@@ -112,10 +112,11 @@ def test_damaged_or_removed_module_opens_no_error_dialogs(tmp_path, mode):
     seen = json.loads(line[len("RESULT "):])
     assert seen["dialogs"] == 0 and seen["nesting"] == 0, seen
     assert seen["visible"], seen
-    assert "due: ?" in seen["status"], seen
     if mode == "deleted-at-runtime":
-        assert "module missing" in seen["status"], seen
+        # The vanished module is deselected rather than kept as a broken selection.
+        assert seen["status"].startswith("module: —"), seen
     else:
+        assert "due: ?" in seen["status"], seen
         assert "unreadable module data" in seen["status"], seen
 
 

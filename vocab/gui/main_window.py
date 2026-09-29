@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QInputDialog, QLabel,
                                QListWidget, QListWidgetItem, QMessageBox,
                                QPushButton, QVBoxLayout, QWidget, QMenuBar)
@@ -42,6 +42,7 @@ class MainWindow(QWidget):
         self.ctx.capture_requested.connect(self._capture)
         self.ctx.source_requested.connect(self._open_source)
         self._status_problem = ""
+        self._clearing_module = False
         self.setWindowTitle("Vocab Study")
         self.resize(1040, 700)
         self._build()
@@ -307,7 +308,8 @@ class MainWindow(QWidget):
             except ModuleNotFound:
                 due = "?"
                 labels.append("module missing")
-                problems.append(f"Module '{cur}' is no longer available.")
+                # _clear_missing_module reports it once and deselects the module.
+                self._schedule_missing_module_check()
             except Exception as error:
                 due = "?"
                 labels.append("unreadable module data")
@@ -331,6 +333,27 @@ class MainWindow(QWidget):
             text += f"    ·    ! {', '.join(labels)} (hover for details)"
         self.status.setText(text)
         self.status.setToolTip(problem or text)
+
+    def _schedule_missing_module_check(self) -> None:
+        # Deferred so a focus or refresh handler never re-enters module_changed.
+        if not self._clearing_module:
+            self._clearing_module = True
+            QTimer.singleShot(0, self, self._clear_missing_module)
+
+    def _clear_missing_module(self) -> None:
+        """Deselect a current module that was deleted or renamed outside the app.
+
+        Drafts, readers and pending lookups keep their own module identity; they
+        are never moved to another module.
+        """
+        self._clearing_module = False
+        name = self.app.current_module
+        if not name or self.app.storage.exists(name):
+            return  # reselected, or back in place
+        self.app.current_module = None
+        self.ctx.log.emit(f"! Module '{name}' is no longer available (deleted or renamed "
+                          "outside the app). Select or create a module to continue.")
+        self.ctx.module_changed.emit("")
 
     # ---- help panel -----------------------------------------------------
     def _toggle_help(self) -> None:

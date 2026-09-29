@@ -217,6 +217,8 @@ class NotesComponent(BaseComponent):
 
     def refresh(self) -> None:
         module = self.app.current_module
+        if module is None and self._keep_orphaned_draft():
+            return
         names = self.app.storage.note_names(module) if module else []
         # Keep deleted/external drafts accessible until explicitly discarded.
         names = sorted(set(names) | {note for (home, note), buffer in
@@ -239,6 +241,27 @@ class NotesComponent(BaseComponent):
             self.dirty.clear()
             self._set_editing(False)
             self.markdown.render(reset_scroll=True)
+
+    def _keep_orphaned_draft(self) -> bool:
+        """Keep an unsaved note on screen after its module vanished outside the
+        app, so its text can still be copied. It stays until another module is
+        selected; the draft itself remains tracked for the close prompt."""
+        buffer = self._buffer
+        if buffer is None or not buffer.dirty:
+            return False
+        try:
+            if self.app.storage.exists(buffer.module):
+                return False
+        except OSError:
+            return False
+        self.note_list.blockSignals(True)
+        self.note_list.clear()
+        self.note_list.addItem(buffer.note)
+        self.note_list.setCurrentRow(0)
+        self.note_list.blockSignals(False)
+        self.title.setText(f"{buffer.note} — module '{buffer.module}' was removed; "
+                           "copy this text to keep it")
+        return True
 
     def _detach(self):
         if self._buffer is not None:

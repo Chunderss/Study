@@ -44,6 +44,7 @@ class MainWindow(QWidget):
         self.ctx.source_requested.connect(self._open_source)
         self._status_problem = ""
         self._clearing_module = False
+        self._missing_module = ""
         self.setWindowTitle("Vocab Study")
         self.resize(1040, 700)
         self._build()
@@ -228,8 +229,11 @@ class MainWindow(QWidget):
         if not self.sidebar.isVisible():
             self.sidebar.setVisible(True)
         self.module_list.setFocus()
-        if self.module_list.count() and self.module_list.currentRow() < 0:
-            self.module_list.setCurrentRow(0)
+        if self.module_list.currentRow() < 0:
+            for row in range(self.module_list.count()):
+                if self.module_list.item(row).flags() & Qt.ItemIsEnabled:
+                    self.module_list.setCurrentRow(row)
+                    break
 
     def _refresh_modules(self) -> None:
         self.module_list.blockSignals(True)
@@ -263,6 +267,8 @@ class MainWindow(QWidget):
         if not item:
             return
         name = item.data(Qt.UserRole)
+        if not name or not item.flags() & Qt.ItemIsEnabled:
+            return  # an unsupported folder row cannot become the current module
         try:
             self.app.cmd_use(name)
         except Exception as e:
@@ -304,6 +310,17 @@ class MainWindow(QWidget):
         cur = self.app.current_module or "—"
         problems, labels = [], []
         due = "—"
+        if self.app.current_module:
+            self._missing_module = ""
+        elif self._missing_module:
+            labels.append(f"'{self._missing_module}' was removed")
+            notice = (f"Module '{self._missing_module}' is no longer available (deleted or renamed "
+                      "outside the app). Select or create a module to continue.")
+            drafts = [b for b in self.ctx.notes.dirty_buffers() if b.module == self._missing_module]
+            if drafts:
+                notice += (f" {len(drafts)} unsaved note draft(s) from it are still open; "
+                           "copy their text before closing.")
+            problems.append(notice)
         if self.app.current_module:
             try:
                 due = str(self.app.due_count(self.app.current_module))
@@ -356,8 +373,7 @@ class MainWindow(QWidget):
         if not name or self.app.storage.exists(name):
             return  # reselected, or back in place
         self.app.current_module = None
-        self.ctx.log.emit(f"! Module '{name}' is no longer available (deleted or renamed "
-                          "outside the app). Select or create a module to continue.")
+        self._missing_module = name  # _refresh_status reports it until a module is chosen
         self.ctx.module_changed.emit("")
 
     # ---- help panel -----------------------------------------------------

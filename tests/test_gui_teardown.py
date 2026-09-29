@@ -1,6 +1,7 @@
 """A failing GUI test must fail promptly, not hang in fixture teardown."""
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -11,7 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PROBE = r'''
 import threading
+from shiboken6 import isValid
 from tests.test_gui_reliability import qt, window
+
+WINDOWS = []
 
 
 def start_lookup(window, monkeypatch, release):
@@ -24,6 +28,7 @@ def start_lookup(window, monkeypatch, release):
     vc.add_input.setText("word")
     vc._add()
     assert window.ctx.busy
+    WINDOWS.append(window)
 
 
 def test_fails_while_worker_is_blocked(window, monkeypatch):
@@ -39,6 +44,13 @@ def test_fails_before_completion_is_delivered(window, monkeypatch):
     assert window.ctx._pool.waitForDone(5000)
     assert window.ctx.busy
     assert False, "INJECTED-BEFORE-COMPLETION"
+
+
+def test_teardown_closed_those_windows_and_drained_their_lookups():
+    assert len(WINDOWS) == 2
+    for win in WINDOWS:
+        assert not win.ctx._jobs, "a lookup was still registered after teardown"
+        assert not isValid(win) or not win.isVisible(), "teardown left a window open"
 '''
 
 
@@ -52,5 +64,7 @@ def test_failed_lookup_tests_report_failure_instead_of_hanging(tmp_path):
                             cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
     output = result.stdout + result.stderr
     assert result.returncode == 1, output
-    assert "2 failed" in output, output
+    # Exactly the two injected failures: no teardown errors, and the check passed.
+    assert re.search(r"^2 failed, 1 passed in ", output, re.M), output
+    assert "Signal source has been deleted" not in output, output
     assert "INJECTED-WHILE-BLOCKED" in output and "INJECTED-BEFORE-COMPLETION" in output, output

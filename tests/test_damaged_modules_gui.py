@@ -126,3 +126,23 @@ def test_unreadable_config_stays_visible_in_the_desktop(qt, tmp_path, slot_error
         win.close()
         win.deleteLater()
         qt.processEvents()
+
+
+def test_sidebar_signals_recover_when_listing_itself_fails(window, qt, slot_errors, monkeypatch):
+    window.app.cmd_create("Other")
+    original = window.app.storage.unsupported_module_dirs
+    calls = []
+    def fail_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError("modules folder unreadable")
+        return original()
+    monkeypatch.setattr(window.app.storage, "unsupported_module_dirs", fail_once)
+    window.ctx.changed.emit()
+    qt.processEvents()
+    assert [type(e) for e in slot_errors] == [PermissionError]
+    # Checked straight after the failed refresh, before any successful one.
+    assert not window.module_list.signalsBlocked()
+    rows = [window.module_list.item(i).data(Qt.UserRole) for i in range(window.module_list.count())]
+    window.module_list.setCurrentRow(rows.index("Other"))
+    assert window.app.current_module == "Other"

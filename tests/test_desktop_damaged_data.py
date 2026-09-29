@@ -52,15 +52,24 @@ def probe():
     def churn():
         for _ in range(3):
             for widget in (win.module_list, win.workspace.focused.component, win.module_list):
+                # Offscreen leaves no active window after a dialog closes.
+                win.activateWindow()
                 widget.setFocus()
                 QTest.qWait(30)
         win.ctx.changed.emit()
         QTest.qWait(300)
+    if mode == "fresh-damaged-at-start":
+        win.module_list.setCurrentRow(0)  # no saved workspace: the user picks it
     churn()
     if mode == "failing-focus-slot":
+        seen["slot_calls"] = 0
         def fail(*args):
+            seen["slot_calls"] += 1
             raise RuntimeError("focus slot failed")
         QApplication.instance().focusChanged.connect(fail)
+        churn()
+    elif mode == "renamed-at-runtime":
+        (home / "modules" / "Book").rename(home / "modules" / "Book renamed")
         churn()
     elif mode == "deleted-at-runtime":
         App(home).cmd_delete("Book")
@@ -84,24 +93,27 @@ main()
 '''
 
 
-def prepare(home, damaged):
+def prepare(home, damaged, workspace=True):
     from vocab.cli.app import App
     app = App(home)
     app.cmd_create("Book")
     app.cmd_add("word", target="Book", manual_def="a unit of language")
+    if damaged:
+        app.paths.stats_file("Book").write_text("{corrupt", encoding="utf-8")
+    if not workspace:
+        return
     (home / "workspace.json").write_text(json.dumps({
         "schema": 1, "module": "Book", "sidebar": True,
         "workspace": {"focused": 0, "zoomed": False, "tree": {
             "direction": "h", "sizes": [500, 500], "children": [
                 {"order": 0, "pane": {"component": "vocab"}},
                 {"order": 1, "pane": {"component": "notes"}}]}}}), encoding="utf-8")
-    if damaged:
-        app.paths.stats_file("Book").write_text("{corrupt", encoding="utf-8")
 
 
-@pytest.mark.parametrize("mode", ["damaged-at-start", "deleted-at-runtime", "damaged-at-runtime"])
+@pytest.mark.parametrize("mode", ["damaged-at-start", "fresh-damaged-at-start", "deleted-at-runtime",
+                                  "renamed-at-runtime", "damaged-at-runtime"])
 def test_damaged_or_removed_module_opens_no_error_dialogs(tmp_path, mode):
-    prepare(tmp_path, damaged=mode == "damaged-at-start")
+    prepare(tmp_path, damaged=mode.endswith("damaged-at-start"), workspace=not mode.startswith("fresh"))
     env = dict(os.environ)
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
     result = subprocess.run([sys.executable, "-c", SCRIPT, str(tmp_path), mode], cwd=ROOT, env=env,
@@ -115,6 +127,11 @@ def test_damaged_or_removed_module_opens_no_error_dialogs(tmp_path, mode):
     if mode == "deleted-at-runtime":
         # The vanished module is deselected rather than kept as a broken selection.
         assert seen["status"].startswith("module: —"), seen
+        assert "'Book' was removed" in seen["status"], seen
+    elif mode == "renamed-at-runtime":
+        # Focusing the sidebar afterwards may make Qt select the renamed module
+        # (standard list behaviour), but never the stale name.
+        assert seen["status"].split("    ·")[0] in ("module: —", "module: Book renamed"), seen
     else:
         assert "due: ?" in seen["status"], seen
         assert "unreadable module data" in seen["status"], seen
@@ -130,6 +147,7 @@ def test_repeated_slot_errors_show_one_dialog_at_a_time(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     line = next(l for l in result.stdout.splitlines() if l.startswith("RESULT "))
     seen = json.loads(line[len("RESULT "):])
-    # Identical errors repeated within seconds are logged, not shown again.
+    # The slot kept failing after the dialog closed; the repeats were only logged.
+    assert seen["slot_calls"] >= 3, seen
     assert seen["dialogs"] == 1 and seen["nesting"] == 1, seen
     assert "focus slot failed" in (tmp_path / "desktop.log").read_text(encoding="utf-8")

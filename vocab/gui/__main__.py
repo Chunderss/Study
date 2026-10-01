@@ -94,16 +94,25 @@ def main() -> None:
             docs = win.app.paths.documents_dir("DesktopCheck")
             docs.mkdir(parents=True, exist_ok=True)
 
-            # Collect the readers' own reports so a failure says why, early.
+            # Collect the readers' own reports. They fail the smoke even when
+            # they arrive together with a valid result or after these checks.
             problems = []
-            win.ctx.log.connect(lambda text: text.startswith("!") and problems.append(text))
+
+            def report(text):
+                if text not in problems:
+                    problems.append(text)
+                    smoke_failures.append(text)
+                    logging.error("Smoke check: %s", text)
+
+            win.ctx.log.connect(lambda text: text.startswith("!") and report(text))
 
             def wait_for(check, what, seconds=30):
                 for _ in range(seconds * 20):
-                    if check():
-                        return
-                    if problems:
+                    done = check()
+                    if problems:  # an error outranks a result
                         break
+                    if done:
+                        return
                     QTest.qWait(50)
                 raise AssertionError(f"{what} failed: " + ("; ".join(problems) or "timed out"))
 
@@ -119,11 +128,11 @@ def main() -> None:
             reader = win._open_viewer(str(epub))
             assert reader is not None, "EPUB reader did not open: " + "; ".join(problems)
             reader._web.page().renderProcessTerminated.connect(
-                lambda status, code: problems.append(f"renderer ended: {status.name} ({code})"))
+                lambda status, code: report(f"renderer ended: {status.name} ({code})"))
 
             def loaded():
                 if reader._error.isVisibleTo(reader):
-                    problems.append(reader._error.text())
+                    report(reader._error.text())
                 return reader._document_loaded
 
             wait_for(loaded, "EPUB chapter load")
@@ -141,6 +150,8 @@ def main() -> None:
             viewer = win._open_viewer(str(pdf))
             assert viewer is not None and viewer._doc.pageCount() == 1, \
                 "PDF did not load: " + ("; ".join(problems) or "no pages")
+            QTest.qWait(200)  # let late reader reports arrive
+            assert not problems, "Document checks reported: " + "; ".join(problems)
 
         def smoke():
             try:

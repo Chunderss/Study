@@ -93,6 +93,16 @@ def test_outlived_window_stays_out_of_the_way(window):
     def fail_save():
         raise OSError("injected layout save failure")
     outlived._save_session = fail_save
+    # The first cleanup attempt cannot discard the draft, so the close is
+    # refused and the window must stay retained for the next attempt.
+    discard = outlived.ctx.notes.discard
+    attempts = []
+    def discard_fails_once(*args):
+        attempts.append(args)
+        if len(attempts) == 1:
+            raise OSError("injected discard failure")
+        return discard(*args)
+    outlived.ctx.notes.discard = discard_fails_once
     # Record (and dismiss) any real dialog from here on instead of hanging.
     from PySide6.QtCore import QTimer
     WATCH.append(QTimer())
@@ -100,13 +110,20 @@ def test_outlived_window_stays_out_of_the_way(window):
     WATCH[0].start(20)
 
 
+def test_cleanup_keeps_a_window_whose_close_was_refused(window):
+    from tests.test_gui_reliability import _OUTLIVED
+    assert SEEN == [], f"real dialogs appeared during cleanup: {SEEN}"
+    assert WINDOWS[2] in _OUTLIVED and isValid(WINDOWS[2])
+
+
 def test_next_fixture_closes_the_finished_window_without_dialogs(window, qt):
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QEvent, Qt
     from tests.test_gui_reliability import _OUTLIVED
     outlived = WINDOWS[2]
     assert SEEN == [], f"real dialogs appeared during cleanup: {SEEN}"
     assert outlived not in _OUTLIVED
-    assert not isValid(outlived) or not outlived.isVisible()
+    qt.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert not isValid(outlived), "the retired window was not closed and deleted"
     vc = window.workspace.focused.component
     vc.add_input.setFocus()
     qt.processEvents()
@@ -128,7 +145,7 @@ def test_failed_lookup_tests_report_failure_instead_of_hanging(tmp_path):
     assert result.returncode == 1, output
     # The two injected failures, one explicit teardown error for the worker that
     # outlived the drain, and the checks that cleanup was complete and contained.
-    assert re.search(r"^2 failed, 4 passed, 1 error in ", output, re.M), output
+    assert re.search(r"^2 failed, 5 passed, 1 error in ", output, re.M), output
     assert "still running after the 5 s teardown drain" in output, output
     assert "Signal source has been deleted" not in output, output
     assert "INJECTED-WHILE-BLOCKED" in output and "INJECTED-BEFORE-COMPLETION" in output, output

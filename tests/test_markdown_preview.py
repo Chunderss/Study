@@ -218,7 +218,8 @@ folder = Path(sys.argv[1])
 for name in ("private.png", "private@2x.png"):
     picture = QImage(300, 200, QImage.Format_RGB32)
     picture.fill(QColor(12, 200, 34))
-    assert picture.save(str(folder / name)), name  # the @2x sibling must exist
+    if not picture.save(str(folder / name)):  # not an assert: -O would skip it
+        sys.exit(f"could not save {name}")
 requests = []
 load = MarkdownPreview.loadResource
 MarkdownPreview.loadResource = lambda self, kind, url: requests.append(url.toString()) or load(self, kind, url)

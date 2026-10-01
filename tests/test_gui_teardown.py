@@ -60,6 +60,20 @@ LONG = threading.Event()
 def test_worker_outliving_the_drain_is_reported(window, monkeypatch):
     # Passes itself; its teardown must fail explicitly instead of hanging.
     start_lookup(window, monkeypatch, LONG, wait=12)
+    # An unsaved note makes closing this window ask Save/Discard later.
+    window.ctx.notes.open("Book", "One").document.setPlainText("unsaved draft")
+
+
+SEEN = []
+WATCH = []
+
+
+def dismiss_real_dialogs():
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    for widget in QApplication.topLevelWidgets():
+        if isinstance(widget, QMessageBox) and widget.isVisible():
+            SEEN.append(widget.windowTitle())
+            widget.done(QMessageBox.Discard)
 
 
 def test_outlived_window_stays_out_of_the_way(window):
@@ -75,6 +89,30 @@ def test_outlived_window_stays_out_of_the_way(window):
         QTest.qWait(10)
     assert not outlived.ctx.busy
     assert outlived.app.storage.load_words("Book").has("word")
+    # Closing it later must also cope with a close-time warning dialog.
+    def fail_save():
+        raise OSError("injected layout save failure")
+    outlived._save_session = fail_save
+    # Record (and dismiss) any real dialog from here on instead of hanging.
+    from PySide6.QtCore import QTimer
+    WATCH.append(QTimer())
+    WATCH[0].timeout.connect(dismiss_real_dialogs)
+    WATCH[0].start(20)
+
+
+def test_next_fixture_closes_the_finished_window_without_dialogs(window, qt):
+    from PySide6.QtCore import Qt
+    from tests.test_gui_reliability import _OUTLIVED
+    outlived = WINDOWS[2]
+    assert SEEN == [], f"real dialogs appeared during cleanup: {SEEN}"
+    assert outlived not in _OUTLIVED
+    assert not isValid(outlived) or not outlived.isVisible()
+    vc = window.workspace.focused.component
+    vc.add_input.setFocus()
+    qt.processEvents()
+    QTest.keyClick(vc.add_input, Qt.Key_B, Qt.ControlModifier)
+    QTest.keyClick(vc.add_input, Qt.Key_V)
+    assert len(window.workspace._panes) == 2
 '''
 
 
@@ -90,7 +128,7 @@ def test_failed_lookup_tests_report_failure_instead_of_hanging(tmp_path):
     assert result.returncode == 1, output
     # The two injected failures, one explicit teardown error for the worker that
     # outlived the drain, and the checks that cleanup was complete and contained.
-    assert re.search(r"^2 failed, 3 passed, 1 error in ", output, re.M), output
+    assert re.search(r"^2 failed, 4 passed, 1 error in ", output, re.M), output
     assert "still running after the 5 s teardown drain" in output, output
     assert "Signal source has been deleted" not in output, output
     assert "INJECTED-WHILE-BLOCKED" in output and "INJECTED-BEFORE-COMPLETION" in output, output

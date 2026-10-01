@@ -20,9 +20,17 @@ _OUTLIVED = []
 
 
 def _close_finished_outlived_windows():
+    # The test that kept these windows has ended and its dialog patches are
+    # gone, so patch the message boxes for this cleanup only.
     for win in list(_OUTLIVED):
-        if not win.ctx.busy:
-            win.close()
+        if win.ctx.busy:
+            continue
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(QMessageBox, "question", lambda *a: QMessageBox.Discard)
+            for dialog in ("information", "warning", "critical"):
+                patch.setattr(QMessageBox, dialog, lambda *a, **k: QMessageBox.Ok)
+            closed = win.close()
+        if closed:
             win.deleteLater()
             _OUTLIVED.remove(win)
 

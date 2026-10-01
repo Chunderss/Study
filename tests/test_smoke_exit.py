@@ -62,6 +62,17 @@ elif sys.argv[2] == "error-with-result":
             callback(value)
         run_js(self, script, deliver)
     EpubViewer._run_js = error_then_result
+elif sys.argv[2] == "label-with-result":
+    # The reader shows its own error label as the script result arrives.
+    from vocab.gui.viewers import EpubViewer
+    run_js = EpubViewer._run_js
+    def label_then_result(self, script, callback):
+        def deliver(value):
+            if "getElementById('check')" in script:
+                self._show_error("injected label error")
+            callback(value)
+        run_js(self, script, deliver)
+    EpubViewer._run_js = label_then_result
 elif sys.argv[2] == "late-error":
     # An error reported after the document checks, while the smoke finishes.
     from vocab.gui import learning
@@ -88,7 +99,8 @@ def run_smoke(home, mode):
 
 @pytest.mark.parametrize("mode, code", [("clean", 0), ("slot-error", 1), ("book-script-runs", 1),
                                         ("reader-error", 1), ("qt-fatal", None),
-                                        ("error-with-result", 1), ("late-error", 1)])
+                                        ("error-with-result", 1), ("label-with-result", 1),
+                                        ("late-error", 1)])
 def test_smoke_exit_status_reflects_failures(tmp_path, mode, code):
     started = time.monotonic()
     result = run_smoke(tmp_path, mode)
@@ -112,9 +124,16 @@ def test_smoke_exit_status_reflects_failures(tmp_path, mode, code):
         assert "EPUB chapter load failed" in result.stderr
         assert "injected chapter failure" in result.stderr
         assert time.monotonic() - started < 25
-    elif mode in ("error-with-result", "late-error"):
-        injected = "injected reader error" if mode == "error-with-result" else "injected late error"
+    elif mode in ("error-with-result", "label-with-result"):
+        # The error outranks the valid result: the script wait itself fails.
+        injected = "injected reader error" if mode == "error-with-result" else "injected label error"
         assert injected in log.read_text(encoding="utf-8")
+        assert "EPUB reader script failed: " in result.stderr and injected in result.stderr
+    elif mode == "late-error":
+        # Reported after the document checks finished, yet still fails the run.
+        assert "injected late error" in log.read_text(encoding="utf-8")
+        assert "Smoke check: ! injected late error" in result.stderr
+        assert "failed:" not in result.stderr and "Document checks reported" not in result.stderr
     elif mode == "qt-fatal":
         # PySide words a qFatal() made from Python itself; Qt's own keep their text.
         assert "ERROR Qt QtFatalMsg:" in log.read_text(encoding="utf-8")

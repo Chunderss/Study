@@ -103,6 +103,8 @@ def main() -> None:
                     problems.append(text)
                     smoke_failures.append(text)
                     logging.error("Smoke check: %s", text)
+                    if sys.stderr:  # absent in the windowed executable
+                        sys.stderr.write(f"Smoke check: {text}\n")
 
             win.ctx.log.connect(lambda text: text.startswith("!") and report(text))
 
@@ -130,16 +132,23 @@ def main() -> None:
             reader._web.page().renderProcessTerminated.connect(
                 lambda status, code: report(f"renderer ended: {status.name} ({code})"))
 
-            def loaded():
+            def reader_failed():
                 if reader._error.isVisibleTo(reader):
                     report(reader._error.text())
+
+            def loaded():
+                reader_failed()
                 return reader._document_loaded
+
+            def answered():
+                reader_failed()
+                return bool(result)
 
             wait_for(loaded, "EPUB chapter load")
             result = []
             reader._run_js("document.getElementById('check').textContent + '|' + document.title",
                            result.append)
-            wait_for(lambda: result, "EPUB reader script")
+            wait_for(answered, "EPUB reader script")
             assert result[0] == "Offline reader ready|Ready", result
 
             pdf = docs / "check.pdf"

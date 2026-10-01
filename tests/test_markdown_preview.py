@@ -218,7 +218,7 @@ folder = Path(sys.argv[1])
 for name in ("private.png", "private@2x.png"):
     picture = QImage(300, 200, QImage.Format_RGB32)
     picture.fill(QColor(12, 200, 34))
-    picture.save(str(folder / name))
+    assert picture.save(str(folder / name)), name  # the @2x sibling must exist
 requests = []
 load = MarkdownPreview.loadResource
 MarkdownPreview.loadResource = lambda self, kind, url: requests.append(url.toString()) or load(self, kind, url)
@@ -247,6 +247,7 @@ def test_preview_does_not_probe_hidpi_image_variants(tmp_path):
     result = subprocess.run([sys.executable, "-c", HIDPI, str(tmp_path)], env=env,
                             cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
     line = next((l for l in result.stdout.splitlines() if l.startswith("RESULT")), None)
     assert line, result.stdout + result.stderr
     _, ratio, requests, painted = line.split()

@@ -70,6 +70,20 @@ def main() -> None:
             dialog.update(open=False, at=time.monotonic())
 
     sys.excepthook = report_error
+    # Only one desktop may own a data folder: a second one would read, recover
+    # and possibly delete the first one's live note recovery copies. Take the
+    # lock before anything reads them. (The CLI may still run alongside.)
+    from ..core.locking import DataFolderBusy, DesktopInstanceLock
+    try:
+        instance = DesktopInstanceLock(paths.root)  # held until the process exits
+    except DataFolderBusy as error:
+        if args.smoke_test:
+            if sys.stderr:
+                sys.stderr.write(f"{error}\n")
+        else:
+            QMessageBox.information(None, "Vocab Study is already open",
+                                    f"{error}\n\nSwitch to that window, or close it first.")
+        raise SystemExit(1)
     try:
         # PyInstaller places bundled data inside _MEIPASS, never the working dir.
         if getattr(sys, "frozen", False):

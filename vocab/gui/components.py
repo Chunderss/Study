@@ -319,12 +319,20 @@ class NotesComponent(BaseComponent):
         if QMessageBox.question(self, "Delete note",
                                 f"Delete '{note}', including any unsaved edits?") != QMessageBox.Yes:
             return
+        storage = self.app.storage
         try:
-            self.app.storage.delete_note(module, note)
+            if storage._note_path(module, note).exists():
+                storage.delete_note(module, note)
+            elif not storage.exists(module):
+                raise ModuleNotFound(f"Module '{module}' does not exist.")
+            else:
+                # Only an unsaved draft remains: its Markdown file is gone.
+                storage.clear_note_draft(module, note)
+            self.ctx.notes.discard(module, note)
         except Exception as e:
+            # A failed cleanup keeps the draft tracked and usable.
             self.ctx.log.emit(f"! {e}")
             return
-        self.ctx.notes.discard(module, note)
         self._current = None
         self.ctx.changed.emit()
 
@@ -501,19 +509,26 @@ class ConsoleComponent(BaseComponent):
             QMessageBox.No) == QMessageBox.Yes
         previous_module = self.app.current_module
         try:
-            deleted = None
+            deleted = deleted_note = None
             if cmd.verb == "DELETE" and cmd.args:
                 deleted = self.app.storage.canonical_name(" ".join(cmd.args))
+            if (cmd.verb == "NOTE" and cmd.args and cmd.args[0].upper() in ("DEL", "DELETE", "RM")
+                    and previous_module):
+                # Resolve before deleting: on Windows "one" deletes One.md, and
+                # the open buffer is keyed "One".
+                try:
+                    deleted_note = self.app.storage.canonical_note_name(
+                        previous_module, " ".join(cmd.args[1:]))
+                except Exception:
+                    deleted_note = None  # the command itself reports the problem
             result = repl.dispatch(cmd)
             if result:
                 self.log(result)
             if deleted:
                 if not self.app.storage.exists(deleted):
                     self.ctx.notes.discard(deleted)
-            if cmd.verb == "NOTE" and cmd.args and cmd.args[0].upper() in ("DEL", "DELETE", "RM"):
-                from ..core.storage import _sanitize_note_name
-                note = _sanitize_note_name(" ".join(cmd.args[1:]))
-                self.ctx.notes.discard(previous_module, note)
+            if deleted_note:
+                self.ctx.notes.discard(previous_module, deleted_note)
         except EOFError:
             self.log("(QUIT ignored in the app — just close the window)")
         except Exception as e:

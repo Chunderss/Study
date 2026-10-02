@@ -238,6 +238,21 @@ class Storage:
         stem = _sanitize_note_name(note)
         return self.paths.notes_dir(module) / f"{stem}.md"
 
+    def canonical_note_name(self, module: str, note: str) -> str:
+        """The stored spelling of a note.
+
+        On a case-insensitive filesystem (Windows) 'one' opens 'One.md'; open
+        buffers are keyed by the stored name, so callers must use this one.
+        Distinct files that differ only in case (Linux) stay distinct.
+        """
+        stem = _sanitize_note_name(note)
+        path = self._note_path(module, stem)
+        if path.exists():
+            for candidate in path.parent.glob("*.md"):
+                if candidate.stem.casefold() == stem.casefold() and os.path.samefile(candidate, path):
+                    return candidate.stem
+        return stem
+
     def note_names(self, module: str) -> List[str]:
         d = self.paths.notes_dir(sanitize_module_name(module))
         if not d.exists():

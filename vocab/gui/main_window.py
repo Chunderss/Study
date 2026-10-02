@@ -670,8 +670,7 @@ class MainWindow(QWidget):
                     return
             elif choice == QMessageBox.Discard:
                 try:
-                    for buffer in drafts:
-                        self.ctx.notes.discard(buffer.module, buffer.note)
+                    self.ctx.notes.discard_buffers(drafts)
                 except Exception as error:
                     QMessageBox.warning(self, "Could not discard recovery copy", str(error))
                     e.ignore()

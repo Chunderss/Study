@@ -95,14 +95,14 @@ def test_outlived_window_stays_out_of_the_way(window):
     outlived._save_session = fail_save
     # The first cleanup attempt cannot discard the draft, so the close is
     # refused and the window must stay retained for the next attempt.
-    discard = outlived.ctx.notes.discard
+    discard = outlived.ctx.notes.discard_buffers
     attempts = []
     def discard_fails_once(*args):
         attempts.append(args)
         if len(attempts) == 1:
             raise OSError("injected discard failure")
         return discard(*args)
-    outlived.ctx.notes.discard = discard_fails_once
+    outlived.ctx.notes.discard_buffers = discard_fails_once
     # Record (and dismiss) any real dialog from here on instead of hanging.
     from PySide6.QtCore import QTimer
     WATCH.append(QTimer())

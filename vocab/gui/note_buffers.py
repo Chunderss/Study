@@ -57,11 +57,19 @@ class NoteBuffer(QObject):
             self.recovery_error = str(error)
         self.changed.emit()
 
-    def discard(self):
+    def clear_recovery(self):
+        """Remove the recovery copy; raises if it cannot be removed."""
         self.storage.clear_note_draft(self.module, self.note)
+
+    def deactivate(self):
+        """Stop tracking this buffer's edits (its draft was discarded)."""
         self._timer.stop()
         self._active = False
         self.baseline = self.document.toPlainText()
+
+    def discard(self):
+        self.clear_recovery()
+        self.deactivate()
 
     @property
     def dirty(self):
@@ -119,12 +127,31 @@ class NoteBuffers(QObject):
         return buffer
 
     def discard(self, module, note=None):
-        for identity in list(self.buffers):
-            if identity[0] == module and (note is None or identity[1] == note):
-                buffer = self.buffers[identity]
-                # Views detach on the next refresh; keep Qt ownership until then.
-                buffer.discard()
-                del self.buffers[identity]
+        self._discard([identity for identity in self.buffers
+                       if identity[0] == module and (note is None or identity[1] == note)])
+
+    def discard_buffers(self, buffers):
+        self._discard([(buffer.module, buffer.note) for buffer in buffers])
+
+    def _discard(self, identities):
+        # All or nothing: deactivate buffers only once every recovery copy is
+        # gone. Otherwise a cancelled close would leave an editable note whose
+        # new edits were neither backed up nor offered at the next close.
+        cleared, failures = [], []
+        for identity in identities:
+            buffer = self.buffers[identity]
+            try:
+                buffer.clear_recovery()
+                cleared.append(buffer)
+            except Exception as error:
+                failures.append(f"{buffer.module}/{buffer.note}: {error}")
+        if failures:
+            for buffer in cleared:
+                buffer.flush_recovery()  # restore the copies just removed
+            raise OSError("Could not discard recovery copies. " + "; ".join(failures))
+        for identity in identities:
+            # Views detach on the next refresh; keep Qt ownership until then.
+            self.buffers.pop(identity).deactivate()
 
     def dirty_buffers(self):
         return [buffer for buffer in self.buffers.values() if buffer.dirty]

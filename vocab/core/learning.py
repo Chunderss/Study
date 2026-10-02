@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 import uuid
 
-from .storage import _atomic_write, _read_json, ModuleNotFound
+from .storage import _atomic_write, _read_json, ModuleNotFound, in_transaction
 from ..algorithms.base import Review
 from ..algorithms.leitner import LeitnerScheduler
 
@@ -43,6 +43,7 @@ class LearningStore:
                 raise ValueError("Invalid learning entry; learning.json was left untouched.")
         return data["items"]
 
+    @in_transaction
     def save_capture(self, module, *, kind, prompt, quote, explanation="", source=None,
                      resolved=False, item_id=None, revision=None):
         if kind not in ("concept", "question"):
@@ -72,6 +73,7 @@ class LearningStore:
             raise ValueError("This capture changed in another window. Reopen it before saving.")
         return item
 
+    @in_transaction
     def review(self, module, item_id, revision, answer, outcome, now=None):
         if not answer.strip():
             raise ValueError("Try an explanation first (or write what you cannot recall).")
@@ -87,6 +89,7 @@ class LearningStore:
         _atomic_write(self._path(module), {"schema": 1, "items": items})
         return item
 
+    @in_transaction
     def delete(self, module, item_id, revision):
         items = self.load(module)
         self._current(items, item_id, revision)

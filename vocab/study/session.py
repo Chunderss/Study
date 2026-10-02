@@ -43,19 +43,20 @@ class SessionResult:
 
 def _due_cards_for_list(storage: Storage, scheduler: Scheduler, name: str,
                         now_ts: float) -> List[StudyCard]:
-    wl = storage.load_words(name)
-    stats = storage.load_stats(name)
-    changed = False
-    cards: List[StudyCard] = []
-    for key, word in wl.words.items():
-        card = stats.get(key)
-        if card is None:
-            card = scheduler.new_card()
-            stats[key] = card
-            changed = True
-        cards.append(StudyCard(home_list=name, word=word, card=card))
-    if changed:
-        storage.save_stats(name, stats)  # backfill new cards so they persist
+    with storage.transaction():  # the backfill rewrites stats.json
+        wl = storage.load_words(name)
+        stats = storage.load_stats(name)
+        changed = False
+        cards: List[StudyCard] = []
+        for key, word in wl.words.items():
+            card = stats.get(key)
+            if card is None:
+                card = scheduler.new_card()
+                stats[key] = card
+                changed = True
+            cards.append(StudyCard(home_list=name, word=word, card=card))
+        if changed:
+            storage.save_stats(name, stats)  # backfill new cards so they persist
     # order by scheduler due logic
     by_key = {sc.word.word.strip().lower(): sc for sc in cards}
     ordered_keys = scheduler.due_order({k: sc.card for k, sc in by_key.items()}, now_ts)
@@ -178,24 +179,27 @@ class StudySession:
     def _apply(self, correct: bool, *, score=None, feedback="", reference="") -> AnswerOutcome:
         sc = self.queue[self._i]
         key = sc.word.word.strip().lower()
-        try:
-            wl = self.storage.load_words(sc.home_list)
-        except ModuleNotFound:
-            self._unavailable("the module was deleted.")
-        if not wl.has(key):
-            self._unavailable("the word was deleted.")
-        stats = self.storage.load_stats(sc.home_list)
-        current_word = wl.words[key]
-        # Legacy words without an added timestamp get a default on each load;
-        # compare the answer content rather than that generated metadata.
-        if (stats.get(key) != sc.card or current_word.senses != sc.word.senses or
-                current_word.dictionary != sc.word.dictionary):
-            self._unavailable("the word or its progress changed in another session.")
-        box_before = int(sc.card.get("box", 1))
-        new_card = self.scheduler.review(
-            sc.card, Review.GOOD if correct else Review.AGAIN, time.time())
-        stats[key] = new_card
-        self.storage.save_stats(sc.home_list, stats)
+        # Check and record under the write lock, so another process cannot
+        # change this card between the check and the save.
+        with self.storage.transaction():
+            try:
+                wl = self.storage.load_words(sc.home_list)
+            except ModuleNotFound:
+                self._unavailable("the module was deleted.")
+            if not wl.has(key):
+                self._unavailable("the word was deleted.")
+            stats = self.storage.load_stats(sc.home_list)
+            current_word = wl.words[key]
+            # Legacy words without an added timestamp get a default on each load;
+            # compare the answer content rather than that generated metadata.
+            if (stats.get(key) != sc.card or current_word.senses != sc.word.senses or
+                    current_word.dictionary != sc.word.dictionary):
+                self._unavailable("the word or its progress changed in another session.")
+            box_before = int(sc.card.get("box", 1))
+            new_card = self.scheduler.review(
+                sc.card, Review.GOOD if correct else Review.AGAIN, time.time())
+            stats[key] = new_card
+            self.storage.save_stats(sc.home_list, stats)
         self.result.mark(sc.home_list, key, new_card, correct)
         self._i += 1
         return AnswerOutcome(

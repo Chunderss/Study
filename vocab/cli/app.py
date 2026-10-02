@@ -15,7 +15,9 @@ from ..core.config import Config
 from ..core import migrate as _migrate
 from ..core.models import Sense, Word
 from ..core.paths import InvalidListName, get_paths, sanitize_list_name, sanitize_module_name
-from ..core.storage import ListExists, ListNotFound, ModuleExists, ModuleNotFound, Storage
+from ..core.locking import write_lock
+from ..core.storage import (ListExists, ListNotFound, ModuleExists, ModuleNotFound, Storage,
+                             in_transaction)
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
 from ..study.judge import get_judge
 from ..study.session import SessionResult, StudyCardUnavailable, StudySession, build_session
@@ -31,12 +33,12 @@ class App:
         # One-time migration from the legacy lists/ layout to modules/.
         self.migration_note = ""
         try:
-            if _migrate.needs_migration(self.paths):
-                created = _migrate.migrate(self.paths)
-                if created:
-                    self.migration_note = (
-                        f"Migrated {len(created)} list(s) to the new Module format "
-                        f"(a backup was saved alongside): {', '.join(created)}")
+            with write_lock(self.paths.root).hold():  # one process migrates at a time
+                created = _migrate.migrate(self.paths) if _migrate.needs_migration(self.paths) else []
+            if created:
+                self.migration_note = (
+                    f"Migrated {len(created)} list(s) to the new Module format "
+                    f"(a backup was saved alongside): {', '.join(created)}")
         except Exception as e:  # never block startup on migration
             self.migration_note = f"(migration skipped: {e})"
         self.storage = Storage(self.paths)
@@ -158,10 +160,12 @@ class App:
         raise ValueError("No list selected. Use  USE <List>  or pass a list name.")
 
     # ---- list lifecycle -------------------------------------------------
+    @in_transaction
     def cmd_create(self, name: str) -> str:
         self.storage.create(name)
         return f"Created list '{sanitize_list_name(name)}'.  (USE it to make it current)"
 
+    @in_transaction
     def cmd_delete(self, name: str) -> str:
         name = self.storage.canonical_name(name)
         selected = self.current_list
@@ -251,6 +255,7 @@ class App:
                 raise ValueError(f"{e}{hint if e.recoverable else ''}") from e
         return self.add_resolved_word(word_clean, target, senses, dict_id, notice)
 
+    @in_transaction
     def add_resolved_word(self, word: str, target: str, senses, dict_id: str,
                           notice: str = "") -> str:
         """Commit a lookup on the UI thread, reading the latest module state."""
@@ -271,6 +276,7 @@ class App:
                f"    {senses[0].pos + ': ' if senses[0].pos else ''}{senses[0].definition[:100]}")
         return f"{msg}\n{notice}" if notice else msg
 
+    @in_transaction
     def cmd_delete_word(self, word: str, target: Optional[str] = None) -> str:
         target = self._resolve_target(target)
         wl = self.storage.load_words(target)
@@ -369,6 +375,7 @@ class App:
         target = self._resolve_target(module)
         return self.storage.load_note(target, note)
 
+    @in_transaction
     def cmd_note_add(self, note: str, content: str = "",
                      module: Optional[str] = None) -> str:
         target = self._resolve_target(module)
@@ -376,6 +383,7 @@ class App:
         where = "the GUI" if not content else "this note"
         return f"Saved note '{stem}' in '{target}'.  (edit it in {where})"
 
+    @in_transaction
     def cmd_note_delete(self, note: str, module: Optional[str] = None) -> str:
         target = self._resolve_target(module)
         self.storage.delete_note(target, note)
@@ -388,6 +396,7 @@ class App:
         extra = " (with progress)" if include_stats else ""
         return f"Exported '{target}' -> {p}{extra}"
 
+    @in_transaction
     def cmd_import(self, src: str, new_name: Optional[str], with_stats: bool) -> str:
         name = self.storage.import_list(src, new_name=new_name, with_stats=with_stats)
         prog = "imported progress" if with_stats else "fresh progress"

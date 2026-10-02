@@ -64,10 +64,20 @@ class Config:
         While an unreadable config.json is still on disk, refuse instead of
         replacing it with defaults: the user repairs or deletes it deliberately.
         """
-        self._check_writable(paths)
-        for key, value in values.items():
-            setattr(self, key, value)
-        self.save(paths)
+        from .locking import write_lock
+        with write_lock(paths.root).hold():
+            self._check_writable(paths)
+            # Start from the file, not this process's startup copy: another
+            # window or command may have changed a different setting since.
+            if paths.config_file.exists():
+                current = Config.load(paths)
+                if current.load_error:
+                    raise ValueError(f"Settings were not changed: {current.load_error}")
+                for key in self.__dataclass_fields__:
+                    setattr(self, key, getattr(current, key))
+            for key, value in values.items():
+                setattr(self, key, value)
+            self.save(paths)
 
     def save(self, paths: Paths) -> None:
         from .storage import _atomic_write

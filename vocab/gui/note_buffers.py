@@ -79,11 +79,13 @@ class NoteBuffer(QObject):
     def save(self):
         content = self.document.toPlainText()
         # A file edited outside this app must not be silently overwritten.
-        path = self.storage._note_path(self.module, self.note)
-        if path.exists() and self.storage.load_note(self.module, self.note) != self.baseline:
-            raise ValueError(f"'{self.module}/{self.note}' changed on disk. "
-                             "Copy your draft before resolving the external change.")
-        self.storage.save_note(self.module, self.note, content)
+        # Check and write under the write lock so nothing slips in between.
+        with self.storage.transaction():
+            path = self.storage._note_path(self.module, self.note)
+            if path.exists() and self.storage.load_note(self.module, self.note) != self.baseline:
+                raise ValueError(f"'{self.module}/{self.note}' changed on disk. "
+                                 "Copy your draft before resolving the external change.")
+            self.storage.save_note(self.module, self.note, content)
         self.baseline = content
         self.document.setModified(False)
         self.recovered = False

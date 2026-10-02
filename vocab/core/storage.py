@@ -12,6 +12,7 @@ the module refactor.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List
 
+from .locking import write_lock
 from .models import WordList
 from .module import Module
 from .paths import Paths, sanitize_module_name, validate_windows_filename
@@ -73,6 +75,16 @@ class ModuleNotFound(Exception):
     pass
 
 
+def in_transaction(method):
+    """Run a method holding the data folder's write lock (see Storage.transaction)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        storage = getattr(self, "storage", self)
+        with storage.transaction():
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 def _addressable(name: str) -> bool:
     try:
         return sanitize_module_name(name) == name
@@ -88,6 +100,12 @@ ListNotFound = ModuleNotFound
 class Storage:
     def __init__(self, paths: Paths):
         self.paths = paths
+
+    def transaction(self):
+        """Hold the data folder's write lock for a whole read-check-write
+        sequence, so another process (desktop or CLI) cannot interleave and
+        lose one of the changes. Re-entrant within a thread."""
+        return write_lock(self.paths.root).hold()
 
     # ---- module lifecycle ----------------------------------------------
     def _module_dirs(self) -> List[str]:
@@ -158,6 +176,7 @@ class Storage:
     def save_module(self, mod: Module) -> None:
         _atomic_write(self.paths.manifest_file(mod.name), mod.to_dict())
 
+    @in_transaction
     def create(self, name: str) -> WordList:
         """Create a module (with its vocab component) and return the empty
         WordList — signature preserved from the pre-module API."""
@@ -174,6 +193,7 @@ class Storage:
     # New canonical alias.
     create_module = create
 
+    @in_transaction
     def delete(self, name: str) -> None:
         name = sanitize_module_name(name)
         if not self.exists(name):
@@ -243,6 +263,7 @@ class Storage:
                 os.unlink(tmp)
         return p.stem
 
+    @in_transaction
     def create_note(self, module: str, note: str) -> str:
         if not self.exists(module):
             raise ModuleNotFound(f"Module '{module}' does not exist.")
@@ -253,6 +274,7 @@ class Storage:
             pass
         return p.stem
 
+    @in_transaction
     def delete_note(self, module: str, note: str) -> None:
         p = self._note_path(module, note)
         if not p.exists():
@@ -291,6 +313,7 @@ class Storage:
             return []
         return sorted(p.name for p in d.iterdir() if p.is_file())
 
+    @in_transaction
     def add_document(self, module: str, src: Path) -> str:
         module = sanitize_module_name(module)
         if not self.exists(module):
@@ -315,6 +338,7 @@ class Storage:
         pos = data.get(filename)
         return pos if isinstance(pos, dict) else {}
 
+    @in_transaction
     def save_reading_pos(self, module: str, filename: str, pos: dict) -> None:
         """Persist where the reader left off in `filename` (chapter/scroll/zoom)."""
         module = sanitize_module_name(module)
@@ -337,6 +361,7 @@ class Storage:
         _atomic_write(Path(dest), bundle)
         return Path(dest)
 
+    @in_transaction
     def import_list(self, src: Path, new_name: str | None = None,
                     with_stats: bool = False) -> str:
         """Import a vocab bundle (or a bare words.json) as a NEW module."""

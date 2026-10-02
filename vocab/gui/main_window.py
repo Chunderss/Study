@@ -651,6 +651,25 @@ class MainWindow(QWidget):
             e.ignore()
             return
         drafts = self.ctx.notes.dirty_buffers()
+        # Finish pending recovery work for notes without unsaved changes, and
+        # ask before anything is discarded: an edit undone within the last
+        # second leaves an outdated copy until its timer fires, and it would be
+        # offered as a recovered draft at the next launch.
+        failed = []
+        for buffer in self.ctx.notes.buffers.values():
+            if buffer not in drafts and (buffer.recovery_pending or buffer._timer.isActive()):
+                buffer.flush_recovery()
+                if buffer.recovery_error:
+                    failed.append(buffer)
+        if failed:
+            names = "\n".join(f"• {b.module}/{b.note}: {b.recovery_error}" for b in failed)
+            if QMessageBox.question(
+                    self, "Recovery copy not updated",
+                    f"Could not update the recovery copy for:\n\n{names}\n\n"
+                    "If you quit now, an outdated draft may be offered next time. Quit anyway?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                e.ignore()
+                return
         if drafts:
             names = "\n".join(f"• {b.module}/{b.note}" for b in drafts)
             choice = QMessageBox.question(
@@ -675,24 +694,6 @@ class MainWindow(QWidget):
                     QMessageBox.warning(self, "Could not discard recovery copy", str(error))
                     e.ignore()
                     return
-        # Finish pending recovery work first: an edit undone within the last
-        # second leaves an outdated copy until its timer fires, and it would be
-        # offered as a recovered draft at the next launch.
-        failed = []
-        for buffer in self.ctx.notes.buffers.values():
-            if buffer.recovery_pending or buffer._timer.isActive():
-                buffer.flush_recovery()
-                if buffer.recovery_error:
-                    failed.append(buffer)
-        if failed:
-            names = "\n".join(f"• {b.module}/{b.note}: {b.recovery_error}" for b in failed)
-            if QMessageBox.question(
-                    self, "Recovery copy not updated",
-                    f"Could not update the recovery copy for:\n\n{names}\n\n"
-                    "If you quit now, an outdated draft may be offered next time. Quit anyway?",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
-                e.ignore()
-                return
         self.hotkeys.stop()
         # persist reading position for any open document viewer before quitting
         for pane in list(self.workspace._panes):

@@ -48,3 +48,29 @@ def test_failed_recovery_cleanup_asks_before_quitting(window, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
     assert window.close() is True  # an explicit "quit anyway"
     monkeypatch.setattr(storage, "clear_note_draft", clear)
+
+
+def test_declining_to_quit_never_leaves_discarded_notes_untracked(window, monkeypatch):
+    # "Two" has an outdated copy whose cleanup fails; "One" has unsaved changes.
+    storage = window.app.storage
+    storage.save_note("Book", "Two", "saved two")
+    two = window.ctx.notes.open("Book", "Two")
+    two.document.setPlainText("saved twoX")
+    two.flush_recovery()
+    two.document.setPlainText("saved two")  # undone; cleanup still pending
+    one = window.ctx.notes.open("Book", "One")
+    one.document.setPlainText("unsaved work")
+    one.flush_recovery()
+    clear = storage.clear_note_draft
+    def fail_two(module, note):
+        if note == "Two":
+            raise OSError("cannot remove the outdated copy")
+        clear(module, note)
+    monkeypatch.setattr(storage, "clear_note_draft", fail_two)
+    answers = {"Unsaved notes": QMessageBox.Discard, "Recovery copy not updated": QMessageBox.No}
+    monkeypatch.setattr(QMessageBox, "question", lambda parent, title, *rest: answers[title])
+    assert window.close() is False
+    # Nothing was discarded: "One" is still tracked and backed up.
+    assert one._active and one in window.ctx.notes.dirty_buffers()
+    assert storage.load_note_draft("Book", "One")["content"] == "unsaved work"
+    monkeypatch.setattr(storage, "clear_note_draft", clear)

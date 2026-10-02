@@ -3,6 +3,8 @@ from PySide6.QtCore import QObject, Signal, QTimer
 from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QPlainTextDocumentLayout
 
+from ..core.locking import DataFolderBusy
+
 
 def shown(text):
     """The text as an editor shows it. QTextDocument drops a BOM and turns
@@ -71,6 +73,10 @@ class NoteBuffer(QObject):
                 self.storage.clear_note_draft(self.module, self.note)
             self.recovery_error = ""
             self.recovery_pending = False
+        except DataFolderBusy:
+            # Another process is saving right now: try again shortly.
+            self.recovery_pending = True
+            self._timer.start()
         except Exception as error:
             self.recovery_error = str(error)
         self.changed.emit()

@@ -43,20 +43,22 @@ class SessionResult:
 
 def _due_cards_for_list(storage: Storage, scheduler: Scheduler, name: str,
                         now_ts: float) -> List[StudyCard]:
-    with storage.transaction():  # the backfill rewrites stats.json
+    def read():
         wl = storage.load_words(name)
         stats = storage.load_stats(name)
-        changed = False
-        cards: List[StudyCard] = []
-        for key, word in wl.words.items():
-            card = stats.get(key)
-            if card is None:
-                card = scheduler.new_card()
-                stats[key] = card
-                changed = True
-            cards.append(StudyCard(home_list=name, word=word, card=card))
-        if changed:
-            storage.save_stats(name, stats)  # backfill new cards so they persist
+        return wl, stats, [key for key in wl.words if stats.get(key) is None]
+
+    wl, stats, missing = read()
+    if missing:
+        # Backfill new cards so they persist; re-read under the write lock.
+        with storage.transaction():
+            wl, stats, missing = read()
+            for key in missing:
+                stats[key] = scheduler.new_card()
+            if missing:
+                storage.save_stats(name, stats)
+    cards: List[StudyCard] = [StudyCard(home_list=name, word=word, card=stats[key])
+                              for key, word in wl.words.items()]
     # order by scheduler due logic
     by_key = {sc.word.word.strip().lower(): sc for sc in cards}
     ordered_keys = scheduler.due_order({k: sc.card for k, sc in by_key.items()}, now_ts)

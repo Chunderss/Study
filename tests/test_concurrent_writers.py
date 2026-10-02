@@ -167,3 +167,23 @@ def test_busy_folder_reports_a_clear_error_and_a_crash_releases_the_lock(tmp_pat
     with write_lock(tmp_path).hold(timeout=2):
         pass
     assert time.monotonic() - started < 1
+
+
+def test_recovery_copies_take_the_lock_briefly_and_reads_do_not_wait(tmp_path):
+    from vocab.study.session import build_session
+    app = App(tmp_path)
+    app.cmd_create("Book")
+    app.cmd_add("word", target="Book", manual_def="meaning")
+    holder = _holder(tmp_path, "4")
+    try:
+        started = time.monotonic()
+        with pytest.raises(DataFolderBusy):
+            app.storage.save_note_draft("Book", "One", "", "draft")
+        assert 0.8 < time.monotonic() - started < 3  # gives up after about a second
+        started = time.monotonic()
+        App(tmp_path)  # nothing to migrate
+        build_session(app.storage, app.scheduler, ["Book"])  # nothing to backfill
+        assert time.monotonic() - started < 1
+    finally:
+        holder.wait(10)
+    assert isinstance(DataFolderBusy("busy"), OSError)

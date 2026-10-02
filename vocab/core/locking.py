@@ -19,14 +19,17 @@ import time
 WRITE_LOCK = ".write.lock"
 DESKTOP_LOCK = ".desktop.lock"
 WRITE_TIMEOUT = 10.0
+# Recovery copies are rewritten every second while typing: never stall on them.
+DRAFT_TIMEOUT = 1.0
 
 # Some network filesystems cannot lock at all; writing without coordination is
 # then better than refusing every change.
 _UNSUPPORTED = {errno.ENOLCK, getattr(errno, "ENOTSUP", errno.EOPNOTSUPP), errno.EOPNOTSUPP}
 
 
-class DataFolderBusy(RuntimeError):
-    """Another process holds the data folder's lock."""
+class DataFolderBusy(OSError):
+    """Another process holds the data folder's lock. An OSError, so callers
+    that handle a failed save already report it."""
 
 
 if os.name == "nt":

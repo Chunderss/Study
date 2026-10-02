@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Dict, List
 
-from .locking import write_lock
+from .locking import DRAFT_TIMEOUT, WRITE_TIMEOUT, write_lock
 from .models import WordList
 from .module import Module
 from .paths import Paths, sanitize_module_name, validate_windows_filename
@@ -103,11 +103,11 @@ class Storage:
     def __init__(self, paths: Paths):
         self.paths = paths
 
-    def transaction(self):
+    def transaction(self, timeout: float = WRITE_TIMEOUT):
         """Hold the data folder's write lock for a whole read-check-write
         sequence, so another process (desktop or CLI) cannot interleave and
         lose one of the changes. Re-entrant within a thread."""
-        return write_lock(self.paths.root).hold()
+        return write_lock(self.paths.root).hold(timeout)
 
     # ---- module lifecycle ----------------------------------------------
     def _module_dirs(self) -> List[str]:
@@ -335,12 +335,15 @@ class Storage:
         return self.paths.module_dir(sanitize_module_name(module)) / "drafts" / f"{_sanitize_note_name(note)}.json"
 
     def save_note_draft(self, module, note, baseline, content):
-        if not self.exists(module):
-            raise ModuleNotFound(f"Module '{module}' does not exist.")
-        _atomic_write(self._draft_path(module, note), {"baseline": baseline, "content": content})
+        # Locked so a module deleted by another process is not recreated here.
+        with self.transaction(DRAFT_TIMEOUT):
+            if not self.exists(module):
+                raise ModuleNotFound(f"Module '{module}' does not exist.")
+            _atomic_write(self._draft_path(module, note), {"baseline": baseline, "content": content})
 
     def clear_note_draft(self, module, note):
-        self._draft_path(module, note).unlink(missing_ok=True)
+        with self.transaction(DRAFT_TIMEOUT):
+            self._draft_path(module, note).unlink(missing_ok=True)
 
     def note_drafts(self, module):
         directory = self.paths.module_dir(sanitize_module_name(module)) / "drafts"

@@ -33,8 +33,11 @@ class App:
         # One-time migration from the legacy lists/ layout to modules/.
         self.migration_note = ""
         try:
-            with write_lock(self.paths.root).hold():  # one process migrates at a time
-                created = _migrate.migrate(self.paths) if _migrate.needs_migration(self.paths) else []
+            created = []
+            if _migrate.needs_migration(self.paths):
+                with write_lock(self.paths.root).hold():  # one process migrates at a time
+                    if _migrate.needs_migration(self.paths):
+                        created = _migrate.migrate(self.paths)
             if created:
                 self.migration_note = (
                     f"Migrated {len(created)} list(s) to the new Module format "

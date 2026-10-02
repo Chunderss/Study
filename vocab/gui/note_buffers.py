@@ -4,22 +4,36 @@ from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QPlainTextDocumentLayout
 
 
+def shown(text):
+    """The text as an editor shows it. QTextDocument drops a BOM and turns
+    no-break spaces and Unicode line/paragraph separators into plain ones."""
+    document = QTextDocument()
+    document.setPlainText(text)
+    return document.toPlainText()
+
+
 class NoteBuffer(QObject):
+    """One note's shared document.
+
+    ``baseline`` is the Markdown exactly as on disk, for detecting outside
+    changes; ``shown_baseline`` is the same text as the editor shows it, so an
+    untouched note is never "dirty" just because Qt normalized it.
+    """
     changed = Signal()
 
     def __init__(self, storage, module, note, parent):
         super().__init__(parent)
         self.storage, self.module, self.note = storage, module, note
         draft = storage.load_note_draft(module, note)
-        self.baseline = draft["baseline"] if draft else storage.load_note(module, note)
+        self._set_baseline(draft["baseline"] if draft else storage.load_note(module, note))
         # A crash between saving Markdown and deleting the sidecar must not
         # reopen the already-saved text as an obsolete conflicting draft.
         if draft and storage._note_path(module, note).exists():
             saved = storage.load_note(module, note)
-            if saved == draft["content"]:
-                self.baseline = saved
+            if shown(saved) == draft["content"]:
+                self._set_baseline(saved)
         self.recovery_error = ""
-        self.recovered = bool(draft and draft["content"] != self.baseline)
+        self.recovered = bool(draft and draft["content"] != self.shown_baseline)
         self.recovery_pending = False
         self._active = True
         self.document = QTextDocument(self)
@@ -33,6 +47,10 @@ class NoteBuffer(QObject):
         self.document.contentsChanged.connect(self._edited)
         if draft and not self.dirty:
             self.flush_recovery()
+
+    def _set_baseline(self, text):
+        self.baseline = text
+        self.shown_baseline = shown(text)
 
     def _edited(self):
         if self._active:
@@ -65,7 +83,7 @@ class NoteBuffer(QObject):
         """Stop tracking this buffer's edits (its draft was discarded)."""
         self._timer.stop()
         self._active = False
-        self.baseline = self.document.toPlainText()
+        self._set_baseline(self.document.toPlainText())
 
     def discard(self):
         self.clear_recovery()
@@ -73,14 +91,14 @@ class NoteBuffer(QObject):
 
     @property
     def dirty(self):
-        return self.document.toPlainText() != self.baseline
+        return self.document.toPlainText() != self.shown_baseline
 
     def reload_if_clean(self):
         if self.dirty:
             return
         content = self.storage.load_note(self.module, self.note)
         if content != self.baseline:
-            self.baseline = content
+            self._set_baseline(content)
             self.document.setPlainText(content)
             self.document.setModified(False)
 
@@ -90,11 +108,14 @@ class NoteBuffer(QObject):
         # Check and write under the write lock so nothing slips in between.
         with self.storage.transaction():
             path = self.storage._note_path(self.module, self.note)
-            if path.exists() and self.storage.load_note(self.module, self.note) != self.baseline:
+            on_disk = self.storage.load_note(self.module, self.note) if path.exists() else None
+            if on_disk is not None and on_disk != self.baseline:
                 raise ValueError(f"'{self.module}/{self.note}' changed on disk. "
                                  "Copy your draft before resolving the external change.")
-            self.storage.save_note(self.module, self.note, content)
-        self.baseline = content
+            # An untouched note keeps its exact bytes (a BOM, no-break spaces).
+            if self.dirty or on_disk is None:
+                self.storage.save_note(self.module, self.note, content)
+                self._set_baseline(content)
         self.document.setModified(False)
         self.recovered = False
         self.flush_recovery()

@@ -279,15 +279,17 @@ class App:
         word_clean = word.strip()
         if not word_clean or not senses or not senses[0].definition.strip():
             raise ValueError("A word and a non-empty definition are required.")
-        if expected is not None and self.word_state(target, word_clean) != expected:
-            raise ValueError(f"'{word_clean}' was not added: '{target}' changed while it was "
-                             "being looked up, so the current version was kept.")
         wl = self.storage.load_words(target)
         existed = wl.has(word_clean)
         if existed and dict_id != "manual":
             kept = wl.words[wl.normalize_key(word_clean)].word
-            return (f"'{kept}' is already in '{target}'; kept the existing entry. "
-                    f"To replace it:  ADD {word_clean} :: <your definition>")
+            return (f"'{kept}' is already in '{target}'; kept the existing entry. To replace "
+                    f"it, add it with your own definition ({word_clean} :: ...).")
+        # Only a commit that writes needs the check (a word deleted meanwhile,
+        # or a module recreated under the same name, refuses it).
+        if expected is not None and self.word_state(target, word_clean) != expected:
+            raise ValueError(f"'{word_clean}' was not added: '{target}' changed while it was "
+                             "being looked up, so the current version was kept.")
         w = Word(word=word_clean, dictionary=dict_id, senses=senses)
         wl.add(w)
         self.storage.save_words(wl)

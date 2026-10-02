@@ -25,7 +25,8 @@ an already built Windows executable. The portable app is unsigned.
 
 1. Click **+ New module**, then select the module.
 2. Use **View → Notes**, **Vocab**, **Documents**, **Learning**, or **Console** to choose a pane.
-3. Add a word in Vocab. `word :: your definition` supplies your own definition.
+3. Add a word in Vocab. `word :: your definition` supplies your own definition and
+   replaces an existing entry; a dictionary lookup never replaces one.
 4. Click **Study** for this module, or **Study All** for all modules.
 5. Use **View → Split side by side** to keep notes open alongside your book or vocabulary.
 

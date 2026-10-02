@@ -32,8 +32,10 @@ MODULES & NAVIGATION
       Multi-word names use quotes:  CREATE "The Great Gatsby"
 
 VOCAB
-  ADD <word>                 add <word> to the current module
-  ADD <word> :: <definition> add with your OWN definition (skips the dictionary)
+  ADD <word>                 add <word> to the current module (a word already
+                             there keeps its entry)
+  ADD <word> :: <definition> add with your OWN definition (skips the dictionary;
+                             replaces an existing entry)
   ADDL <module> <word>       add <word> to a specific module
   DEL <word>                 remove <word> from the current module
   DELL <module> <word>       remove <word> from a specific module

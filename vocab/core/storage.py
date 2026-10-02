@@ -13,6 +13,7 @@ the module refactor.
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import os
 import shutil
@@ -184,7 +185,11 @@ class Storage:
         path = self.paths.manifest_file(name)
         if not path.exists():
             self.load_module(name)  # writes a manifest once, so later reads agree
-        raw = _read_json_object(path, {})
+        try:
+            raw = _read_json_object(path, {})
+        except DataFileError:
+            # Left as is; its bytes still tell this module from a recreated one.
+            return ("unreadable", hashlib.sha256(path.read_bytes()).hexdigest())
         metadata = raw.get("metadata")
         return (raw.get("created"), metadata.get("id") if isinstance(metadata, dict) else None)
 

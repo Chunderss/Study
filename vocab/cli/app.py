@@ -264,9 +264,8 @@ class App:
         add_resolved_word compares it at commit time, so a slow lookup cannot
         overwrite a newer edit or land in a module recreated under the same name.
         """
-        wl = self.storage.load_words(target)
-        entry = wl.words.get(wl.normalize_key(word))
-        return (self.storage.module_identity(target), entry.to_dict() if entry else None)
+        self.storage.load_words(target)  # reports a missing or damaged module
+        return (self.storage.module_identity(target), self.storage.raw_word_entry(target, word))
 
     @in_transaction
     def add_resolved_word(self, word: str, target: str, senses, dict_id: str,

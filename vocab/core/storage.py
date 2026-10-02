@@ -175,9 +175,30 @@ class Storage:
         return mod
 
     def module_identity(self, name: str):
-        """Tells a module apart from a later one created under the same name."""
-        mod = self.load_module(name)
-        return (mod.created, mod.metadata.get("id"))
+        """Tells a module apart from a later one created under the same name.
+
+        Read from the manifest as stored: parsing fills a missing timestamp with
+        the current time, which would make the identity change on every load.
+        """
+        name = sanitize_module_name(name)
+        path = self.paths.manifest_file(name)
+        if not path.exists():
+            self.load_module(name)  # writes a manifest once, so later reads agree
+        raw = _read_json_object(path, {})
+        metadata = raw.get("metadata")
+        return (raw.get("created"), metadata.get("id") if isinstance(metadata, dict) else None)
+
+    def raw_word_entry(self, module: str, word: str):
+        """A word's entry exactly as stored, without defaults filled in by
+        parsing (a legacy entry without "added" would differ on every load)."""
+        raw = _read_json_object(self.paths.words_file(sanitize_module_name(module)), {})
+        words = raw.get("words")
+        key = word.strip().lower()
+        if isinstance(words, dict):
+            for stored, entry in words.items():
+                if str(stored).strip().lower() == key:
+                    return entry
+        return None
 
     def save_module(self, mod: Module) -> None:
         _atomic_write(self.paths.manifest_file(mod.name), mod.to_dict())

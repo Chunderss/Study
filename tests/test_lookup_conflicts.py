@@ -67,6 +67,19 @@ def test_lookup_rejects_a_module_recreated_under_the_same_name(tmp_path):
     assert entry(app, "ephemeral") is None
 
 
+def test_slow_lookups_work_for_legacy_modules_and_words(tmp_path):
+    # Legacy data lacks the timestamps that parsing would fill in with "now".
+    import json, time
+    app = App(tmp_path)
+    app.cmd_create("Book")
+    app.paths.manifest_file("Book").write_text(json.dumps({"schema": 1, "name": "Book"}))
+    app.paths.words_file("Book").write_text(json.dumps(
+        {"name": "Book", "words": {"Old": {"senses": [{"definition": "legacy"}]}}}))
+    looked_up(app, during=lambda: time.sleep(1.1))
+    assert app.cmd_add("new", target="Book").startswith("Added")
+    assert "already in 'Book'" in app.cmd_add("old", target="Book")
+
+
 pytest.importorskip("PySide6")
 from PySide6.QtTest import QTest  # noqa: E402
 

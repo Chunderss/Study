@@ -53,24 +53,28 @@ class WorkspaceContext(QObject):
             self.changed.emit()
             self.log.emit(message)
             return None
+        # Snapshot now; the commit is refused if the module or word changes
+        # (another pane, another process, delete and recreate) meanwhile.
+        expected = self.app.word_state(module, word)
         self._next_job += 1
         token = self._next_job
         worker = LookupWorker(token, self.app, word, sentence)
         worker.signals.done.connect(self._lookup_done)
-        self._jobs[token] = (worker, module, word)
+        self._jobs[token] = (worker, module, word, expected)
         self.log.emit(f"Looking up '{word}'…")
         self._pool.start(worker)
         return token
 
     @Slot(int, object, str)
     def _lookup_done(self, token, result, error):
-        worker, module, word = self._jobs.pop(token)
+        worker, module, word, expected = self._jobs.pop(token)
         ok = False
         try:
             if error:
                 raise ValueError(error)
             senses, dictionary, notice = result
-            message = self.app.add_resolved_word(word, module, senses, dictionary, notice)
+            message = self.app.add_resolved_word(word, module, senses, dictionary, notice,
+                                                 expected=expected)
             ok = True
             self.changed.emit()
         except Exception as exc:

@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Dict, List
 
@@ -173,6 +174,11 @@ class Storage:
         mod.name = name  # directory identity is authoritative
         return mod
 
+    def module_identity(self, name: str):
+        """Tells a module apart from a later one created under the same name."""
+        mod = self.load_module(name)
+        return (mod.created, mod.metadata.get("id"))
+
     def save_module(self, mod: Module) -> None:
         _atomic_write(self.paths.manifest_file(mod.name), mod.to_dict())
 
@@ -184,7 +190,7 @@ class Storage:
         if self.exists(name):
             raise ModuleExists(f"Module '{name}' already exists.")
         self.paths.ensure_module(name)
-        self.save_module(Module(name=name))
+        self.save_module(Module(name=name, metadata={"id": uuid.uuid4().hex}))
         wl = WordList(name=name)
         self.save_words(wl)
         self.save_stats(name, {})
@@ -374,7 +380,7 @@ class Storage:
         if self.exists(wl.name):
             raise ModuleExists(f"Module '{wl.name}' already exists; choose a new name.")
         self.paths.ensure_module(wl.name)
-        self.save_module(Module(name=wl.name))
+        self.save_module(Module(name=wl.name, metadata={"id": uuid.uuid4().hex}))
         self.save_words(wl)
         stats = raw.get("stats", {}) if (with_stats and isinstance(raw, dict)) else {}
         self.save_stats(wl.name, stats if isinstance(stats, dict) else {})

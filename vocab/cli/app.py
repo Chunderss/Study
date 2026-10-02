@@ -243,28 +243,53 @@ class App:
         if not word_clean:
             raise ValueError("No word given.")
         notice = ""
+        expected = None
         if manual_def is not None:
             if not manual_def.strip():
                 raise ValueError("Definition cannot be empty.")
             senses, dict_id = [Sense(definition=manual_def.strip())], "manual"
         else:
+            expected = self.word_state(target, word_clean)
             try:
                 senses, dict_id, notice = self._lookup_senses(word_clean, sentence)
             except LookupFailed as e:
                 hint = "  (add manually:  ADD {} :: <your definition>)".format(word_clean)
                 raise ValueError(f"{e}{hint if e.recoverable else ''}") from e
-        return self.add_resolved_word(word_clean, target, senses, dict_id, notice)
+        return self.add_resolved_word(word_clean, target, senses, dict_id, notice, expected=expected)
+
+    @in_transaction
+    def word_state(self, target: str, word: str):
+        """Snapshot the module's identity and the word's entry before a lookup.
+
+        add_resolved_word compares it at commit time, so a slow lookup cannot
+        overwrite a newer edit or land in a module recreated under the same name.
+        """
+        wl = self.storage.load_words(target)
+        entry = wl.words.get(wl.normalize_key(word))
+        return (self.storage.module_identity(target), entry.to_dict() if entry else None)
 
     @in_transaction
     def add_resolved_word(self, word: str, target: str, senses, dict_id: str,
-                          notice: str = "") -> str:
-        """Commit a lookup on the UI thread, reading the latest module state."""
+                          notice: str = "", expected=None) -> str:
+        """Commit a word on the UI thread, reading the latest module state.
+
+        A dictionary lookup never replaces an existing entry; only an explicit
+        ``ADD word :: definition`` (dict_id "manual") does. ``expected`` comes
+        from word_state() taken before the lookup.
+        """
         word_clean = word.strip()
         if not word_clean or not senses or not senses[0].definition.strip():
             raise ValueError("A word and a non-empty definition are required.")
+        if expected is not None and self.word_state(target, word_clean) != expected:
+            raise ValueError(f"'{word_clean}' was not added: '{target}' changed while it was "
+                             "being looked up, so the current version was kept.")
         wl = self.storage.load_words(target)
-        w = Word(word=word_clean, dictionary=dict_id, senses=senses)
         existed = wl.has(word_clean)
+        if existed and dict_id != "manual":
+            kept = wl.words[wl.normalize_key(word_clean)].word
+            return (f"'{kept}' is already in '{target}'; kept the existing entry. "
+                    f"To replace it:  ADD {word_clean} :: <your definition>")
+        w = Word(word=word_clean, dictionary=dict_id, senses=senses)
         wl.add(w)
         self.storage.save_words(wl)
         # give the new word a fresh scheduler card

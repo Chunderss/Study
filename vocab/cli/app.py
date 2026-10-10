@@ -7,6 +7,7 @@ stdout, tests drive App methods directly.
 """
 from __future__ import annotations
 
+import sys
 import time
 from typing import Callable, List, Optional
 
@@ -29,8 +30,21 @@ Prompt = Callable[[str], str]        # prompt(text) -> user input line
 Echo = Callable[[str], None]         # echo(text) -> None (print)
 
 
+# A packaged app has no pip or virtualenv to repair, and its bundled data is
+# not installed separately: it is replaced whole.
+PACKAGED_REPAIR = ("Extract a fresh copy of the Vocab Study ZIP and keep its _internal "
+                   "folder beside the VocabStudy program.")
+
+
+def _packaged() -> bool:
+    """True in the desktop app built by PyInstaller."""
+    return bool(getattr(sys, "frozen", False))
+
+
 def _tagger_fix(problem: nltk_resources.TaggerProblem) -> str:
     """The command that makes part-of-speech tagging work, or ''."""
+    if _packaged():
+        return PACKAGED_REPAIR  # the bundle includes nltk and the tagger
     if problem.kind == "no-nltk":
         return 'pip install "vocab-study[wordnet]"'
     if problem.kind == "no-data":
@@ -110,14 +124,18 @@ class App:
         makes WordNet unavailable and silently falls back to the online
         dictionary (which then times out). This makes that visible in one call.
         """
-        import sys
         from ..dictionaries import REGISTRY, get_dictionary
 
         lines = ["Vocab Study — doctor", "=" * 40]
-        # 1. interpreter
-        in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+        # 1. interpreter: facts only. A packaged app is never a virtualenv, and
+        # a source install need not be one either.
+        packaged = _packaged()
         lines.append(f"Python      : {sys.version.split()[0]}  ({sys.executable})")
-        lines.append(f"Virtualenv  : {'yes' if in_venv else 'NO — likely wrong interpreter'}")
+        if packaged:
+            lines.append("Runtime     : packaged app")
+        else:
+            in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+            lines.append(f"Virtualenv  : {'yes' if in_venv else 'no'}")
 
         # 2. nltk + corpus
         try:
@@ -163,7 +181,10 @@ class App:
         else:
             lines.append("PROBLEM: lookups are using an ONLINE dictionary that can time out,")
             lines.append(f"because the offline default ('{self.config.active_dictionary}') is unavailable here.")
-            if not nltk_ok:
+            if packaged and not (nltk_ok and corpus_ok):
+                lines.append("Cause: this copy of the app is missing its built-in WordNet. Fix:")
+                lines.append(f"  {PACKAGED_REPAIR}")
+            elif not nltk_ok:
                 lines.append("Cause: nltk is not installed in THIS Python. Fix:")
                 lines.append('  pip install "vocab-study[wordnet]"   (into this interpreter)')
                 lines.append("  — or launch with the project venv Python / run setup.")
@@ -423,8 +444,9 @@ class App:
             problem = nltk_resources.pos_tagger_problem()
             return (f"Installed '{dict_id}', but part-of-speech tagging still does not work"
                     + (f": {problem.reason}." if problem else "."))
-        return (f"Attempted install of '{dict_id}' but it is still unavailable. "
-                f"You may need:  pip install \"vocab-study[{dict_id}]\"")
+        hint = (PACKAGED_REPAIR if _packaged()
+                else f"You may need:  pip install \"vocab-study[{dict_id}]\"")
+        return f"Attempted install of '{dict_id}' but it is still unavailable. {hint}"
 
     def cmd_dict_use(self, dict_id: str) -> str:
         dic = get_dictionary(dict_id)

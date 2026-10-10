@@ -8,20 +8,38 @@ import time
 import pytest
 pytest.importorskip("PySide6")
 
+from tests import real_nltk  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # Runs the real entry point with offline stand-ins for the WordNet corpus and
 # the part-of-speech tagger (the packaged smoke test uses the bundled ones).
+# The "frozen" modes instead simulate the packaged app, as PyInstaller's
+# bootloader sets it up, with a copy of the bundled NLTK data in _MEIPASS.
 SCRIPT = r'''
 import sys
+from pathlib import Path
 from vocab import nltk_resources
+from vocab.cli.app import App
 from vocab.core.models import Sense
 from vocab.dictionaries.wordnet import WordNet
 from vocab.study.disambiguate import NlpDisambiguator
-WordNet.lookup = lambda self, word: [Sense("a procedure for evaluation", "noun"),
-                                     Sense("decline in vigor", "verb")]
-nltk_resources.pos_tagger_problem = lambda: None
-NlpDisambiguator._wn_pos_of = lambda self, word, sentence: "v"
+home, mode = sys.argv[1], sys.argv[2]
+if mode.startswith("frozen"):
+    sys.frozen, sys._MEIPASS, sys.base_prefix = True, sys.argv[3], sys.prefix
+    doctor = App.cmd_doctor
+    def recorded_doctor(self):
+        text = doctor(self)
+        if mode == "frozen-pip-advice":
+            text += '\n  pip install "vocab-study[wordnet]"'
+        Path(home, "doctor.txt").write_text(text, encoding="utf-8")
+        return text
+    App.cmd_doctor = recorded_doctor
+else:
+    WordNet.lookup = lambda self, word: [Sense("a procedure for evaluation", "noun"),
+                                         Sense("decline in vigor", "verb")]
+    nltk_resources.pos_tagger_problem = lambda: None
+    NlpDisambiguator._wn_pos_of = lambda self, word, sentence: "v"
 if sys.argv[2] == "no-pos-data":
     nltk_resources.pos_tagger_problem = lambda: nltk_resources.TaggerProblem(
         "injected missing tagger", "no-data")
@@ -98,31 +116,38 @@ main()
 '''
 
 
-def run_smoke(home, mode):
-    env = dict(os.environ)
+def run_smoke(home, mode, bundle=None):
+    # A simulated packaged app sees only its bundle's NLTK data.
+    env = real_nltk.isolated_env(bundle.parent / "user") if bundle else dict(os.environ)
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
     if sys.platform == "win32":
         env["QT_QPA_PLATFORM"] = "windows"  # the smoke opens a real EPUB reader
     env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
-    return subprocess.run([sys.executable, "-c", SCRIPT, str(home), mode], cwd=ROOT, env=env,
-                          capture_output=True, text=True, timeout=120)
+    return subprocess.run([sys.executable, "-c", SCRIPT, str(home), mode, str(bundle or "")],
+                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
 
 
 @pytest.mark.parametrize("mode, code", [("clean", 0), ("slot-error", 1), ("book-script-runs", 1),
                                         ("reader-error", 1), ("qt-fatal", None),
                                         ("error-with-result", 1), ("label-with-result", 1),
                                         ("late-error", 1), ("no-pos-data", 1),
-                                        ("noun-pos", 1)])
-def test_smoke_exit_status_reflects_failures(tmp_path, mode, code):
+                                        ("noun-pos", 1), ("frozen", 0),
+                                        ("frozen-pip-advice", 1)])
+def test_smoke_exit_status_reflects_failures(tmp_path, tmp_path_factory, mode, code):
+    bundle = None
+    if mode.startswith("frozen"):
+        bundle = tmp_path_factory.mktemp("packaged") / "_internal"
+        real_nltk.bundle_copy(bundle / "nltk_data")
+        (bundle.parent / "user").mkdir()
     started = time.monotonic()
-    result = run_smoke(tmp_path, mode)
+    result = run_smoke(tmp_path, mode, bundle)
     if code is None:
         assert result.returncode != 0, result.stdout + result.stderr  # aborted
     else:
         assert result.returncode == code, result.stdout + result.stderr
     # Every run reaches the learning review; a clean run also opens both documents.
     assert (tmp_path / "modules" / "DesktopCheck" / "learning.json").is_file()
-    if mode == "clean":
+    if mode in ("clean", "frozen"):
         documents = tmp_path / "modules" / "DesktopCheck" / "documents"
         assert (documents / "check.epub").is_file() and (documents / "check.pdf").is_file()
     log = tmp_path / "desktop.log"
@@ -150,6 +175,15 @@ def test_smoke_exit_status_reflects_failures(tmp_path, mode, code):
         assert "Part-of-speech tagging unavailable: injected missing tagger" in result.stderr
     elif mode == "noun-pos":
         assert "'flag' in a verb context chose: " in result.stderr
+    elif mode.startswith("frozen"):
+        # The smoke ran DOCTOR's packaged branch, and rejects source-install advice.
+        doctor = (tmp_path / "doctor.txt").read_text(encoding="utf-8")
+        assert "Runtime     : packaged app" in doctor.splitlines()
+        if mode == "frozen":
+            assert "OK: using the offline dictionary" in doctor, doctor
+            assert not log.exists() or not log.read_text(encoding="utf-8").strip()
+        else:
+            assert "Packaged DOCTOR gives source-install advice" in result.stderr
     elif mode == "qt-fatal":
         # PySide words a qFatal() made from Python itself; Qt's own keep their text.
         assert "ERROR Qt QtFatalMsg:" in log.read_text(encoding="utf-8")

@@ -48,6 +48,11 @@ class WordNet(Dictionary):
         try:
             import nltk
         except ImportError as e:
+            import sys
+            if getattr(sys, "frozen", False):  # pip cannot change a packaged app
+                raise LookupFailed(
+                    "This copy of the app is missing its WordNet support. Extract a "
+                    "fresh copy of the Vocab Study ZIP.", recoverable=True) from e
             raise LookupFailed(
                 "The 'nltk' package is not installed. Install the optional "
                 "feature first:  pip install \"vocab-study[wordnet]\"",

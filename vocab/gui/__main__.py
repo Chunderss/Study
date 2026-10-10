@@ -235,6 +235,14 @@ def main() -> None:
                 flag = get_dictionary("wordnet").lookup("flag")
                 ranked = get_disambiguator("nlp").rank("flag", "His energy began to flag.", flag)
                 assert ranked[0].pos == "verb", f"'flag' in a verb context chose: {ranked[0]}"
+                # DOCTOR describes the packaged runtime: no virtualenv verdict
+                # and no pip or source-install advice for a working bundle.
+                doctor = win.app.cmd_doctor()
+                if getattr(sys, "frozen", False):
+                    assert "Runtime     : packaged app" in doctor.splitlines() and not any(
+                        advice in doctor for advice in ("wrong interpreter", "pip install",
+                                                        "dict install", "PROBLEM")), \
+                        f"Packaged DOCTOR gives source-install advice:\n{doctor}"
                 check_documents(win)
                 win.workspace.set_focused_component("learning")
                 assert isinstance(win.workspace.focused.component, LearningComponent)

@@ -72,7 +72,7 @@ SHARING
       Without --stats you get the words but start your OWN fresh progress.
 
 OTHER
-  DOCTOR                     diagnose setup (Python, dictionary, offline status)
+  DOCTOR                     diagnose setup (runtime, dictionaries, POS tagger)
   HELP                       show this help
   QUIT / EXIT                leave the program
 """

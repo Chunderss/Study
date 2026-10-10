@@ -11,6 +11,8 @@ State shape (stored in stats.json under each word key)::
 """
 from __future__ import annotations
 
+import math
+
 from typing import Dict, List
 
 from .base import Review, Scheduler, register
@@ -24,6 +26,24 @@ _MAX_BOX = len(_INTERVALS) - 1
 class LeitnerScheduler(Scheduler):
     id = "leitner"
     name = "Leitner box system"
+
+    def card_problem(self, card):
+        """Reject values the scheduler could not use (a due date of "tomorrow",
+        NaN, a fractional box). Missing fields get the usual defaults."""
+        if not isinstance(card, dict):
+            return "progress is not an object"
+        if card.get("algo", self.id) != self.id:
+            return f"progress is for the '{card.get('algo')}' scheduler"
+        for field, lowest in (("box", 1), ("reps", 0), ("lapses", 0)):
+            value = card.get(field, lowest)
+            if isinstance(value, bool) or not isinstance(value, int) or value < lowest:
+                return f"'{field}' must be a whole number of at least {lowest}"
+        for field in ("due", "last"):
+            value = card.get(field, 0.0)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value)):
+                return f"'{field}' must be a time in seconds"
+        return None
 
     def new_card(self) -> dict:
         return {"algo": self.id, "box": 1, "due": 0.0,

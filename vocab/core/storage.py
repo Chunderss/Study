@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from .locking import DRAFT_TIMEOUT, WRITE_TIMEOUT, write_lock
-from .models import WordList
+from .models import SCHEMA_VERSION, Word, WordList
 from .module import Module
 from .paths import Paths, sanitize_module_name, validate_windows_filename
 
@@ -99,6 +99,78 @@ def in_transaction(method):
         with storage.transaction():
             return method(self, *args, **kwargs)
     return wrapper
+
+
+def _word_entry_problem(key, entry):
+    if not isinstance(key, str) or not key.strip():
+        return "the word is empty"
+    if not isinstance(entry, dict):
+        return "its entry is not an object"
+    senses = entry.get("senses")
+    if not isinstance(senses, list) or not senses:
+        return "it has no definitions"
+    for sense in senses:
+        if not isinstance(sense, dict):
+            return "a definition is not an object"
+        if not isinstance(sense.get("definition"), str) or not sense["definition"].strip():
+            return "a definition is empty"
+        for field in ("pos", "example"):
+            if field in sense and not isinstance(sense[field], str):
+                return f"'{field}' must be text"
+    for field in ("dictionary", "added"):
+        if field in entry and not isinstance(entry[field], str):
+            return f"'{field}' must be text"
+    return None
+
+
+def parse_import(raw, *, with_stats=False, card_problem=None):
+    """Validate an import file and return (WordList, progress).
+
+    Accepted: an export bundle {"words": <words.json>, "stats": {...}}, and a
+    module's words.json, with or without its "schema" field. Anything else,
+    and any unusable entry or progress card, raises ValueError.
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("words"), dict):
+        raise ValueError("it is not a Vocab Study export or words.json (no \"words\" object)")
+    inner = raw["words"]
+    nested = inner.get("words")
+    # An entry has "senses"; a bundle's inner words.json has its own "words".
+    if isinstance(nested, dict) and "senses" not in nested:
+        document, progress = inner, raw.get("stats")
+    else:
+        document, progress = raw, None
+    schema = document.get("schema", SCHEMA_VERSION)
+    if isinstance(schema, bool) or not isinstance(schema, int) or not 1 <= schema <= SCHEMA_VERSION:
+        raise ValueError(f"its format version {schema!r} is not supported by this version of the app")
+    entries = document.get("words")
+    if not isinstance(entries, dict):
+        raise ValueError("its \"words\" value is not an object")
+    name = document.get("name")
+    wl = WordList(name=name.strip() if isinstance(name, str) else "")
+    spellings = {}
+    for key, entry in entries.items():
+        problem = _word_entry_problem(key, entry)
+        if problem:
+            raise ValueError(f"word {key!r}: {problem}")
+        normalized = wl.normalize_key(key)
+        if normalized in spellings:
+            raise ValueError(f"{spellings[normalized]!r} and {key!r} are the same word")
+        spellings[normalized] = key
+        wl.words[normalized] = Word.from_dict(key, entry)
+    stats = {}
+    if with_stats:
+        if not isinstance(progress, dict):
+            raise ValueError("it has no progress to import; import it without --stats")
+        check = card_problem or (lambda card: None if isinstance(card, dict) else "progress is not an object")
+        for key, card in progress.items():
+            normalized = str(key).strip().lower()
+            if normalized not in wl.words:
+                continue  # progress for a word that is not in the file
+            problem = check(card)
+            if problem:
+                raise ValueError(f"progress for {key!r}: {problem}")
+            stats[normalized] = card
+    return wl, stats
 
 
 def _addressable(name: str) -> bool:
@@ -229,11 +301,8 @@ class Storage:
         name = sanitize_module_name(name)
         if self.exists(name):
             raise ModuleExists(f"Module '{name}' already exists.")
-        self.paths.ensure_module(name)
-        self.save_module(Module(name=name, metadata={"id": uuid.uuid4().hex}))
         wl = WordList(name=name)
-        self.save_words(wl)
-        self.save_stats(name, {})
+        self._publish_new_module(wl, {})
         return wl
 
     # New canonical alias.
@@ -456,24 +525,39 @@ class Storage:
         _atomic_write(Path(dest), bundle)
         return Path(dest)
 
-    @in_transaction
     def import_list(self, src: Path, new_name: str | None = None,
-                    with_stats: bool = False) -> str:
-        """Import a vocab bundle (or a bare words.json) as a NEW module."""
-        raw = _read_json(Path(src), None)
+                    with_stats: bool = False, card_problem=None) -> str:
+        """Import an export bundle or a words.json as a NEW module.
+
+        The whole file is validated first, and the module is published only
+        once complete, so a rejected or failed import leaves nothing behind.
+        ``card_problem`` is the scheduler's progress check.
+        """
+        raw = _read_json(Path(src), None)  # the source file is only read
         if raw is None:
             raise ModuleNotFound(f"Import file not found: {src}")
-        words_payload = raw.get("words") if "words" in raw and "schema" not in raw else raw
-        wl = WordList.from_dict(words_payload)
+        try:
+            wl, stats = parse_import(raw, with_stats=with_stats, card_problem=card_problem)
+        except ValueError as error:
+            raise ValueError(f"Cannot import {src}: {error}. Nothing was imported.") from None
         wl.name = sanitize_module_name(new_name or wl.name or Path(src).stem)
-        if self.exists(wl.name):
-            raise ModuleExists(f"Module '{wl.name}' already exists; choose a new name.")
-        self.paths.ensure_module(wl.name)
-        self.save_module(Module(name=wl.name, metadata={"id": uuid.uuid4().hex}))
-        self.save_words(wl)
-        stats = raw.get("stats", {}) if (with_stats and isinstance(raw, dict)) else {}
-        self.save_stats(wl.name, stats if isinstance(stats, dict) else {})
+        with self.transaction():
+            if self.exists(wl.name):
+                raise ModuleExists(f"Module '{wl.name}' already exists; choose a new name.")
+            self._publish_new_module(wl, stats)
         return wl.name
+
+    def _publish_new_module(self, wl: WordList, stats: Dict[str, dict]) -> None:
+        """Build a module in a hidden staging folder, then move it into place in
+        one step: a failure part way leaves no half-made module to block a retry."""
+        self.paths.modules_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".vocab-staging-", dir=self.paths.root) as temporary:
+            staged = Storage(Paths(Path(temporary)))
+            staged.paths.ensure_module(wl.name)
+            staged.save_module(Module(name=wl.name, metadata={"id": uuid.uuid4().hex}))
+            staged.save_words(wl)
+            staged.save_stats(wl.name, stats)
+            staged.paths.module_dir(wl.name).rename(self.paths.module_dir(wl.name))
 
 
 _NOTE_CHARS = re.compile(r"^[A-Za-z0-9 _.\-()']+$")

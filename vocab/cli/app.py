@@ -426,7 +426,8 @@ class App:
 
     @in_transaction
     def cmd_import(self, src: str, new_name: Optional[str], with_stats: bool) -> str:
-        name = self.storage.import_list(src, new_name=new_name, with_stats=with_stats)
+        name = self.storage.import_list(src, new_name=new_name, with_stats=with_stats,
+                                        card_problem=self.scheduler.card_problem)
         prog = "imported progress" if with_stats else "fresh progress"
         return f"Imported module '{name}' ({prog}). USE it to start."
 

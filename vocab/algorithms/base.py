@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 class Review(str, Enum):
@@ -28,6 +28,10 @@ class Scheduler(ABC):
         """Return the updated card after a review outcome."""
 
     @abstractmethod
+    def card_problem(self, card) -> Optional[str]:
+        """Why ``card`` cannot be used as this scheduler's progress, or None."""
+        return None if isinstance(card, dict) else "progress is not an object"
+
     def due_order(self, cards: Dict[str, dict], now_ts: float) -> List[str]:
         """Return keys of due cards, in the order they should be studied."""
 

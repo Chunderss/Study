@@ -139,7 +139,10 @@ def test_failed_lookup_tests_report_failure_instead_of_hanging(tmp_path):
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT), env.get("PYTHONPATH")]))
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
-    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(probe)],
+    # Its own temporary folder: pytest's cleanup of the shared one can add
+    # warnings to the summary line checked below.
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                             f"--basetemp={tmp_path / 'basetemp'}", str(probe)],
                             cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
     output = result.stdout + result.stderr
     assert result.returncode == 1, output

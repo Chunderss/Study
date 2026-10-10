@@ -28,6 +28,7 @@ from typing import Dict, List
 
 from .locking import DRAFT_TIMEOUT, WRITE_TIMEOUT, write_lock
 from .models import SCHEMA_VERSION, Word, WordList
+from .senses import CONTEXT_LIMIT
 from .module import Module
 from .paths import InvalidListName, Paths, sanitize_module_name, validate_windows_filename
 
@@ -235,9 +236,11 @@ def _word_entry_problem(key, entry):
         for field in ("pos", "example"):
             if field in sense and not isinstance(sense[field], str):
                 return f"'{field}' must be text"
-    for field in ("dictionary", "added"):
+    for field in ("dictionary", "added", "context"):
         if field in entry and not isinstance(entry[field], str):
             return f"'{field}' must be text"
+    if len(entry.get("context", "")) > CONTEXT_LIMIT:
+        return f"'context' is longer than {CONTEXT_LIMIT} characters"
     return None
 
 

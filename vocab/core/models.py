@@ -12,10 +12,15 @@ word can carry multiple senses (real dictionaries have several)::
           "added": "2026-09-01T12:00:00Z",
           "senses": [
             {"pos": "adjective", "definition": "lasting a very short time"}
-          ]
+          ],
+          "context": "Fame is ephemeral."
         }
       }
     }
+
+Optional keys are written only when set, so other entries stay as they were
+and older builds still read the file: "context" is the sentence a lookup
+ranked the senses for.
 
 Scheduler state lives in a SEPARATE stats.json so progress is importable on its
 own and the words payload stays a clean, shareable dictionary.
@@ -54,16 +59,20 @@ class Word:
     dictionary: str = ""     # which dictionary provided the senses
     added: str = field(default_factory=utcnow_iso)
     senses: List[Sense] = field(default_factory=list)
+    context: str = ""        # the sentence a lookup ranked the senses for
 
     def primary_definition(self) -> str:
         return self.senses[0].definition if self.senses else ""
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "dictionary": self.dictionary,
             "added": self.added,
             "senses": [asdict(s) for s in self.senses],
         }
+        if self.context:
+            d["context"] = self.context
+        return d
 
     @classmethod
     def from_dict(cls, key: str, d: dict) -> "Word":
@@ -72,7 +81,14 @@ class Word:
             dictionary=str(d.get("dictionary", "")),
             added=str(d.get("added", "")) or utcnow_iso(),
             senses=[Sense.from_dict(s) for s in d.get("senses", [])],
+            context=_text(d.get("context")),
         )
+
+
+def _text(value) -> str:
+    """An optional text field as stored; anything else (null, a number) is
+    absent rather than shown as "None"."""
+    return value if isinstance(value, str) else ""
 
 
 @dataclass

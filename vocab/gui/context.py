@@ -25,7 +25,7 @@ class WorkspaceContext(QObject):
     study_requested = Signal(object)   # payload: list[str] module names, or None=all
     # a component asks the workspace to open a document viewer in a new pane
     view_requested = Signal(str)       # payload: absolute file path
-    # a reader highlighted a word to add to vocab: (word, sentence)
+    # a reader highlighted a word to add to vocab: (word, sentence, module)
     add_word_requested = Signal(str, str, str)
     # a component wants to log a line to the console
     log = Signal(str)
@@ -85,7 +85,7 @@ class WorkspaceContext(QObject):
                 raise ValueError(error)
             senses, dictionary, notice = result
             message = self.app.add_resolved_word(word, module, senses, dictionary, notice,
-                                                 expected=expected)
+                                                 expected=expected, sentence=worker.sentence)
             ok = True
             self.changed.emit()
         except Exception as exc:

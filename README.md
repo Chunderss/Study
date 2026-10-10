@@ -166,7 +166,10 @@ NLTK data only from its `_internal` folder: `nltk_data` folders and `NLTK_DATA` 
 on the computer cannot replace them. Online Free Dictionary remains available. When a word is added from a sentence (from the EPUB
 reader), sense selection keeps the senses of the word's part of speech in that sentence
 and puts the one whose definition shares the most words with it first. The part of
-speech is usually right; the chosen sense is a best guess, so check it.
+speech is usually right; the chosen sense is a best guess, so check it. The message
+after adding a word with several senses says whether its first sense was guessed from
+the sentence or is simply the dictionary's first, and how many more senses were saved.
+The word keeps the sentence it was added from (at most 500 characters around the word).
 Vocabulary lookups from Vocab and the EPUB reader run in the background. Failed additions
 keep the input for retrying; lookups stay attached to the module where they started.
 The optional Ollama sense selector requires a separately installed local server.
@@ -299,7 +302,8 @@ follows OneDrive and folder redirection), on Linux the XDG documents folder, oth
 - Every reply shows the full path of the file written or read. Files exported with a
   relative path before this change stay where they were written.
 
-These vocabulary exports do not include captures or notes; a module backup does.
+These vocabulary exports include each word's senses and the sentence it was added
+from, but not captures or notes; a module backup does.
 
 ### Back up and restore modules
 

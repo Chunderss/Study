@@ -205,3 +205,13 @@ def test_console_add_keeps_and_manual_definition_replaces(window, monkeypatch):
     console._run()
     assert entry(window.app, "ephemeral").primary_definition() == "replaced on purpose"
     assert window.app.storage.load_stats("Book")["ephemeral"]["box"] == 4
+
+
+def test_reader_lookup_keeps_its_sentence_and_names_the_guess(window, monkeypatch):
+    senses = [Sense("communicate or signal with a flag", "verb"), Sense("become less intense", "verb")]
+    monkeypatch.setattr(window.app, "_lookup_senses",
+                        lambda word, sentence="": (list(senses), "wordnet", ""))
+    window._add_highlighted_word("flag", "His energy began to flag.", "Book")
+    finish(window, threading.Event())
+    assert entry(window.app, "flag").context == "His energy began to flag."
+    assert 'Guessed from "His energy began to flag."; 1 more sense saved.' in window.message.text()

@@ -19,6 +19,7 @@ from ..core import migrate as _migrate
 from ..core.models import Sense, Word
 from ..core import paths as _paths
 from ..core.paths import expand_home, get_paths, resolve_user_path, sanitize_list_name
+from ..core.senses import LookedUp, quoted_sentence, saved_context
 from ..core.locking import write_lock
 from ..core.storage import ListNotFound, Storage, full_path, in_transaction, size_text
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
@@ -344,22 +345,53 @@ class App:
         return "\n".join(rows)
 
     # ---- words ----------------------------------------------------------
+    def _rank(self, word: str, sentence: str, senses: List[Sense]) -> LookedUp:
+        """Put the sense that fits the sentence first (fixes WordNet's
+        frequency-first order), saying how the first sense was chosen."""
+        if not sentence or len(senses) < 2:
+            return LookedUp(senses, "first")
+        try:
+            from ..study.disambiguate import NlpDisambiguator, get_disambiguator
+            dis = get_disambiguator(getattr(self.config, "disambiguator", "nlp"),
+                                    getattr(self.config, "ollama_model", "llama3.2:3b"))
+            if dis.id == "base":
+                return LookedUp(senses, "base")
+            ranked = dis.rank(word, sentence, senses)
+            # Ollama falls back to, and filters with, the offline ranking.
+            offline = dis if isinstance(dis, NlpDisambiguator) else getattr(dis, "fallback", None)
+            untagged = isinstance(offline, NlpDisambiguator) and not offline._ensure_tagger()
+        except Exception as error:
+            return LookedUp(senses, "failed", problem=str(error) or type(error).__name__)
+        return LookedUp(ranked, "sentence", untagged=untagged)
+
     def _lookup_senses(self, word: str, sentence: str = "") -> tuple[List[Sense], str, str]:
         dic, notice = self.effective_dictionary()
         senses = dic.lookup(word)   # may raise LookupFailed
-        # If we have the sentence the word came from, reorder senses so the one
-        # that fits the context is first (fixes WordNet's frequency-first wart).
-        if sentence and len(senses) > 1:
-            try:
-                from ..study.disambiguate import get_disambiguator
-                dis = get_disambiguator(getattr(self.config, "disambiguator", "nlp"),
-                                        getattr(self.config, "ollama_model", "llama3.2:3b"))
-                senses = dis.rank(word, sentence, senses)
-            except Exception:
-                pass
         # Trim only after ranking: dictionaries list senses grouped by part of
         # speech, nouns first, so an earlier cut could drop the one that fits.
-        return senses[:SENSE_LIMIT], dic.id, notice
+        return self._rank(word, sentence, senses).trimmed(SENSE_LIMIT), dic.id, notice
+
+    @staticmethod
+    def _sense_note(senses, sentence: str) -> str:
+        """The line saying how the first of several saved senses was chosen."""
+        if len(senses) < 2:
+            return ""
+        how = getattr(senses, "how", None)
+        if how is None:  # senses from elsewhere: assume they were ranked
+            how = "sentence" if sentence.strip() else "first"
+        if how == "sentence":
+            first = f"Guessed from {quoted_sentence(sentence)}"
+            if getattr(senses, "untagged", False):
+                first += " without part-of-speech tagging (DOCTOR explains)"
+        elif how == "base":
+            first = "The dictionary's first sense (DISAMBIG base does not use the sentence)"
+        elif how == "failed":
+            first = ("The dictionary's first sense (choosing one for the sentence failed: "
+                     f"{senses.problem})")
+        else:
+            first = "The dictionary's first sense"
+        more = len(senses) - 1
+        return f"    {first}; {more} more sense{'' if more == 1 else 's'} saved."
 
     def cmd_add(self, word: str, target: Optional[str] = None,
                 manual_def: Optional[str] = None, sentence: str = "") -> str:
@@ -384,7 +416,7 @@ class App:
                 hint = f"  (add manually:  {verb} {typed} :: <your definition>)" if typed else ""
                 raise ValueError(f"{e}{hint if e.recoverable else ''}") from e
         return self.add_resolved_word(word_clean, target, senses, dict_id, notice,
-                                      expected=expected, command=True)
+                                      expected=expected, command=True, sentence=sentence)
 
     @in_transaction
     def word_state(self, target: str, word: str):
@@ -398,7 +430,8 @@ class App:
 
     @in_transaction
     def add_resolved_word(self, word: str, target: str, senses, dict_id: str,
-                          notice: str = "", expected=None, command: bool = False) -> str:
+                          notice: str = "", expected=None, command: bool = False,
+                          sentence: str = "") -> str:
         """Commit a word on the UI thread, reading the latest module state.
 
         A dictionary lookup never replaces an existing entry; only an explicit
@@ -406,6 +439,8 @@ class App:
         from word_state() taken before the lookup. ``command`` says the word was
         typed in a command, so the hint for replacing an entry uses the command
         grammar rather than the Vocab pane's ``word :: definition``.
+        ``sentence`` is the one the senses were ranked for; it is kept with
+        the word (see saved_context).
         """
         word_clean = word.strip()
         if not word_clean or not senses or not senses[0].definition.strip():
@@ -425,7 +460,13 @@ class App:
         if expected is not None and self.word_state(target, word_clean) != expected:
             raise ValueError(f"'{word_clean}' was not added: '{target}' changed while it was "
                              "being looked up, so the current version was kept.")
-        w = Word(word=word_clean, dictionary=dict_id, senses=senses)
+        if dict_id == "manual":
+            # Your own definition replaces the senses, not the sentence you
+            # collected the word from.
+            context = wl.words[wl.normalize_key(word_clean)].context if existed else ""
+        else:
+            context = saved_context(word_clean, sentence)
+        w = Word(word=word_clean, dictionary=dict_id, senses=list(senses), context=context)
         wl.add(w)
         # give the new word a fresh scheduler card
         stats.setdefault(wl.normalize_key(word_clean), self.scheduler.new_card())
@@ -433,6 +474,9 @@ class App:
         verb = "Updated" if existed else "Added"
         msg = (f"{verb} '{word_clean}' -> {target}  [{dict_id}]\n"
                f"    {senses[0].pos + ': ' if senses[0].pos else ''}{senses[0].definition[:100]}")
+        note = "" if dict_id == "manual" else self._sense_note(senses, sentence)
+        if note:
+            msg = f"{msg}\n{note}"
         return f"{msg}\n{notice}" if notice else msg
 
     @in_transaction

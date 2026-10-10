@@ -59,3 +59,35 @@ mono = json.loads(js(viewer, viewer._SEL_JS))
 assert mono["word"] == "\u9280\u884c", mono
 assert "\u304e" not in mono["sentence"] and mono["sentence"].startswith("\u6628\u65e5\u3001\u9280\u884c"), mono
 ''')
+
+
+def test_add_word_keeps_the_sentence_the_reader_found(tmp_path):
+    run_reader(tmp_path, r'''
+import json
+from vocab.core.models import Sense
+body = '<p id="p">They raised the flag. His energy began to flag. It was late.</p>'
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                  '<item id="a" href="a.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>')
+    book.writestr("a.xhtml", page.format("Main", body))
+data._lookup_senses = lambda word, sentence="": (
+    [Sense("communicate or signal with a flag", "verb"), Sense("become less intense", "verb")],
+    "wordnet", "")
+ctx.add_word_requested.connect(lambda word, sentence, module: ctx.add_word(
+    word, sentence=sentence, target=module))
+logged = []
+ctx.log.connect(logged.append)
+viewer = open_viewer()
+viewer._module = "Book"
+wait_for(lambda: settled(viewer, "Main"), viewer)
+js(viewer, """(() => {
+    const node = document.getElementById("p").firstChild, at = node.data.lastIndexOf("flag");
+    getSelection().setBaseAndExtent(node, at, node, at + 4);
+    return true;
+})()""")
+viewer._add_selection()
+wait_for(lambda: data.storage.load_words("Book").has("flag"))
+entry = json.loads(data.paths.words_file("Book").read_text("utf-8"))["words"]["flag"]
+assert entry["context"] == "His energy began to flag.", entry
+assert any('Guessed from "His energy began to flag."' in line for line in logged), logged
+''')

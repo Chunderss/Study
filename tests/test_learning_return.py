@@ -3,6 +3,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QPushButton
 
@@ -167,6 +168,52 @@ def test_unavailable_module_keeps_reader_open_when_learning_return_fails(window)
     back_button(viewer).click()
     assert window.workspace.focused.component is viewer
     assert "Cannot return to Learning" in window.message.text()
+
+
+def test_back_to_a_removed_module_keeps_the_reader_and_names_the_way_out(window, qt):
+    component, _item = learning_entry(window)
+    files = [window.app.paths.manifest_file("Book"), window.app.paths.words_file("Book")]
+    contents = [path.read_bytes() for path in files]
+    component.open_source()
+    reader_pane = window.workspace.focused
+    viewer = reader_pane.component
+
+    def remove_book():
+        for path in files:
+            path.unlink()  # removed outside the app
+        window._refresh_status()  # noticed, as on the next focus change
+        qt.processEvents()
+    remove_book()
+    for _ in range(2):
+        back_button(viewer).click()
+        qt.processEvents()
+        assert reader_pane.component is viewer
+        assert window.status.text() == ("! Cannot return to Learning: module 'Book' is no longer "
+                                        "available. Use View → Documents to leave this reader.")
+    assert not window.app.storage.exists("Book")  # never recreated empty
+    # Once the module is back, so is the way back to Learning.
+    for path, data in zip(files, contents):
+        path.write_bytes(data)
+    back_button(viewer).click()
+    component = reader_pane.component
+    assert isinstance(component, LearningComponent)
+    assert window.app.current_module == "Book"
+    # The way out that the message names replaces the reader, even when the
+    # Back button was clicked while another pane had focus.
+    component.open_source()
+    viewer = reader_pane.component
+    window.workspace.split_vertical()
+    window.workspace.set_focused_component("vocab")
+    other_pane = window.workspace.focused
+    other_component = other_pane.component
+    assert other_pane is not reader_pane
+    remove_book()
+    back_button(viewer).click()
+    assert window.workspace.focused is reader_pane and reader_pane.component is viewer
+    documents = next(action for action in window.findChildren(QAction) if action.text() == "Documents")
+    documents.trigger()
+    assert reader_pane.factory_key == "documents"
+    assert other_pane.component is other_component
 
 
 def test_regular_reader_back_still_opens_documents(window):

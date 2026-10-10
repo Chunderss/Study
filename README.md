@@ -65,7 +65,8 @@ opened. Messages are kept in memory only, until the app closes.
 5. Select a capture and click **Source** to return to its PDF page or highlighted
    EPUB passage. Older captures fall back to their saved position when the passage
    cannot be matched. Click **‹ Learning** to return to the same capture and list
-   position. Links stay attached to the original module.
+   position. Links stay attached to the original module; if it was removed outside
+   the app, the reader stays open and **View → Documents** leaves it.
 
 Concept reviews are separate from vocabulary Study/Study All. Captures, explanations,
 and review history are stored locally. This workflow requires no AI or network access.

@@ -593,8 +593,16 @@ class MainWindow(QWidget):
             return
         state = getattr(pane.component, "_learning_return", None)
         if state is not None:
+            # A failed return keeps the reader open; the message names the way out.
             try:
                 self.app.cmd_use(state["module"])
+            except ModuleNotFound:
+                # View → Documents replaces the focused pane, and the Back
+                # button does not take focus, so focus the reader's pane.
+                self.workspace.focus_pane(pane)
+                self.ctx.log.emit(f"! Cannot return to Learning: module '{state['module']}' is no longer "
+                                  "available. Use View → Documents to leave this reader.")
+                return
             except Exception as error:
                 self.ctx.log.emit(f"! Cannot return to Learning: {error}")
                 return

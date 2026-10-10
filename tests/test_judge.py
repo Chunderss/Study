@@ -88,3 +88,42 @@ def test_a_definition_without_words_cannot_be_graded(reference):
     assert result.score == 0.0 and not result.passed
     assert "cannot be graded" in result.feedback
     assert not result.gradable
+
+
+@pytest.mark.parametrize("answer, reference", [
+    ("making something unclear or obscured", "make obscure or unclear"),
+    ("makes", "make"), ("horses", "horse"), ("stories", "story"),
+    ("studied", "study"), ("carries", "carry"), ("running", "run"),
+    ("stopped", "stop"), ("happily", "happy"), ("agreed", "agree"),
+    ("using", "use"), ("hoping", "hope"), ("glasses", "glass"),
+    ("applies", "apply"), ("a large quantity", "large quantities"),
+    ("cafés", "café"), ("viruses", "virus"),
+])
+def test_regular_inflections_recall_the_reference_word(answer, reference):
+    result = judge.score(answer, reference)
+    assert result.score == 1.0
+    assert result.feedback == "Accepted — you recalled every key term."
+
+
+def test_regular_forms_of_one_word_all_match():
+    # The older suffix rules matched most of these; they must keep matching.
+    families = [
+        ("know", "knows", "knowing", "knowingly"),
+        ("add", "adds", "added", "adding"), ("tie", "ties", "tied", "tying"),
+        ("lie", "lies", "lied", "lying"), ("die", "dies", "died", "dying"),
+        ("stuff", "stuffs", "stuffed", "stuffing"), ("staff", "staffed"),
+        ("puff", "puffed"), ("bus", "buses"), ("gas", "gases"), ("ski", "skis"),
+        ("kiwi", "kiwis"), ("taxi", "taxis"), ("case", "cases"), ("box", "boxes"),
+        ("pie", "pies"), ("cry", "cried"),
+    ]
+    unmatched = [(form, family[0]) for family in families for form in family[1:]
+                 if judge.score(form, family[0]).score != 1.0]
+    assert unmatched == []
+
+
+@pytest.mark.parametrize("answer, reference", [
+    ("hop", "hope"), ("car", "care"), ("bed", "bead"), ("ape", "apply"), ("ear", "early"),
+])
+def test_inflection_rules_keep_distinct_words_apart(answer, reference):
+    assert judge.score("making", "make").score == 1.0
+    assert judge.score(answer, reference).score == 0.0

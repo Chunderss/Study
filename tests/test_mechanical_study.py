@@ -121,3 +121,13 @@ def test_terminal_study_grades_a_short_definition(app):
     assert "1/2 correct" in summary
     stats = app.storage.load_stats("Book")
     assert stats["beeves"]["box"] == 1 and stats["wend"]["box"] == 5
+
+
+def test_a_correct_inflected_answer_does_not_reset_the_card(app):
+    add_due(app, "obfuscate", "make obscure or unclear", box=4)
+    out = io.StringIO()
+    Repl(app, in_stream=io.StringIO(
+        "STUDY\nmaking something unclear or obscured\nQUIT\n"), out_stream=out).loop()
+    card = app.storage.load_stats("Book")["obfuscate"]
+    assert "score 100% — Accepted — you recalled every key term." in out.getvalue()
+    assert card["box"] == 5 and card["lapses"] == 0

@@ -6,11 +6,11 @@ disagree; the study session records a pass as Review.GOOD and anything else as
 Review.AGAIN. A reference the judge cannot grade (gradable=False) is not
 recorded at all.
 
-KeywordJudge (MVP): tokenises both texts, drops stopwords, stems crudely, and
-computes the share of the reference's keywords that the user recalled; an
-answer passes with at least PASS_SCORE of them. This is deterministic,
-instant, and needs no downloads — good enough to gate promotion while the
-semantic judges (embeddings/ollama) remain optional.
+KeywordJudge (MVP): tokenises both texts, drops stopwords, matches regular
+English inflections, and computes the share of the reference's keywords that
+the user recalled; an answer passes with at least PASS_SCORE of them. This is
+deterministic, instant, and needs no downloads — good enough to gate promotion
+while the semantic judges (embeddings/ollama) remain optional.
 
 Keywords leave out stopwords and words of one or two letters. A definition
 with nothing else is compared on its short words ("an ox"), then on all its
@@ -79,10 +79,95 @@ def _keywords(text: str, tier: int) -> Dict[str, str]:
     return out
 
 
+# ---- stemming ----------------------------------------------------------------
+# The inflectional steps of Porter's algorithm (1a-1c, 5), built in so the base
+# CLI and the desktop app grade alike without NLTK. Changes for short words:
+# ties/tie and tied/tie, -xes/-ches/-shes, a final s kept after a lone vowel
+# (gas, yes) and in -ss/-us (glass, virus), -se like -s (gases/gas, cases/case),
+# one letter of a final double consonant (add/added, stuff/stuffed), -ly
+# adverbs (happily/happy) and a few exceptions. Full Porter merges too much
+# (organ/organize, general/generous). Irregular forms (made/make) stay apart.
+_STEM_EXCEPTIONS = {"sky": "sky", "skies": "sky", "skis": "ski", "dying": "die",
+                    "lying": "lie", "tying": "tie", "early": "earli"}
+
+
+def _cons(w: str, i: int) -> bool:
+    if w[i] in "aeiou":
+        return False
+    if w[i] == "y":
+        return i == 0 or not _cons(w, i - 1)
+    return True
+
+
+def _measure(s: str) -> int:
+    m, vowel = 0, False
+    for i in range(len(s)):
+        v = not _cons(s, i)
+        m += vowel and not v
+        vowel = v
+    return m
+
+
+def _has_vowel(s: str) -> bool:
+    return any(not _cons(s, i) for i in range(len(s)))
+
+
+def _cvc(s: str) -> bool:
+    return (len(s) >= 3 and _cons(s, len(s) - 3) and not _cons(s, len(s) - 2)
+            and _cons(s, len(s) - 1) and s[-1] not in "wxy")
+
+
+def _double(s: str) -> bool:
+    return len(s) >= 2 and s[-1] == s[-2] and _cons(s, len(s) - 1)
+
+
+def _undo_ed_ing(w: str) -> str:
+    for suffix in ("ed", "ing"):
+        if w.endswith(suffix) and _has_vowel(w[:-len(suffix)]):
+            w = w[:-len(suffix)]
+            if w.endswith(("at", "bl", "iz")):
+                return w + "e"
+            if _double(w) and w[-1] not in "lsz":
+                return w[:-1]
+            if _measure(w) == 1 and _cvc(w):
+                return w + "e"
+            return w
+    return w
+
+
 def _stem(w: str) -> str:
-    for suf in ("ingly", "edly", "ing", "edly", "ed", "es", "ly", "s"):
-        if w.endswith(suf) and len(w) - len(suf) >= 3:
-            return w[: -len(suf)]
+    """Map regular inflections of an ASCII word to one form (make/makes/making)."""
+    if w in _STEM_EXCEPTIONS:
+        return _STEM_EXCEPTIONS[w]
+    if len(w) <= 2 or not (w.isascii() and w.isalpha()):
+        return w
+    if w.endswith("sses"):
+        w = w[:-2]
+    elif w.endswith(("ies", "ied")):
+        w = w[:-1] if len(w) == 4 else w[:-2]          # ties -> tie, cries -> cri
+    elif w.endswith(("xes", "ches", "shes", "zzes")):
+        w = w[:-2]
+    elif w.endswith("s") and not w.endswith(("ss", "us")) and _has_vowel(w[:-2]):
+        w = w[:-1]                                      # gas, yes keep their s
+    if w.endswith("eed"):
+        if _measure(w[:-3]) > 0:
+            w = w[:-1]
+    else:
+        w = _undo_ed_ing(w)
+    if w.endswith("y") and len(w) > 2 and _cons(w, len(w) - 2):
+        w = w[:-1] + "i"                                # cry/cried, happy/happily
+    # -ly adverbs: happily/happy, usually/usual, knowingly/know (not apply)
+    if w.endswith("li") and len(w) >= 5 and _has_vowel(w[:-2]) and not _double(w[:-2]):
+        w = _undo_ed_ing(w[:-2])
+    if w.endswith("e"):
+        s = w[:-1]
+        if _measure(s) > 1 or (_measure(s) == 1 and not _cvc(s)) or s.endswith("s"):
+            w = s                                       # case/cases, gas/gases
+    if w.endswith("ll"):
+        if _measure(w) > 1:
+            w = w[:-1]
+    elif _double(w) and w[-1] not in "sz":
+        w = w[:-1]                                      # add/added, stuff/stuffed
     return w
 
 

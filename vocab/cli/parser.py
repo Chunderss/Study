@@ -1,44 +1,93 @@
-"""Command parsing.
+r"""Command parsing: one grammar for the terminal and the desktop Console.
 
-Commands are shell-like: a verb followed by arguments. List names can contain
-spaces, so we accept simple double-quoting for multi-word names::
+A command is a verb followed by arguments::
 
     CREATE "The Great Gatsby"
-    ADDL "The Great Gatsby" ephemeral
+    ADDL "The Great Gatsby" ephemeral :: lasting a short time
+    IMPORT "C:\Users\Pat Smith\book.json" as Gatsby
+
+The rules are the same on every platform:
+
+- Whitespace separates arguments.
+- Backslashes are ordinary characters, so Windows paths such as
+  C:\Users\Pat\book.json or \\server\share\book.json need quotes only when
+  they contain spaces.
+- A double quote at the start of an argument groups it, spaces included, up to
+  the double quote that ends the argument (one followed by a space, '::' or the
+  end of the line). A double quote that is never closed is an error.
+- Single quotes are ordinary characters: don't, Bob's Book, 'tis.
+- The first '::' outside double quotes ends the arguments. The text after it
+  is the body (a definition or note text), kept as typed apart from the spaces
+  around it.
 
 Verbs are case-insensitive; the rest is preserved as typed.
 """
 from __future__ import annotations
 
-import shlex
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, Tuple
+
+BODY_SEPARATOR = "::"
+
+
+class CommandSyntaxError(ValueError):
+    """The line cannot be split into a command (e.g. an unclosed double quote)."""
 
 
 @dataclass
 class Command:
-    verb: str            # upper-cased
-    args: List[str]
+    verb: str                    # upper-cased
+    args: List[str]              # the arguments before '::'
     raw: str
-
-    @property
-    def arg_str(self) -> str:
-        """Everything after the verb, un-split (for free-text like definitions)."""
-        parts = self.raw.strip().split(maxsplit=1)
-        return parts[1] if len(parts) > 1 else ""
+    body: Optional[str] = None   # the text after '::'; None when there is no '::'
 
 
-def parse(line: str) -> Command | None:
+def _closing_quote(line: str, start: int) -> int:
+    """Index of the double quote closing the argument opened at ``start``, or -1."""
+    end = line.find('"', start + 1)
+    while end != -1:
+        rest = line[end + 1:]
+        if not rest or rest[0].isspace() or rest.startswith(BODY_SEPARATOR):
+            return end
+        end = line.find('"', end + 1)
+    return -1
+
+
+def split_command(line: str) -> Tuple[List[str], Optional[str]]:
+    """Split ``line`` into its arguments and its body (None without '::')."""
+    args: List[str] = []
+    i, n = 0, len(line)
+    while i < n:
+        if line[i].isspace():
+            i += 1
+        elif line.startswith(BODY_SEPARATOR, i):
+            return args, line[i + len(BODY_SEPARATOR):].strip()
+        elif line[i] == '"':
+            end = _closing_quote(line, i)
+            if end == -1:
+                raise CommandSyntaxError(
+                    f'Unclosed quote in: {line[i:]}   (end the quoted name or path with ")')
+            args.append(line[i + 1:end])
+            i = end + 1
+        else:
+            j = i
+            while j < n and not line[j].isspace() and not line.startswith(BODY_SEPARATOR, j):
+                j += 1
+            args.append(line[i:j])
+            i = j
+    return args, None
+
+
+def parse(line: str) -> Optional[Command]:
+    """Parse one input line; None for a blank line.
+
+    Raises CommandSyntaxError (a ValueError) when the line cannot be split, so
+    callers parse inside the error handling that shows "! <message>".
+    """
     line = line.strip()
     if not line:
         return None
-    try:
-        tokens = shlex.split(line, posix=True)
-    except ValueError:
-        # Unbalanced quotes — fall back to whitespace split so the user still
-        # gets a sensible error from the handler rather than a crash.
-        tokens = line.split()
-    if not tokens:
-        return None
-    verb = tokens[0].upper()
-    return Command(verb=verb, args=tokens[1:], raw=line)
+    args, body = split_command(line)
+    if not args:
+        raise CommandSyntaxError("Start with a command, e.g.  ADD <word> :: <definition>")
+    return Command(verb=args[0].upper(), args=args[1:], raw=line, body=body)

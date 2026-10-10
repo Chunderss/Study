@@ -492,10 +492,14 @@ class ConsoleComponent(BaseComponent):
             return
         self.cmd.clear()
         self.log(f"vocab> {line}")
-        cmd = parse(line)
+        try:
+            cmd = parse(line)
+        except ValueError as e:  # an unclosed quote: nothing runs
+            self.log(f"! {e}")
+            return
         if cmd is None:
             return
-        if cmd.verb in ("STUDY", "STUDYALL"):
+        if cmd.verb in ("STUDY", "STUDYALL") and cmd.body is None:
             all_mods = cmd.verb == "STUDYALL"
             if all_mods:
                 self.ctx.study_requested.emit(None)
@@ -522,7 +526,7 @@ class ConsoleComponent(BaseComponent):
                     return True
                 repl._confirm = confirm_then_release
             if (cmd.verb == "NOTE" and cmd.args and cmd.args[0].upper() in ("DEL", "DELETE", "RM")
-                    and previous_module):
+                    and cmd.body is None and previous_module):
                 # Resolve before deleting: on Windows "one" deletes One.md, and
                 # the open buffer is keyed "One".
                 try:
@@ -536,7 +540,10 @@ class ConsoleComponent(BaseComponent):
             if deleted:
                 if not self.app.storage.exists(deleted):
                     self.ctx.notes.discard(deleted)
-            if deleted_note:
+            # Only a note that is really gone loses its open buffer and draft;
+            # a rejected command returns a message without deleting anything.
+            if deleted_note and not self.app.storage._note_path(
+                    previous_module, deleted_note, exact=True).exists():
                 self.ctx.notes.discard(previous_module, deleted_note)
         except EOFError:
             self.log("(QUIT ignored in the app — just close the window)")

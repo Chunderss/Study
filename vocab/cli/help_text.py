@@ -8,8 +8,7 @@ BANNER = r"""
     \_/ \___/ \___\__,_|_.__/    type HELP for commands, QUIT to exit
 """
 
-HELP = """\
-VOCAB STUDY — command reference
+HELP = r"""VOCAB STUDY — command reference
 ================================
 Everything lives in a MODULE (e.g. "The Great Gatsby") — a study container that
 holds a vocab list, markdown notes, and reference documents. Pick a current
@@ -29,7 +28,8 @@ MODULES & NAVIGATION
   USE <name>                 set the current module  (alias: CD <name>)
   WHERE                      show the current module  (alias: PWD)
   LS [name]                  list words in a module (defaults to current)
-      Multi-word names use quotes:  CREATE "The Great Gatsby"
+      Multi-word names use double quotes:  CREATE "The Great Gatsby"
+      Single quotes and backslashes are ordinary characters:  CREATE Bob's Book
 
 VOCAB
   ADD <word>                 add <word> to the current module (a word already
@@ -70,6 +70,8 @@ SHARING
   EXPORT <module> <file.json> [--stats]   write a portable vocab file
   IMPORT <file.json> [as <name>] [--stats]   import vocab as a new module
       Without --stats you get the words but start your OWN fresh progress.
+      Windows paths work as typed; quote a path that contains spaces:
+        IMPORT "C:\Users\Pat Smith\book.json" as Gatsby
 
 OTHER
   DOCTOR                     diagnose setup (runtime, dictionaries, POS tagger)

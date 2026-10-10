@@ -15,25 +15,19 @@ from .help_text import BANNER, HELP
 from .parser import Command, parse
 
 
-def _extract_manual_def(raw: str) -> tuple[list, str | None]:
-    """Split a line on '::' into (tokens_before_::, manual_definition|None).
+def _takes_body(cmd: Command) -> bool:
+    """Only these commands read the text after '::'."""
+    return cmd.verb in ("ADD", "ADDL") or (
+        cmd.verb == "NOTE" and bool(cmd.args) and cmd.args[0].upper() == "ADD")
 
-    Shared by ADD and ADDL so both support:  <verb> ... <word> :: <definition>
-    The returned tokens still include the verb at index 0.
-    """
-    import shlex
-    if "::" in raw:
-        left, right = raw.split("::", 1)
-        try:
-            tokens = shlex.split(left, posix=True)
-        except ValueError:
-            tokens = left.split()
-        return tokens, right.strip()
-    try:
-        tokens = shlex.split(raw, posix=True)
-    except ValueError:
-        tokens = raw.split()
-    return tokens, None
+
+def _path_problem(path: str) -> Optional[str]:
+    """A message when a file path starts or ends with a quote character, else None."""
+    if path and (path[0] in "\"'" or path[-1] in "\"'"):
+        return (f"A file path cannot start or end with a quote: {path}   Only double "
+                "quotes group words; quote a path with spaces like this:  "
+                "\"C:\\Users\\Pat Smith\\book.json\"")
+    return None
 
 
 class Repl:
@@ -66,6 +60,9 @@ class Repl:
             raise EOFError
         if v == "HELP":
             return HELP
+        if cmd.body is not None and not _takes_body(cmd):
+            return ("'::' starts a definition or note text, which only ADD, ADDL and NOTE ADD "
+                    "take. Quote a word or name that contains '::':  DEL \"std::vector\"")
         if v in ("CREATE", "MODULE"):
             # MODULE with no/ 'new' subverb still creates; MODULES lists.
             if v == "MODULE" and a and a[0].upper() in ("LS", "LIST"):
@@ -91,17 +88,13 @@ class Repl:
             return self._note(a, raw)
 
         if v == "ADD":
-            tokens, manual = _extract_manual_def(raw)
-            word = tokens[1] if len(tokens) > 1 else ""
-            if not word:
+            if not a:
                 return "Usage: ADD <word>   or   ADD <word> :: <definition>"
-            return app.cmd_add(word, manual_def=manual)
+            return app.cmd_add(a[0], manual_def=cmd.body)
         if v == "ADDL":
-            tokens, manual = _extract_manual_def(raw)
-            # tokens: [ADDL, <list>, <word>...]
-            if len(tokens) < 3:
+            if len(a) < 2:
                 return "Usage: ADDL <list> <word>   or   ADDL <list> <word> :: <definition>"
-            return app.cmd_add(tokens[2], target=tokens[1], manual_def=manual)
+            return app.cmd_add(a[1], target=a[0], manual_def=cmd.body)
         if v == "DEL":
             return app.cmd_delete_word(" ".join(a)) if a else "Usage: DEL <word>"
         if v == "DELL":
@@ -136,7 +129,7 @@ class Repl:
         if v == "EXPORT":
             if len(a) < 2:
                 return "Usage: EXPORT <list> <file.json> [--stats]"
-            return app.cmd_export(a[0], a[1], include_stats="--stats" in a)
+            return _path_problem(a[1]) or app.cmd_export(a[0], a[1], include_stats="--stats" in a)
         if v == "IMPORT":
             return self._import(a)
 
@@ -207,6 +200,9 @@ class Repl:
         if not a:
             return "Usage: IMPORT <file.json> [as <name>] [--stats]"
         src = a[0]
+        problem = _path_problem(src)
+        if problem:
+            return problem
         new_name = None
         if "as" in a:
             i = a.index("as")
@@ -270,10 +266,10 @@ class Repl:
             except EOFError:
                 self.echo("\nGoodbye.")
                 return
-            cmd = parse(line)
-            if cmd is None:
-                continue
             try:
+                cmd = parse(line)  # a syntax error is reported like any other
+                if cmd is None:
+                    continue
                 result = self.dispatch(cmd)
             except EOFError:
                 self.echo("Goodbye.")

@@ -8,7 +8,6 @@ dependencies = []
 [project.optional-dependencies]
 # Optional feature groups. Sizes shown to the user before install (see `dict install`).
 wordnet = ["nltk>=3.9"]              # offline dictionary + POS tagger (~13 MB download)
-repl = ["prompt_toolkit>=3.0"]       # history + tab-completion for power users
 embeddings = ["sentence-transformers>=2.2"]  # phase-2 semantic judge (~250 MB via torch)
 test = ["pytest>=8,<10"]
 # PySide6 6.8.0 and 6.8.0.1 freeze the event loop when a Qt slot raises.

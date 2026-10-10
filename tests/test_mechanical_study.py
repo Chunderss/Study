@@ -81,3 +81,11 @@ def test_session_records_the_judges_verdict(app):
     outcome = session.answer_text("first letter")
     assert outcome.score == 1.0 and not outcome.correct
     assert app.storage.load_stats("Book")["alpha"]["box"] == 1
+
+
+def test_terminal_study_accepts_the_definition_in_another_script(app):
+    add_due(app, "эфемерный", "мимолётный")
+    answers = iter(["мимолётный"])
+    summary = app.run_study(["Book"], lambda _text: next(answers), lambda _line: None)
+    assert "1/1 correct" in summary
+    assert app.storage.load_stats("Book")["эфемерный"]["box"] == 5

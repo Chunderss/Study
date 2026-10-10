@@ -10,13 +10,18 @@ computes the share of the reference's keywords that the user recalled; an
 answer passes with at least PASS_SCORE of them. This is deterministic,
 instant, and needs no downloads — good enough to gate promotion while the
 semantic judges (embeddings/ollama) remain optional.
+
+Both texts are read as Unicode words after NFKC normalisation and case
+folding. Accents on Latin letters are optional (cafe = café); marks in other
+scripts count (и is not й, е is not ё, か is not が). Chinese and Japanese
+are not split into words, so only whole matching words count there.
 """
 from __future__ import annotations
 
-import re
+import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Set
+from typing import Dict, List, Set
 
 # Share of the reference's keywords an answer must recall to pass.
 PASS_SCORE = 0.5
@@ -29,11 +34,36 @@ _STOP = {
 }
 
 
+def _scan(text: str) -> List[str]:
+    """Runs of letters and digits, with the combining marks written on them."""
+    words: List[str] = []
+    word: List[str] = []
+    for ch in text:
+        if ch.isalnum() or (word and unicodedata.category(ch).startswith("M")):
+            word.append(ch)
+        elif word:
+            words.append("".join(word))
+            word = []
+    if word:
+        words.append("".join(word))
+    return words
+
+
+def _plain(word: str) -> str:
+    """Drop accents from Latin letters ('café' -> 'cafe'); other scripts keep theirs."""
+    out: List[str] = []
+    for ch in unicodedata.normalize("NFD", word):
+        if unicodedata.combining(ch) and out and out[-1].isascii():
+            continue
+        out.append(ch)
+    return unicodedata.normalize("NFC", "".join(out))
+
+
 def _keywords(text: str) -> Dict[str, str]:
     """Keywords in order: compared form -> the word as first written."""
     out: Dict[str, str] = {}
-    for w in re.findall(r"[A-Za-z]+", text or ""):
-        low = w.lower()
+    for w in _scan(unicodedata.normalize("NFKC", text or "")):
+        low = _plain(w.casefold())
         if low in _STOP or len(low) <= 2:
             continue
         out.setdefault(_stem(low), w)

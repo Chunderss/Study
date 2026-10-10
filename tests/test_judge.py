@@ -53,6 +53,21 @@ def test_accents_are_optional_only_on_latin_letters():
     assert judge.score("कताब", "किताब").score == 0.0               # vowel signs count
 
 
+@pytest.mark.parametrize("answer, reference", [
+    ("zolty", "żółty"), ("maly", "mały"), ("duong", "đường"), ("ost", "øst"),
+    ("hobz", "ħobż"), ("ruotta", "Ruoŧŧa"), ("kiz", "kız"), ("KIZ", "kız"),
+    ("isik", "ışık"), ("oeuvre", "œuvre"), ("aether", "Æther"), ("żółty", "zolty"),
+    ("collecció", "col·lecció"), ("colleccio", "co\u0140lecció"),
+])
+def test_latin_letters_that_do_not_decompose_are_optional_too(answer, reference):
+    assert judge.score(answer, reference).score == 1.0
+
+
+def test_the_catalan_middle_dot_keeps_a_word_whole():
+    assert judge.score("col", "col·lecció").feedback.endswith(
+        "Key terms not mentioned: col·lecció.")
+
+
 def test_an_unrelated_answer_does_not_pass_a_definition_in_another_script():
     result = judge.score("a big elephant", "мимолётный кратковременный")
     assert result.score == 0.0 and not result.passed

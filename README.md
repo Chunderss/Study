@@ -136,9 +136,9 @@ do not (made). A key term negated differently from the definition earns no credi
 negation ("can't forget" for "impossible to forget", "without color" for "deprived of
 color"). A "not" applies to the next word only, so a reversed answer that keeps the
 other key terms can still pass.
-Accents on Latin letters are optional (cafe matches café), while marks in other scripts
-must match (е is not ё). Chinese and Japanese text is not split into words, so only whole
-matching words count there.
+Accents on Latin letters are optional (cafe matches café, zolty żółty, oeuvre œuvre),
+while marks in other scripts must match (е is not ё). Chinese and Japanese text is not
+split into words, so only whole matching words count there.
 Numbers are key terms only in a definition without other key terms ("1984"), so "a
 hundred years" passes for "a period of 100 years"; 1,760 and 1760 are the same number.
 A definition made only of short or common words ("an ox", "to go") is compared on those

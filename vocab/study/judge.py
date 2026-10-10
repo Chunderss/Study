@@ -19,9 +19,10 @@ words; one with no words at all cannot be graded. Commas and points between
 digits do not split a number (1,760 = 1760).
 
 Both texts are read as Unicode words after NFKC normalisation and case
-folding. Accents on Latin letters are optional (cafe = café); marks in other
-scripts count (и is not й, е is not ё, か is not が). Chinese and Japanese
-are not split into words, so only whole matching words count there.
+folding. Accents on Latin letters are optional (cafe = café, zolty = żółty,
+aether = æther); marks in other scripts count (и is not й, е is not ё, か is
+not が). Chinese and Japanese are not split into words, so only whole
+matching words count there.
 
 A keyword negated differently from the definition earns no credit: "not
 permanent" for "permanent", "permanent" for "not permanent". This is a check
@@ -86,11 +87,14 @@ _CLAUSE = re.compile(r"[,;:.!?()\[\]{}\"“”«»/—–―]|\s-+\s|\bbut\b", r
 
 
 def _scan(text: str) -> List[str]:
-    """Runs of letters and digits, with the combining marks written on them."""
+    """Runs of letters and digits, with the combining marks written on them
+    and the Catalan middle dot (col·lecció; NFKC writes ŀ as l·)."""
     words: List[str] = []
     word: List[str] = []
-    for ch in text:
-        if ch.isalnum() or (word and unicodedata.category(ch).startswith("M")):
+    for i, ch in enumerate(text):
+        if ch.isalnum() or (word and (unicodedata.category(ch).startswith("M")
+                                      or (ch == "\u00b7" and word[-1] in "lL"
+                                          and text[i + 1:i + 2] in ("l", "L")))):
             word.append(ch)
         elif word:
             words.append("".join(word))
@@ -100,10 +104,17 @@ def _scan(text: str) -> List[str]:
     return words
 
 
+# Latin letters that have no accent to split off, compared as their base
+# letters, and the middle dot that _scan keeps in l·l, compared as nothing
+_LATIN_BASE = str.maketrans({"ł": "l", "ø": "o", "đ": "d", "ħ": "h", "ŧ": "t",
+                             "ı": "i", "æ": "ae", "œ": "oe", "\u00b7": ""})
+
+
 def _plain(word: str) -> str:
-    """Drop accents from Latin letters ('café' -> 'cafe'); other scripts keep theirs."""
+    """Drop accents from Latin letters ('café' -> 'cafe', 'żółty' -> 'zolty');
+    other scripts keep theirs. word is case-folded."""
     out: List[str] = []
-    for ch in unicodedata.normalize("NFD", word):
+    for ch in unicodedata.normalize("NFD", word).translate(_LATIN_BASE):
         if unicodedata.combining(ch) and out and out[-1].isascii():
             continue
         out.append(ch)

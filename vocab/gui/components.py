@@ -512,7 +512,15 @@ class ConsoleComponent(BaseComponent):
             deleted = deleted_note = None
             if cmd.verb == "DELETE" and cmd.args:
                 deleted = self.app.storage.canonical_name(" ".join(cmd.args))
-                self.ctx.module_deleting.emit(deleted)
+                ask = repl._confirm
+
+                def confirm_then_release(text):
+                    # Close the module's readers only once the user said Yes.
+                    if not ask(text):
+                        return False
+                    self.ctx.module_deleting.emit(deleted)
+                    return True
+                repl._confirm = confirm_then_release
             if (cmd.verb == "NOTE" and cmd.args and cmd.args[0].upper() in ("DEL", "DELETE", "RM")
                     and previous_module):
                 # Resolve before deleting: on Windows "one" deletes One.md, and

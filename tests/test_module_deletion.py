@@ -94,6 +94,18 @@ def open_pdf(window):
     return viewer
 
 
+def test_cancelling_a_console_delete_keeps_the_readers_open(window, monkeypatch):
+    open_pdf(window)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.No)
+    window.workspace.split_vertical()
+    window.workspace.set_focused_component("console")
+    console = window.workspace.focused.component
+    console.cmd.setText("DELETE Book")
+    console._run()
+    assert "PdfViewer" in [type(pane.component).__name__ for pane in window.workspace._panes]
+    assert window.app.storage.exists("Book")
+
+
 @pytest.mark.parametrize("route", ["sidebar", "console"])
 def test_readers_are_closed_before_the_module_moves(window, monkeypatch, route):
     open_pdf(window)

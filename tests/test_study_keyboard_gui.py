@@ -174,6 +174,39 @@ def test_enter_activates_the_study_button_tab_reached(window, qt, delivery):
 
 
 @DELIVERY
+def test_ctrl_alt_or_meta_enter_or_space_never_click_a_focused_study_button(window, qt, delivery):
+    """On a Tab-focused button, as on the card, a chord is a shortcut."""
+    keys = Keys(window, qt, delivery)
+    view = _open_study(window, qt)
+    chords = [(modifiers, key)
+              for modifiers in (Qt.ControlModifier, Qt.AltModifier, Qt.MetaModifier)
+              for key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space)]
+    keys.tab_to(view.reveal_btn)
+    for modifiers, key in chords:
+        keys.press(key, modifiers)
+    assert not view._revealed
+    keys.press(Qt.Key_Space)
+    assert view._revealed
+    for button in (view.good_btn, view.bad_btn, view.end_btn):
+        keys.tab_to(button)
+        for modifiers, key in chords:
+            keys.press(key, modifiers)
+        assert qt.focusWidget() is button
+    assert view.session.reviewed == 0 and not view._ended
+    assert all(card["reps"] == 0 for card in window.app.storage.load_stats("Book").values())
+
+    keys.tab_to(view.good_btn)
+    keys.press(Qt.Key_Enter, Qt.KeypadModifier)     # the keypad's Enter still clicks
+    assert (view.session.reviewed, view.session.result.correct) == (1, 1)
+    keys.press(Qt.Key_Space)
+    keys.tab_to(view.bad_btn)
+    keys.press(Qt.Key_Return, Qt.ShiftModifier)     # and so does Shift+Return
+    assert (view.session.reviewed, view.session.result.correct) == (2, 1)
+    stats = window.app.storage.load_stats("Book")
+    assert sorted(card["reps"] for card in stats.values()) == [0, 0, 1, 1]
+
+
+@DELIVERY
 def test_enter_activates_the_tab_reached_end_and_continue_in_mechanical_mode(window, qt, delivery):
     keys = Keys(window, qt, delivery)
     view = _open_study(window, qt, mechanical=True)

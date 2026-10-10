@@ -162,10 +162,11 @@ F or N records **Missed it**, and Esc ends the session. These keys count alone o
 Shift, never with Ctrl, Alt, Cmd or the Windows key, so a reflex Ctrl+F or Ctrl+Y does
 not record an answer. Keyboard focus stays on the card, so pressing Space or Enter
 again never records an answer. To use a button from the keyboard, Tab to it and press
-Space or Enter; the mouse works too. In the terminal, press Enter to reveal the
-definition, then answer `did you get it? [y/N]`: `y` records **Got it**, Enter or `n`
-**Missed it**, and `q` stops without recording the card. Any other reply asks again, as
-does a failed save, so the answer is not lost.
+Space or Enter, again without Ctrl, Alt, Cmd or the Windows key; the mouse works too.
+In the terminal, press Enter to reveal the definition, then answer `did you get it?
+[y/N]`: `y` records **Got it**, Enter or `n` **Missed it**, and `q` stops without
+recording the card. Any other reply asks again, as does a failed save, so the answer is
+not lost.
 
 Mechanical mode grades a typed definition by its wording, not its meaning: it passes
 when it contains at least half of the key terms of the card's definition. The feedback

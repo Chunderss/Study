@@ -22,10 +22,11 @@ import urllib.request
 from typing import List
 
 from ..core.models import Sense
+from ..version import __version__
 from .base import Dictionary, LookupFailed
 
 _ENDPOINT = "https://api.dictionaryapi.dev/api/v2/entries/en/"
-_UA = "VocabStudy/0.1 (offline-first vocab trainer)"
+_UA = f"VocabStudy/{__version__} (offline-first vocab trainer)"
 
 
 class FreeDictionary(Dictionary):

@@ -1,6 +1,6 @@
 [project]
 name = "vocab-study"
-version = "0.2.0"
+dynamic = ["version"]  # vocab/version.py
 description = "Desktop study workspace with vocabulary, Markdown notes, document readers, and spaced repetition."
 requires-python = ">=3.10"
 dependencies = []
@@ -24,6 +24,9 @@ vocab-gui = "vocab.gui.__main__:main"
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "vocab.version.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["vocab*"]

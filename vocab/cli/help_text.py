@@ -1,8 +1,9 @@
 """Help text — the getting-started guide a new user reads first."""
+from ..version import __version__
 
-BANNER = r"""
+BANNER = rf"""
  __     __            _
- \ \   / /__  ___ __ _| |__      Vocab Study  v0.1
+ \ \   / /__  ___ __ _| |__      Vocab Study  v{__version__}
   \ \ / / _ \/ __/ _` | '_ \     your terminal study workspace
    \ V / (_) | (_| (_| | |_) |
     \_/ \___/ \___\__,_|_.__/    type HELP for commands, QUIT to exit

@@ -321,7 +321,12 @@ class MainWindow(QWidget):
         for pane in list(self.workspace._panes):
             path = getattr(pane.component, "path", None)
             if isinstance(path, str) and folder in Path(path).resolve().parents:
-                # Its place is not saved: the module is about to be deleted.
+                # Save its place without asking: if the delete then fails
+                # ("nothing was deleted"), the module keeps it.
+                try:
+                    pane.component.save_position()
+                except Exception as error:
+                    self.ctx.log.emit(f"! Could not save your place in {pane.component._fname}: {error}")
                 pane.set_component(self._make_component("documents"), "documents", save=False)
                 pane.title.setText("Documents")
                 released = True

@@ -236,6 +236,27 @@ def test_a_refused_delete_keeps_the_readers_open(window, monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("route", ["sidebar", "console"])
+def test_a_refused_delete_keeps_the_readers_place(window, monkeypatch, route):
+    open_pdf(window)
+    assert window.app.storage.load_reading_pos("Book", "doc.pdf") == {}
+    def locked(self, target):
+        raise PermissionError(32, "The process cannot access the file")
+    monkeypatch.setattr(Path, "rename", locked)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    if route == "sidebar":
+        window._delete_module()
+    else:
+        window.workspace.split_vertical()  # the reader stays open in its own pane
+        window.workspace.set_focused_component("console")
+        console = window.workspace.focused.component
+        console.cmd.setText("DELETE Book")
+        console._run()
+    monkeypatch.undo()
+    assert window.app.storage.exists("Book")  # nothing was deleted
+    assert window.app.storage.load_reading_pos("Book", "doc.pdf").get("page") == 0
+
+
+@pytest.mark.parametrize("route", ["sidebar", "console"])
 def test_readers_are_closed_before_the_module_moves(window, monkeypatch, route):
     open_pdf(window)
     seen = []

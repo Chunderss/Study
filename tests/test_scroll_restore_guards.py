@@ -36,7 +36,7 @@ def test_current_exhausted_restore_releases_pending_scroll(restore):
     viewer._restore_scroll(1, attempt=viewer.MAX_RESTORE_RETRIES)
     assert viewer._pending_scroll == 0.25
     page.complete(False)
-    assert viewer._pending_scroll == 0.0
+    assert viewer._pending_scroll is None
 
 
 def test_hidden_reader_preserves_pending_without_running_javascript(restore, monkeypatch):

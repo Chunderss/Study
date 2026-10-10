@@ -237,7 +237,7 @@ try:
     # reached exactly. Exercise the real renderer and the entire retry budget.
     viewer.go_to({"chapter": 1, "scroll": 0.37})
     wait_for(lambda: attempts and attempts[-1] == viewer.MAX_RESTORE_RETRIES)
-    wait_for(lambda: viewer._pending_scroll == 0)
+    wait_for(lambda: viewer._pending_scroll is None)
 
     # Reading on after an unsuccessful restoration must supersede the old 37%.
     js('window.scrollTo(0,7200); true;')

@@ -46,7 +46,7 @@ def test_scroll_cancellation_is_scoped_to_reader_input(qt, target, kind, key, mo
     try:
         watched = {"foreign": foreign, "child": child, "web": viewer._web}[target]
         assert viewer.eventFilter(watched, event) is False
-        assert viewer._pending_scroll == (0.0 if cancelled else 0.37)
+        assert viewer._pending_scroll == (None if cancelled else 0.37)
     finally:
         delete(foreign)
         delete(viewer)
@@ -128,7 +128,7 @@ try:
 
     # Cancellation happens on input, before an old renderer callback or retry
     # can reapply the saved position. The input must still reach Chromium.
-    assert viewer._pending_scroll == 0, (sys.argv[2], attempts)
+    assert viewer._pending_scroll is None, (sys.argv[2], attempts)
     # Wheel distance depends on the platform; one 100px snap step is enough.
     minimum_movement = 50 if sys.argv[2] == "wheel" else 500
     def cached_css_scroll():
@@ -149,7 +149,7 @@ try:
     # Cancelling this request must not suppress restoration on a later chapter.
     viewer.go_to({"chapter": 2, "scroll": 0.25})
     wait_for(lambda: viewer._web.title() == "plain" and not viewer._web.page().isLoading())
-    wait_for(lambda: viewer._pending_scroll == 0)
+    wait_for(lambda: viewer._pending_scroll is None)
     position = json.loads(js('JSON.stringify({y:scrollY,height:document.scrollingElement.scrollHeight})'))
     assert abs(position['y'] / position['height'] - 0.25) < 0.001, position
     assert viewer.source_location()["chapter"] == 2
@@ -217,7 +217,7 @@ try:
     QApplication.sendEvent(target, wheel)
     assert viewer._pending_scroll == 0.37
 
-    wait_for(lambda: viewer._document_loaded and viewer._pending_scroll == 0)
+    wait_for(lambda: viewer._document_loaded and viewer._pending_scroll is None)
     positions = []
     viewer._run_js(
         'JSON.stringify({y:scrollY,height:document.scrollingElement.scrollHeight})',

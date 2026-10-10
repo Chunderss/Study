@@ -61,7 +61,7 @@ viewer._loading_changed(OutgoingLoad())
 assert viewer._pending_scroll == 0.25
 wait_for(lambda: True in loaded and viewer._web.title() == "two")
 wait_for(lambda: viewer._web.page().scrollPosition().y() > 0)
-wait_for(lambda: viewer._pending_scroll == 0)
+wait_for(lambda: viewer._pending_scroll is None)
 selected = []
 viewer._run_js('var r=document.createRange(); r.selectNodeContents(document.getElementById("passage")); var s=window.getSelection(); s.removeAllRanges(); s.addRange(r); true;', lambda value: selected.append(value))
 wait_for(lambda: selected and viewer._web.selectedText() == "Passage two")

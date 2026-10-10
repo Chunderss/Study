@@ -306,7 +306,17 @@ class EpubViewer(QWidget):
         self.TITLE = f"EPUB · {os.path.basename(path)}"
         self._idx = 0
         self._zoom = 1.25   # start a bit larger — default EPUB text runs small
-        self._pending_scroll = 0.0   # scroll to restore once the chapter loads
+        # A scroll fraction to restore once the chapter loads (0.0 is the top);
+        # None when the live position applies.
+        self._pending_scroll = None
+        self._requested_scroll = 0.0  # reported while a requested chapter loads
+        # Qt's cached scroll can still hold the previous document's value for a
+        # moment after a load; it is used once it has changed for this one.
+        self._stale_scroll = 0.0
+        self._scroll_fresh = False
+        # Nothing is saved until a chapter was requested successfully, so a
+        # reader whose first load failed keeps the previously saved place.
+        self._position_known = False
         self._book = EpubBook(path)
         self._chapter_paths = {str(Path(p).resolve()): i
                                for i, (_name, p) in enumerate(self._book.chapters)}
@@ -344,9 +354,10 @@ class EpubViewer(QWidget):
                 pass
         self._zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom))
         try:
-            self._pending_scroll = max(0.0, min(1.0, float(location.get("scroll", 0.0) or 0.0)))
+            if "scroll" in location:
+                self._pending_scroll = max(0.0, min(1.0, float(location["scroll"] or 0.0)))
         except (TypeError, ValueError):
-            self._pending_scroll = 0.0
+            self._pending_scroll = None
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -398,6 +409,7 @@ class EpubViewer(QWidget):
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         self._web.page().navigationRequested.connect(self._navigate)
+        self._web.page().scrollPositionChanged.connect(self._scroll_changed)
         self._web.page().loadingChanged.connect(self._loading_changed)
         lay.addWidget(self._web, 1)
         self._web.installEventFilter(self)
@@ -429,7 +441,7 @@ class EpubViewer(QWidget):
         if (self._document_loaded and isValid(self._web) and isinstance(watched, QWidget) and
                 (watched is self._web or self._web.isAncestorOf(watched))):
             # Explicit reader interaction takes precedence over saved-position retries.
-            self._pending_scroll = 0.0
+            self._pending_scroll = None
             self._pending_highlight = None
         return False
 
@@ -439,8 +451,22 @@ class EpubViewer(QWidget):
             generation = self._load_generation
             QTimer.singleShot(0, self, lambda: self._restore_location(generation))
 
+    def _begin_document(self, scroll):
+        """A new document is requested: until its own position is known,
+        report ``scroll``, never the outgoing document's cached one."""
+        self._document_loaded = False
+        self._requested_scroll = scroll
+        self._stale_scroll = self._web.page().scrollPosition().y()
+        self._scroll_fresh = False
+
+    def _scroll_changed(self, _position):
+        if self._document_loaded:
+            self._scroll_fresh = True
+
     def _on_loaded(self) -> None:
         self._document_loaded = True
+        if self._web.page().scrollPosition().y() != self._stale_scroll:
+            self._scroll_fresh = True  # the cache already shows this document
         self._web.show()
         # Chromium delivers input to its child widgets, including the focus proxy.
         # Refresh these filters after loading in case the renderer replaced them.
@@ -526,7 +552,7 @@ class EpubViewer(QWidget):
                     return
                 self._pending_highlight = None
                 if report.get("focused", False):
-                    self._pending_scroll = 0.0
+                    self._pending_scroll = None
             # A missing passage falls back to the capture's saved scroll location.
             self._restore_scroll(generation)
 
@@ -559,7 +585,7 @@ class EpubViewer(QWidget):
             script, QWebEngineScript.ScriptWorldId.ApplicationWorld.value, callback)
 
     def _restore_scroll(self, generation, attempt=0):
-        if not isValid(self) or generation != self._load_generation or not self._pending_scroll:
+        if not isValid(self) or generation != self._load_generation or self._pending_scroll is None:
             return
         # Hidden WebEngine views have no reliable viewport or cached scroll geometry.
         # Preserve the saved position until showEvent can restore it visibly.
@@ -575,7 +601,7 @@ class EpubViewer(QWidget):
                 return
             if applied or attempt >= self.MAX_RESTORE_RETRIES:
                 # Once retries end, captures and saves must use the live position.
-                self._pending_scroll = 0.0
+                self._pending_scroll = None
             else:
                 QTimer.singleShot(16, self, lambda: self._restore_scroll(generation, attempt + 1))
 
@@ -648,17 +674,34 @@ class EpubViewer(QWidget):
         try:
             url = self._chapter_url(i, fragment, href)
         except (OSError, ValueError) as error:
-            self._pending_scroll = 0.0
+            self._pending_scroll = None
             self._pending_highlight = None
             self._set_chapter(self._idx)
             self._show_error(f"Could not read chapter: {error}")
             return
         self._set_chapter(i)
+        self._position_known = True
+        same_document = (self._document_loaded and self._requested_url.isLocalFile() and
+                         Path(url.toLocalFile()).resolve() == Path(self._requested_url.toLocalFile()).resolve())
         self._current_path = self._source_paths[str(Path(url.toLocalFile()).resolve())]
         self._error.hide()
         self._requested_url = url
         self._load_generation += 1
-        self._document_loaded = False
+        requested = self._pending_scroll if self._pending_scroll is not None else 0.0
+        if same_document:
+            # Chromium treats the page already shown as an in-page jump, with
+            # no load events: restore the requested place directly.
+            self._requested_scroll = requested
+            self._stale_scroll = self._web.page().scrollPosition().y()
+            self._scroll_fresh = False
+            if fragment:
+                self._web.setUrl(url)
+            generation = self._load_generation
+            QTimer.singleShot(0, self, lambda: self._restore_location(generation))
+            return
+        # Until it loads, this chapter's place is its requested one, never the
+        # outgoing chapter's scroll still cached by Qt.
+        self._begin_document(requested)
         self._web.load(url)
         self._apply_zoom()
 
@@ -694,17 +737,22 @@ class EpubViewer(QWidget):
         if target != url:
             # Leave Chromium's navigation callback before starting another load.
             request.reject()
-            self._pending_scroll = 0.0
+            self._pending_scroll = None
             self._set_highlight_source(None)
             QTimer.singleShot(0, self, lambda: self._load(i, url.fragment(), href))
             return
         if i != self._idx:
-            self._pending_scroll = 0.0
+            self._pending_scroll = None
             self._set_chapter(i)
         if url != self._requested_url:
             self._load_generation += 1
-            self._pending_scroll = 0.0
+            self._pending_scroll = None
             self._set_highlight_source(None)
+            if not self._requested_url.isLocalFile() or (
+                    Path(url.toLocalFile()).resolve() != Path(self._requested_url.toLocalFile()).resolve()):
+                # Another document: report its top until it has loaded.
+                self._begin_document(0.0)
+            self._position_known = True
         self._current_path = str(source)
         self._error.hide()
         self._requested_url = url
@@ -718,19 +766,20 @@ class EpubViewer(QWidget):
             self._on_loaded()
         elif info.status() == QWebEngineLoadingInfo.LoadStatus.LoadFailedStatus:
             self._document_loaded = False
+            self._position_known = False  # keep the previously saved place
             self._web.hide()
             self._show_error(f"Could not read chapter: {info.errorString()}")
         elif info.status() == QWebEngineLoadingInfo.LoadStatus.LoadStartedStatus:
             self._document_loaded = False
 
     def _go(self, delta: int):
-        self._pending_scroll = 0.0
+        self._pending_scroll = None
         self._set_highlight_source(None)
         self._load(self._idx + delta)
 
     def _jump(self, i: int):
         if i != self._idx:
-            self._pending_scroll = 0.0
+            self._pending_scroll = None
             self._set_highlight_source(None)
             self._load(i)
 
@@ -744,7 +793,12 @@ class EpubViewer(QWidget):
     def source_location(self):
         page = self._web.page()
         height = max(1.0, page.contentsSize().height())
-        fraction = self._pending_scroll or max(0.0, min(1.0, page.scrollPosition().y() / height))
+        if self._document_loaded and self._pending_scroll is not None:
+            fraction = self._pending_scroll
+        elif not (self._document_loaded and self._scroll_fresh):
+            fraction = self._requested_scroll  # Qt may still cache the old document's scroll
+        else:
+            fraction = max(0.0, min(1.0, page.scrollPosition().y() / height))
         source = {"kind": "epub", "filename": self._fname, "chapter": self._idx,
                   "scroll": fraction}
         # Footnotes and tables of contents can be outside the reading spine.
@@ -835,7 +889,7 @@ class EpubViewer(QWidget):
 
     def save_position(self) -> None:
         """Read Qt's cached scroll position synchronously, including on close."""
-        if not (self._storage and self._module):
+        if not (self._storage and self._module) or not self._position_known:
             return
         source = self.source_location()
         pos = {"chapter": self._idx, "scroll": source["scroll"], "zoom": self._zoom}

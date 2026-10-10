@@ -257,6 +257,6 @@ wait_for(focused_passage, lambda: js(reopened, """JSON.stringify({
 for _ in range(20):
     QTest.qWait(20)
     assert focused_passage()
-assert reopened._pending_scroll == 0
+assert reopened._pending_scroll is None
 assert reopened._pending_highlight is None
 ''')

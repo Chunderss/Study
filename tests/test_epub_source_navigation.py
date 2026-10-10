@@ -63,7 +63,7 @@ def fraction():
 
 wait_for(lambda: viewer._web.title() == expected_title and not viewer._web.page().isLoading())
 wait_for(lambda: abs(fraction() - 0.65) < 0.02)
-wait_for(lambda: viewer._pending_scroll == 0)
+wait_for(lambda: viewer._pending_scroll is None)
 assert viewer._zoom == 1.5
 assert viewer.source_location()["chapter"] == 1
 assert viewer.source_location().get("href") == source.get("href")
@@ -75,7 +75,7 @@ viewer = window.workspace.focused.component
 assert isinstance(viewer, EpubViewer)
 wait_for(lambda: viewer._web.title() == "One" and not viewer._web.page().isLoading())
 wait_for(lambda: abs(fraction() - 0.25) < 0.02)
-wait_for(lambda: viewer._pending_scroll == 0)
+wait_for(lambda: viewer._pending_scroll is None)
 assert viewer._zoom == 1.5
 assert viewer.source_location()["chapter"] == 0
 assert "href" not in viewer.source_location()

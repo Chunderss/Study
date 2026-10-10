@@ -135,11 +135,24 @@ interface's first run downloads both when WordNet is the configured dictionary b
 missing. `DOCTOR` and `DISAMBIG` report a missing tagger. Console commands
 other than the main Vocab/reader lookup path run synchronously.
 
-Leitner schedules reviews across five boxes (1, 3, 7, 16, 35 days). Each answer saves
-progress immediately. Mechanical mode keeps the reference answer and score visible
-until **Continue**. Study All writes each review to its original module.
+Leitner schedules reviews across five boxes, 1, 3, 7, 16 and 35 calendar days apart.
+Each answer saves progress immediately. Mechanical mode keeps the reference answer and
+score visible until **Continue**. Study All writes each review to its original module.
 Cards changed, deleted, or reviewed in another session are skipped with a notice,
 preserving the newer progress.
+
+Intervals count calendar days on this computer's clock. A card answered on Monday with a
+3-day interval is due from the start of Thursday (local midnight), whatever time you
+answered; a missed card is due again from the start of the next day, which after a
+late-night session can be minutes away. The day always starts at midnight. A day is 23
+or 25 hours long across a daylight-saving change, and where the clocks jump forward at
+midnight the day starts at its first hour. Learning concepts follow the same rule. Each
+due date is saved as the moment its day starts where you answered. After a change of time
+zone, or of daylight-saving rules, a card is due from the start of the local day that
+contains that moment: moving east keeps its date, moving west can bring it a day earlier,
+never later. The app may notice a new time zone only after a restart. Progress saved by
+earlier versions, due a whole number of 24-hour periods after the answer, is due from the
+start of that day.
 
 Outside mechanical mode, Space or Enter reveals the answer, J or Y records **Got it**,
 F or N records **Missed it**, and Esc ends the session. These keys count alone or with

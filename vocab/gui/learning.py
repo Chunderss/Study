@@ -108,7 +108,7 @@ class ReviewDialog(QDialog):
         self.error = plain_label("")
         layout.addWidget(self.error)
         row = QHBoxLayout()
-        self.again = QPushButton("Needs work · 1 day")
+        self.again = QPushButton("Needs work · tomorrow")
         self.good = QPushButton("Understood")
         self.again.clicked.connect(lambda: self.rate("again"))
         self.good.clicked.connect(lambda: self.rate("good"))

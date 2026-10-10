@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from vocab.algorithms.base import Review, get_scheduler
-from vocab.algorithms.leitner import _INTERVALS, _DAY
+from vocab.algorithms.leitner import _INTERVALS, local_day_start
 from vocab.cli.app import App
 from vocab.cli.parser import parse
 from vocab.cli.repl import Repl
@@ -111,10 +111,10 @@ class TestLeitner(unittest.TestCase):
     def test_promote_and_demote(self):
         now = 1_000_000.0
         c = self.sched.new_card()
-        self.assertTrue(self.sched.is_due(c, now))     # box1 due immediately
+        self.assertTrue(self.sched.is_due(c, now))     # a new card is due at once
         c = self.sched.review(c, Review.GOOD, now)
         self.assertEqual(c["box"], 2)
-        self.assertAlmostEqual(c["due"], now + _INTERVALS[2] * _DAY)
+        self.assertEqual(c["due"], local_day_start(now, _INTERVALS[2]))
         self.assertFalse(self.sched.is_due(c, now))    # not due until interval
         # a wrong answer sends it back to box 1
         c = self.sched.review(c, Review.AGAIN, now)

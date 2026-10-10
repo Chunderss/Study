@@ -3,6 +3,7 @@ import json
 import pytest
 
 from vocab.cli.app import App
+from vocab.algorithms.leitner import local_day_start
 from vocab.core.learning import LearningStore
 
 
@@ -31,7 +32,7 @@ def test_capture_review_round_trip_does_not_touch_vocab_progress(learning):
     assert learning.due({item["id"]: reloaded}, 101) == []
     assert learning.storage.load_stats("Book") == {}
     learning.review("Book", item["id"], reloaded["revision"], "I forgot the mechanism.", "again", now=200)
-    assert learning.load("Book")[item["id"]]["card"]["due"] == 200 + 86400
+    assert learning.load("Book")[item["id"]]["card"]["due"] == local_day_start(200, 1)
 
 
 def test_open_questions_persist_without_scheduled_reviews(learning):

@@ -63,6 +63,8 @@ STUDYING
   STUDYALL                   study due cards mixed across ALL modules
                              (progress is written back to each word's home module)
   STATS [module]             show box/progress for each word
+                             (a card is due from local midnight 1, 3, 7, 16 or
+                             35 calendar days after the day you answered it)
 
 MODES & ALGORITHM
   MODE                       show study mode (reveal vs. write-the-definition)

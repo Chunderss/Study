@@ -113,6 +113,7 @@ def test_review_hides_source_until_attempt_and_never_grades_automatically(window
     store = LearningStore(window.app.storage)
     item = capture(store)
     review = ReviewDialog(window.ctx, "Book", item)
+    assert review.again.text() == "Needs work · tomorrow"   # due from the next day's start
     assert review.reference.isHidden()
     assert not review.reference.toPlainText()
     assert not review.reveal.isEnabled()

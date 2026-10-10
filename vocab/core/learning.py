@@ -144,8 +144,13 @@ class LearningStore:
         return self.scheduler.due_order({key: item["card"] for key, item in items.items()
                                          if item["kind"] == "concept"}, now)
 
-    def status(self, item):
+    def status(self, item, now=None):
         if item["kind"] == "question":
             return "Resolved" if item["resolved"] else "Open question"
-        due = item["card"]["due"]
-        return "Due now" if due <= time.time() else "Review " + datetime.fromtimestamp(due).strftime("%b %d")
+        now = time.time() if now is None else now
+        if self.scheduler.is_due(item["card"], now):
+            return "Due now"
+        try:
+            return "Review " + datetime.fromtimestamp(item["card"]["due"]).strftime("%b %d")
+        except (OverflowError, OSError, ValueError):
+            return "Review later"

@@ -89,4 +89,5 @@ OTHER
   DOCTOR                     diagnose setup (runtime, dictionaries, POS tagger)
   HELP                       show this help
   QUIT / EXIT                leave the program
+      Ctrl-C cancels a running command; at the prompt it leaves.
 """

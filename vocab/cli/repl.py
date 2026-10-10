@@ -262,13 +262,23 @@ class Repl:
             self.echo(self.app.migration_note + "\n")
         if self.app.config.load_error:
             self.echo("! " + self.app.config.load_error + "\n")
-        self._startup_checks()
+        try:
+            self._startup_checks()
+        except KeyboardInterrupt:
+            # A Ctrl-C elsewhere in the checks than the download, which
+            # handles its own (importing nltk can take a while).
+            self.echo("\nSkipped the startup checks; DOCTOR runs them.")
         while True:
             try:
                 line = self.prompt(self.app.prompt_prefix)
             except EOFError:
                 self.echo("\nGoodbye.")
                 return
+            except KeyboardInterrupt:
+                # Ctrl-C at the prompt leaves, as before, but without a
+                # traceback; the caller keeps the interrupt's exit status.
+                self.echo("\nGoodbye.")
+                raise
             try:
                 cmd = parse(line)  # a syntax error is reported like any other
                 if cmd is None:
@@ -277,6 +287,11 @@ class Repl:
             except EOFError:
                 self.echo("Goodbye.")
                 return
+            except KeyboardInterrupt:
+                # Ctrl-C cancels the running command only. Every write is
+                # atomic or rolled back, and STUDY saves each answer at once.
+                self.echo("\nCancelled.")
+                continue
             except Exception as e:  # handler-level errors shown, loop survives
                 self.echo(f"! {e}")
                 continue

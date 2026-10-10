@@ -268,6 +268,8 @@ python -m pytest -q
 ```
 
 The optional terminal interface remains available as `python -m vocab` or `vocab`.
+There, Ctrl-C cancels a running command and returns to the prompt; at the prompt it
+leaves. A data folder that cannot be created or written is reported in one line.
 GUI tests use Qt's offscreen platform and temporary data directories. Linux still
 needs Qt's system libraries (including GL, EGL, and xkbcommon); EPUB rendering also
 requires the Qt WebEngine runtime libraries.

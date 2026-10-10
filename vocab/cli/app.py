@@ -620,11 +620,9 @@ class App:
                     break
                 pos = f"{view.pos}: " if view.pos else ""
                 echo(f"  {pos}{view.definition}")
-                verdict = prompt("  did you get it? [y/N]: ").strip().lower()
-                try:
-                    session.answer(verdict in ("y", "yes"))
-                except StudyCardUnavailable as error:
-                    echo(str(error))
+                # Enter means missed, as it always has.
+                if self._record_verdict(session, prompt, echo, False) is _STOP:
+                    break
 
         summary = session.finish()
         return f"\n{summary}"
@@ -650,9 +648,10 @@ class App:
 
     @staticmethod
     def _ask_verdict(prompt: Prompt, suggested: Optional[bool]) -> Optional[bool]:
-        """Ask whether an answer was right. Enter keeps the suggestion; with
-        none (a card the judge cannot grade) it asks again. y/yes and n/no
-        choose, q stops (None), and any other reply asks again."""
+        """Ask whether an answer was right. Enter keeps the suggestion (the
+        judge's verdict, or missed in reveal mode); with none (a card the judge
+        cannot grade) it asks again. y/yes and n/no choose, q stops (None), and
+        any other reply asks again."""
         choices = {None: "[y/n]", True: "[Y/n]", False: "[y/N]"}[suggested]
         while True:
             reply = prompt(f"  did you get it? {choices} (or 'q'): ").strip().lower()

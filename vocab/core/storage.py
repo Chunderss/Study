@@ -168,8 +168,11 @@ def parse_import(raw, *, with_stats=False, card_problem=None):
         raise ValueError("it is not a Vocab Study export or words.json (no \"words\" object)")
     inner = raw["words"]
     nested = inner.get("words")
-    # An entry has "senses"; a bundle's inner words.json has its own "words".
-    if isinstance(nested, dict) and "senses" not in nested:
+    # A bundle has no top-level "schema" and its inner words.json has its own
+    # "words" map. In a bare words.json that is an entry, with a "senses" list;
+    # in a bundle "senses" can only be a word (an entry object).
+    if ("schema" not in raw and isinstance(nested, dict)
+            and not isinstance(nested.get("senses"), list)):
         document, progress = inner, raw.get("stats")
     else:
         document, progress = raw, None

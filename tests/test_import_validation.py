@@ -121,6 +121,21 @@ def test_failed_publication_leaves_nothing_and_a_retry_works(app, tmp_path, monk
     assert app.storage.load_stats("Copy")["ephemeral"]["reps"] == 4
 
 
+def test_words_named_like_format_keys_round_trip(app, tmp_path):
+    for word in ("senses", "words", "schema"):
+        app.cmd_add(word, target="Source", manual_def=f"the word {word}")
+    bundle = tmp_path / "bundle.json"
+    app.cmd_export("Source", str(bundle), include_stats=True)
+    app.cmd_import(str(bundle), "Copy", True)
+    app.cmd_import(str(bundle), "Fresh", False)
+    words = json.loads(app.paths.words_file("Source").read_text(encoding="utf-8"))
+    words.pop("schema")
+    app.cmd_import(str(write(tmp_path, words, "no-schema.json")), "Bare", False)
+    expected = ["ephemeral", "run", "schema", "senses", "words"]
+    for name in ("Copy", "Fresh", "Bare"):
+        assert sorted(app.storage.load_words(name).words) == expected
+
+
 def test_schedulers_keep_their_contract():
     from vocab.algorithms.base import Scheduler
 

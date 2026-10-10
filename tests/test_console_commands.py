@@ -60,3 +60,12 @@ def test_console_rejects_a_body_where_none_is_taken_and_keeps_the_draft(window):
     log = console(window, "STUDY Book :: oops")
     assert log.count("'::' starts a definition or note text") == 2
     assert studies == []
+
+
+def test_console_multiword_terms(window):
+    log = console(window, "ADD ice cream :: frozen dessert")
+    assert "Added 'ice cream'" in log
+    assert window.app.storage.load_words("Book").words["ice cream"].primary_definition() == \
+        "frozen dessert"
+    console(window, "DEL ice cream")
+    assert window.app.storage.load_words("Book").words == {}

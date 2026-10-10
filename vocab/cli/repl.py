@@ -96,17 +96,17 @@ class Repl:
         if v == "ADD":
             if not a:
                 return "Usage: ADD <word>   or   ADD <word> :: <definition>"
-            return app.cmd_add(a[0], manual_def=cmd.body)
+            return app.cmd_add(" ".join(a), manual_def=cmd.body)
         if v == "ADDL":
             if len(a) < 2:
                 return "Usage: ADDL <list> <word>   or   ADDL <list> <word> :: <definition>"
-            return app.cmd_add(a[1], target=a[0], manual_def=cmd.body)
+            return app.cmd_add(" ".join(a[1:]), target=a[0], manual_def=cmd.body)
         if v == "DEL":
             return app.cmd_delete_word(" ".join(a)) if a else "Usage: DEL <word>"
         if v == "DELL":
             if len(a) < 2:
                 return "Usage: DELL <list> <word>"
-            return app.cmd_delete_word(a[1], target=a[0])
+            return app.cmd_delete_word(" ".join(a[1:]), target=a[0])
 
         if v == "DICT":
             return self._dict(a)

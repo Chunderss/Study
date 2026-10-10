@@ -33,10 +33,12 @@ MODULES & NAVIGATION
 
 VOCAB
   ADD <word>                 add <word> to the current module (a word already
-                             there keeps its entry)
+                             there keeps its entry); <word> may be several
+                             words:  ADD ice cream
   ADD <word> :: <definition> add with your OWN definition (skips the dictionary;
                              replaces an existing entry)
-  ADDL <module> <word>       add <word> to a specific module
+  ADDL <module> <word>       add <word> to a specific module; quote a module
+                             name with spaces:  ADDL "Moby Dick" sperm whale
   DEL <word>                 remove <word> from the current module
   DELL <module> <word>       remove <word> from a specific module
 

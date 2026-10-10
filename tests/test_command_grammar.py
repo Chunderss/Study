@@ -173,3 +173,54 @@ def test_separator_is_rejected_where_no_body_is_taken(app):
     assert "std::vector" in app.storage.load_words("Book").words
     run(app, 'DEL "std::vector"')
     assert "std::vector" not in app.storage.load_words("Book").words
+
+
+# ---- multi-word terms ------------------------------------------------------
+def test_multiword_terms_round_trip_in_current_module(app):
+    assert "Added 'ice cream'" in run(app, "ADD ice cream :: frozen dessert")
+    assert definition(app, "ice cream") == "frozen dessert"
+    assert "Removed 'ice cream'" in run(app, "DEL ice cream")
+    run(app, "ADD ephemeral :: brief")  # one-word terms are unchanged
+    assert sorted(app.storage.load_words("Book").words) == ["ephemeral"]
+
+
+def test_multiword_terms_round_trip_in_a_quoted_module(app):
+    run(app, 'CREATE "Moby Dick"')
+    run(app, 'ADDL "Moby Dick" sperm whale :: a large toothed whale')
+    assert definition(app, "sperm whale", "Moby Dick") == "a large toothed whale"
+    run(app, "ADDL Book hot dog :: sausage")
+    assert definition(app, "hot dog") == "sausage"
+    assert "Removed 'sperm whale'" in run(app, 'DELL "Moby Dick" sperm whale')
+    assert "Removed 'hot dog'" in run(app, "DELL Book hot dog")
+    assert app.storage.load_words("Moby Dick").words == {}
+    assert app.storage.load_words("Book").words == {}
+
+
+def test_multiword_lookup_uses_the_whole_term(app, monkeypatch):
+    from vocab.core.models import Sense
+    looked_up = []
+    monkeypatch.setattr(app, "_lookup_senses", lambda word, sentence="": (
+        looked_up.append(word) or ([Sense("a looked-up sense")], "wordnet", "")))
+    run(app, "ADD ice cream")
+    run(app, 'ADDL Book "hot dog"')
+    run(app, "ADD rock 'n' roll")
+    assert looked_up == ["ice cream", "hot dog", "rock 'n' roll"]
+    assert sorted(app.storage.load_words("Book").words) == ["hot dog", "ice cream", "rock 'n' roll"]
+
+
+def test_multiword_terms_with_real_wordnet(app):
+    from vocab.dictionaries.wordnet import WordNet
+    if not WordNet().available():
+        pytest.skip("the WordNet corpus is not installed (set NLTK_DATA)")
+    assert "frozen dessert" in run(app, "ADD ice cream")
+    run(app, "ADDL Book hot dog")
+    run(app, "ADD rock 'n' roll")
+    words = app.storage.load_words("Book").words
+    assert sorted(words) == ["hot dog", "ice cream", "rock 'n' roll"]
+    assert {word.dictionary for word in words.values()} == {"wordnet"}
+    assert definition(app, "ice cream").startswith("frozen dessert containing cream")
+    assert "popular music" in definition(app, "rock 'n' roll")
+    run(app, "DEL ice cream")
+    run(app, "DELL Book hot dog")
+    run(app, "DEL rock 'n' roll")
+    assert app.storage.load_words("Book").words == {}

@@ -14,7 +14,9 @@ The original archive is preserved beside the updated source folder.
 - Save uses the loaded note's module identity, even if the current module has changed.
 - Closing the application handles all unsaved drafts with Save/Discard/Cancel.
   Failed saves leave the window and drafts intact.
-- Note creation is exclusive; duplicate names cannot overwrite an existing note.
+- Note creation is exclusive; duplicate names cannot overwrite an existing note. This
+  includes the Console's `NOTE ADD <name>`; only `NOTE ADD <name> :: <text>` replaces
+  a note's text, and it replies "Replaced".
 - Deleting a note clears source and preview across open views. Explicit module/note
   deletions also discard the corresponding drafts.
 - Concurrent external edits are detected before saving a draft.

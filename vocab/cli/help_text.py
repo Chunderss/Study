@@ -45,7 +45,10 @@ VOCAB
 NOTES  (markdown; edit bodies comfortably in the desktop app)
   NOTE                       list notes in the current module
   NOTE VIEW <name>           print a note
-  NOTE ADD <name> [:: text]  create/replace a note (omit text, then edit in GUI)
+  NOTE ADD <name>            create an empty note (an existing note is kept);
+                             write it in the desktop app
+  NOTE ADD <name> :: <text>  create a note with <text>, or REPLACE all of an
+                             existing note's text with <text>
   NOTE DEL <name>            delete a note
 
 DICTIONARIES  (many installed, one active)

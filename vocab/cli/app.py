@@ -485,12 +485,23 @@ class App:
         return self.storage.load_note(target, note)
 
     @in_transaction
-    def cmd_note_add(self, note: str, content: str = "",
+    def cmd_note_add(self, note: str, content: Optional[str] = None,
                      module: Optional[str] = None) -> str:
+        """Create a note. Without ``content`` an existing note is left exactly as
+        it is; with ``content`` (even "") the note is created or its text replaced."""
         target = self._resolve_target(module)
-        stem = self.storage.save_note(target, note, content)
-        where = "the GUI" if not content else "this note"
-        return f"Saved note '{stem}' in '{target}'.  (edit it in {where})"
+        if content is None:
+            try:
+                stem = self.storage.create_note(target, note)  # exclusive
+            except FileExistsError:
+                stem = self.storage.canonical_note_name(target, note)
+                return (f"Note '{stem}' already exists in '{target}'; it was left unchanged.  "
+                        f"(NOTE VIEW \"{stem}\" shows it; edit it in the desktop app)")
+            return f"Created note '{stem}' in '{target}'.  (edit it in the desktop app)"
+        existed = self.storage._note_path(target, note).is_file()
+        self.storage.save_note(target, note, content)
+        stem = self.storage.canonical_note_name(target, note)
+        return f"{'Replaced' if existed else 'Created'} note '{stem}' in '{target}'."
 
     @in_transaction
     def cmd_note_delete(self, note: str, module: Optional[str] = None) -> str:

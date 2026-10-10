@@ -5,9 +5,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QTextCursor
 from PySide6.QtTest import QTest
 
-from .test_gui_reliability import qt, window
+from .test_gui_reliability import qt, window, select
 from vocab.gui.components import ConsoleComponent
 
 
@@ -69,3 +70,47 @@ def test_console_multiword_terms(window):
         "frozen dessert"
     console(window, "DEL ice cream")
     assert window.app.storage.load_words("Book").words == {}
+
+
+def open_note(window, note="One"):
+    window.workspace.set_focused_component("notes")
+    notes = window.workspace.focused.component
+    window.ctx.changed.emit()
+    select(notes, note)
+    return notes, window.ctx.notes.buffers[("Book", note)]
+
+
+def test_bodyless_note_add_keeps_a_clean_editor_and_its_undo(window, qt):
+    notes, buffer = open_note(window)
+    notes.editor.setFocus()
+    notes.editor.moveCursor(QTextCursor.End)
+    QTest.keyClicks(notes.editor, " and more")
+    notes.save()
+    path = window.app.storage._note_path("Book", "One")
+    saved = path.read_bytes()
+    log = console(window, "NOTE ADD One")
+    assert "'One' already exists" in log
+    qt.processEvents()
+    assert path.read_bytes() == saved
+    assert buffer.document.toPlainText() == "original and more"
+    assert buffer.document.isUndoAvailable()
+
+
+def test_bodyless_note_add_keeps_a_dirty_draft_saveable(window, qt):
+    buffer = dirty_draft(window)
+    console(window, "NOTE ADD One")
+    qt.processEvents()
+    assert window.app.storage.load_note("Book", "One") == "original"
+    assert window.app.storage.load_note_draft("Book", "One")["content"] == "unsaved draft"
+    assert buffer.document.toPlainText() == "unsaved draft"
+    buffer.save()  # no false "changed on disk" conflict
+    assert window.app.storage.load_note("Book", "One") == "unsaved draft"
+
+
+def test_console_quoted_note_name(window):
+    log = console(window, 'NOTE ADD "My Note" :: first line')
+    assert "Created note 'My Note'" in log
+    assert window.app.storage.load_note("Book", "My Note") == "first line"
+    log = console(window, 'NOTE ADD "My Note"')
+    assert "'My Note' already exists" in log
+    assert window.app.storage.load_note("Book", "My Note") == "first line"

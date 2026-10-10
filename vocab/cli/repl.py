@@ -59,7 +59,7 @@ class Repl:
 
     # ---- dispatch -------------------------------------------------------
     def dispatch(self, cmd: Command) -> Optional[str]:
-        v, a, raw = cmd.verb, cmd.args, cmd.raw
+        v, a = cmd.verb, cmd.args
         app = self.app
 
         if v in ("QUIT", "EXIT"):
@@ -91,7 +91,7 @@ class Repl:
             return app.cmd_ls(" ".join(a) if a else None)
 
         if v == "NOTE":
-            return self._note(a, raw)
+            return self._note(a, cmd.body)
 
         if v == "ADD":
             if not a:
@@ -159,12 +159,13 @@ class Repl:
             return self.app.cmd_dict_list()
         return "Usage: DICT [list | use <id> | install <id>]"
 
-    def _note(self, a: List[str], raw: str) -> str:
+    def _note(self, a: List[str], body: Optional[str]) -> str:
         """NOTE subcommands:
           NOTE                      list notes in current module
           NOTE LIST [module]        list notes
           NOTE VIEW <name>          print a note's markdown
-          NOTE ADD <name> [:: text] create/overwrite a note (edit body in the GUI)
+          NOTE ADD <name>           create an empty note; an existing note is kept
+          NOTE ADD <name> :: text   create a note with text, or replace a note's text
           NOTE DEL <name>           delete a note
         """
         if not a:
@@ -177,14 +178,8 @@ class Repl:
                 return "Usage: NOTE VIEW <name>"
             return self.app.cmd_note_view(" ".join(a[1:]))
         if sub == "ADD":
-            # support optional inline body:  NOTE ADD <name> :: <markdown>
-            body = ""
-            rest = raw.split(None, 2)  # ["NOTE", "ADD", "<name...>"]
-            name_and_body = rest[2] if len(rest) > 2 else ""
-            if "::" in name_and_body:
-                name, body = [s.strip() for s in name_and_body.split("::", 1)]
-            else:
-                name = name_and_body.strip()
+            # body is None without '::', so an existing note is never blanked.
+            name = " ".join(a[1:])
             if not name:
                 return "Usage: NOTE ADD <name> [:: markdown text]"
             return self.app.cmd_note_add(name, body)

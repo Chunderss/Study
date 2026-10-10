@@ -224,3 +224,50 @@ def test_multiword_terms_with_real_wordnet(app):
     run(app, "DELL Book hot dog")
     run(app, "DEL rock 'n' roll")
     assert app.storage.load_words("Book").words == {}
+
+
+# ---- NOTE ADD --------------------------------------------------------------
+def test_bodyless_note_add_keeps_an_existing_note(app):
+    app.storage.save_note("Book", "Chapter 1", "hours of notes\n")
+    path = app.storage._note_path("Book", "Chapter 1")
+    before = path.read_bytes()
+    for line in ("NOTE ADD Chapter 1", 'NOTE ADD "Chapter 1"'):
+        reply = run(app, line)
+        assert "'Chapter 1' already exists" in reply and "left unchanged" in reply
+        assert "::" not in reply  # never suggests the form that replaces the text
+    assert path.read_bytes() == before
+
+
+def test_bodyless_note_add_creates_an_empty_note(app):
+    assert "Created note 'My Note'" in run(app, 'NOTE ADD "My Note"')
+    assert "Created note 'Bob's plan'" in run(app, "NOTE ADD Bob's plan")
+    assert app.storage.load_note("Book", "My Note") == ""
+    assert app.storage.load_note("Book", "Bob's plan") == ""
+
+
+def test_note_add_with_text_creates_or_replaces(app):
+    assert "Created note 'My Note'" in run(app, r'NOTE ADD "My Note" :: # Plan "A" \ draft')
+    assert app.storage.load_note("Book", "My Note") == r'# Plan "A" \ draft'
+    assert "Replaced note 'My Note'" in run(app, 'NOTE ADD "My Note" :: second')
+    assert app.storage.load_note("Book", "My Note") == "second"
+    # An explicit empty body is a deliberate replace.
+    assert "Replaced note 'My Note'" in run(app, 'NOTE ADD "My Note" ::')
+    assert app.storage.load_note("Book", "My Note") == ""
+
+
+def test_bodyless_note_add_keeps_a_windows_case_alias_and_a_legacy_name(app, monkeypatch):
+    storage = app.storage
+    storage.save_note("Book", "One", "original")
+    notes_dir = storage.paths.notes_dir("Book")
+    (notes_dir / "Double.md.md").write_text("legacy text", encoding="utf-8")
+    original = storage._note_path
+
+    def insensitive(*args, **kwargs):  # Windows: existing names match in any case
+        path = original(*args, **kwargs)
+        return next((p for p in path.parent.iterdir()
+                     if p.name.casefold() == path.name.casefold()), path)
+    monkeypatch.setattr(storage, "_note_path", insensitive)
+    assert "'One' already exists" in run(app, "NOTE ADD one")
+    assert "'Double.md' already exists" in run(app, "NOTE ADD Double.md")
+    assert (notes_dir / "One.md").read_text(encoding="utf-8") == "original"
+    assert (notes_dir / "Double.md.md").read_text(encoding="utf-8") == "legacy text"

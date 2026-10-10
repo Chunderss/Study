@@ -473,3 +473,38 @@ def test_export_and_import_keep_the_choice(app, monkeypatch, tmp_path):
     say(app, f"IMPORT {tmp_path / 'out.json'} as Copy")
     assert raw(app, "flag", "Copy") == raw(app, "flag")
     assert raw(app, "flag", "Copy")["choice"] == "user"
+
+
+# ---- --restart -------------------------------------------------------------
+def test_sense_starts_the_reviews_over_only_when_asked(app, monkeypatch):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    stats = app.storage.load_stats("Book")
+    stats["flag"]["box"] = 3
+    app.storage.save_stats("Book", stats)
+    progress = app.paths.stats_file("Book").read_bytes()
+    assert say(app, "SENSE 2 flag").splitlines()[0].endswith("(its progress is kept)")
+    assert app.paths.stats_file("Book").read_bytes() == progress
+    reply = say(app, "SENSE 3 --restart flag")  # the flag may go anywhere
+    assert reply.splitlines()[0] == ("'flag' in 'Book' now studies: verb: decorate with flags"
+                                     "  (its reviews start over, due now)")
+    assert app.storage.load_stats("Book")["flag"] == app.scheduler.new_card()
+    stats = app.storage.load_stats("Book")
+    stats["flag"]["box"] = 4
+    app.storage.save_stats("Book", stats)
+    reply = say(app, "SENSE --RESTART 1 flag")  # the same sense: only the reviews restart
+    assert reply.splitlines()[0].startswith("'flag' in 'Book' keeps studying: verb: decorate")
+    assert app.storage.load_stats("Book")["flag"]["box"] == 1
+    assert say(app, "SENSE --restart flag").startswith("Usage: SENSE <n> <word> [--restart]")
+
+
+def test_a_failed_progress_write_leaves_the_senses_as_they_were(app, monkeypatch):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    before = app.paths.words_file("Book").read_bytes()
+
+    def fail(name, stats):
+        raise OSError("disk full")
+    monkeypatch.setattr(app.storage, "save_stats", fail)
+    assert say(app, "SENSE 2 flag --restart") == "! disk full"
+    assert app.paths.words_file("Book").read_bytes() == before

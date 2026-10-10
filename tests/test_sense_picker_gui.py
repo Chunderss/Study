@@ -407,3 +407,31 @@ def test_the_vocab_list_keeps_its_place_and_shows_words_as_typed(window, qt, mon
     window.app.cmd_use("Other")
     window.ctx.module_changed.emit("Other")
     assert scroll.value() == 0  # another module starts at the top
+
+
+def test_the_picker_starts_the_reviews_over_only_when_asked(window, qt, monkeypatch, no_dialogs):
+    vocab, native = reader_add(window, qt, monkeypatch)
+    stats = window.app.storage.load_stats("Book")
+    stats["flag"]["box"] = 3
+    window.app.storage.save_stats("Book", stats)
+    picker = window.sense_picker
+    leader(native, Qt.Key_W)
+    QTest.keyClick(native, Qt.Key_Tab)    # to "Start its reviews over"
+    assert qt.focusWidget() is picker.restart and not picker.restart.isChecked()
+    QTest.keyClick(native, Qt.Key_Space)
+    assert picker.restart.isChecked()
+    QTest.keyClick(native, Qt.Key_Tab, Qt.ShiftModifier)
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Return)
+    assert definitions(window, "flag")[0] == "become less intense"
+    assert window.app.storage.load_stats("Book")["flag"] == window.app.scheduler.new_card()
+    assert picker.status.text().endswith("(its reviews start over, due now)")
+    assert not picker.restart.isChecked()  # asked again for the next choice
+    stats = window.app.storage.load_stats("Book")
+    stats["flag"]["box"] = 2
+    window.app.storage.save_stats("Book", stats)
+    picker.list.setFocus()
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Return)
+    assert window.app.storage.load_stats("Book")["flag"]["box"] == 2

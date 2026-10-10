@@ -20,8 +20,8 @@ from .parser import Command, parse
 
 # Sense-selection engines, which SENSE <engine> still switches to (see DISAMBIG).
 ENGINES = ("nlp", "ollama", "base")
-SENSE_USAGE = ("Usage: SENSE <n> <word>   (SENSES <word> numbers its senses; DISAMBIG shows "
-               "how the first one is chosen)")
+SENSE_USAGE = ("Usage: SENSE <n> <word> [--restart]   (SENSES <word> numbers its senses; "
+               "DISAMBIG shows how the first one is chosen)")
 
 
 def _takes_body(cmd: Command) -> bool:
@@ -221,9 +221,10 @@ class Repl:
         the old, undocumented alias of DISAMBIG."""
         if len(a) == 1 and a[0].lower() in ENGINES:
             return self.app.cmd_disambig(a[0])
-        if len(a) < 2 or not re.fullmatch(r"[\d,]+", a[0]):
+        rest, restart = _without_flag(a, "--restart")
+        if len(rest) < 2 or not re.fullmatch(r"[\d,]+", rest[0]):
             return SENSE_USAGE
-        return self.app.cmd_sense(a[0], " ".join(a[1:]))
+        return self.app.cmd_sense(rest[0], " ".join(rest[1:]), restart=restart)
 
     def _dict(self, a: List[str]) -> str:
         if not a:

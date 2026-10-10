@@ -44,7 +44,8 @@ VOCAB
                              the sentence it was added from; --all also lists
                              its dictionary's senses that were not saved
   SENSE <n> <word>           study sense <n> of the latest SENSES list instead;
-                             <word> keeps its progress
+                             <word> keeps its progress, unless --restart
+                             (anywhere) starts its reviews over
   DEL <word>                 remove <word> from the current module
   DELL <module> <word>       remove <word> from a specific module
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QListWidget,
+from PySide6.QtWidgets import (QCheckBox, QFrame, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QPushButton, QVBoxLayout)
 
 from shiboken6 import isValid
@@ -85,6 +85,9 @@ class SensePicker(QFrame):
         self.status.setTextFormat(Qt.PlainText)
         self.status.setWordWrap(True)
         root.addWidget(self.status)
+        self.restart = QCheckBox("Start its reviews over")
+        self.restart.setToolTip("Unchecked, the word keeps its progress when you choose a sense.")
+        root.addWidget(self.restart)
         buttons = QHBoxLayout()
         self.use_btn = QPushButton("Study this sense")
         self.use_btn.clicked.connect(self.use_current)
@@ -193,9 +196,11 @@ class SensePicker(QFrame):
             elif listing.note and not status:
                 status = listing.note
         self.list.setCurrentRow(-1)  # Enter acts only on a row the user picked
+        self.restart.setChecked(False)  # asked for each choice, never carried over
         self.list.setAccessibleDescription(self.state.text())
         usable = listing is not None and not listing.manual
         self.use_btn.setEnabled(usable)
+        self.restart.setEnabled(usable)
         self.more_btn.setEnabled(usable and not listing.extra)
         self.status.setText(status)
 
@@ -240,7 +245,8 @@ class SensePicker(QFrame):
 
     def _choose(self, chosen) -> None:
         try:
-            reply, listing = self.app.choose_senses(self._listing, chosen)
+            reply, listing = self.app.choose_senses(self._listing, chosen,
+                                                    restart=self.restart.isChecked())
         except Exception as error:
             self.ctx.log.emit(f"! {error}")
             self._load(status=f"! {error}")
@@ -268,12 +274,13 @@ class SensePicker(QFrame):
                 current.module, current.key, current.expected):
             return  # the word changed meanwhile; its list was reloaded
         listing = current.with_extra(result.extra, result.note)
-        row = self.list.currentRow()
+        row, restart = self.list.currentRow(), self.restart.isChecked()
         self._listing = listing
         count = len(listing.extra)
         self._fill(listing, status=listing.note or (
             f"{count} more from {listing.dictionary}, saved only if you choose one."))
-        self.list.setCurrentRow(row)
+        self.list.setCurrentRow(row)  # the same word: keep the user's place
+        self.restart.setChecked(restart)
 
     # ---- focus and placement ---------------------------------------------
     def focus_list(self) -> None:

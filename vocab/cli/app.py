@@ -619,15 +619,17 @@ class App:
 
     @in_transaction
     def choose_senses(self, listing: SenseListing, chosen: List[int],
-                      command: bool = False) -> tuple[str, SenseListing]:
+                      command: bool = False, restart: bool = False) -> tuple[str, SenseListing]:
         """Study ``listing.offered[i]`` for i in ``chosen`` (0-based): move it
         to the front, adding it when it is an extra dictionary sense.
 
         Refused, writing nothing, when the word or its module changed since
         the listing was read (another window or process, a newer lookup, a
         module recreated under the same name) or the word has your own
-        definition. Progress (stats.json) is not touched. Returns the reply
-        (without the new numbering) and the word's listing after the change.
+        definition. Progress (stats.json) is not touched unless ``restart``
+        asks for the word's reviews to start over, as for a new word; then
+        both files are written together. Returns the reply (without the new
+        numbering) and the word's listing after the change.
         """
         typed = _typed_word(listing.word, command)
         name, module = listing.word, listing.module
@@ -656,27 +658,37 @@ class App:
             raise ValueError(f"'{name}' has {count} sense{'' if count == 1 else 's'} to choose "
                              f"from; choose {'1' if count == 1 else f'1 to {count}'}.{hint}")
         wl = self.storage.load_words(module)
+        stats = self.storage.load_stats(module) if restart else None  # validated first
         word = wl.words[listing.key]
         new = reorder(word, offered, chosen)
         first = new.senses[0]
         what = f"{first.pos + ': ' if first.pos else ''}{first.definition}"
-        if new.senses == word.senses and word.chosen:
+        if new.senses == word.senses and word.chosen and not restart:
             reply = f"'{name}' in '{module}' already studies: {what}  (nothing was changed)"
         else:
             wl.add(new)
-            self.storage.save_words(wl)  # its progress (stats.json) is kept as it is
-            if new.senses == word.senses:
-                reply = f"'{name}' in '{module}' keeps studying: {what}  (now chosen by you)"
+            progress = "its progress is kept"
+            if restart:
+                stats[listing.key] = self.scheduler.new_card()
+                self.storage.save_words_and_stats(wl, stats)
+                progress = "its reviews start over, due now"
             else:
-                reply = f"'{name}' in '{module}' now studies: {what}  (its progress is kept)"
+                self.storage.save_words(wl)  # its progress (stats.json) is kept as it is
+            if new.senses != word.senses:
+                reply = f"'{name}' in '{module}' now studies: {what}  ({progress})"
+            elif restart:
+                reply = f"'{name}' in '{module}' keeps studying: {what}  ({progress})"
+            else:
+                reply = f"'{name}' in '{module}' keeps studying: {what}  (now chosen by you)"
             if len(new.senses) > len(word.senses):
                 reply += (f"\n    Saved from {listing.dictionary}; '{name}' now has "
                           f"{len(new.senses)} senses.")
         return reply, self.sense_listing(module, name)
 
-    def cmd_sense(self, numbers: str, word: str) -> str:
-        """SENSE <n> <word>: study sense n of the latest SENSES list of word,
-        or of its senses as saved when this session listed none."""
+    def cmd_sense(self, numbers: str, word: str, restart: bool = False) -> str:
+        """SENSE <n> <word> [--restart]: study sense n of the latest SENSES
+        list of word, or of its senses as saved when this session listed
+        none; --restart also starts its reviews over."""
         chosen = parse_sense_numbers(numbers)
         if len(chosen) > 1:
             raise ValueError(f"Choose one sense:  SENSE {chosen[0]} {_typed_word(word.strip())}")
@@ -685,7 +697,8 @@ class App:
         listed = listing is not None
         if not listed:
             listing = self.sense_listing(module, word)
-        reply, after = self.choose_senses(listing, [n - 1 for n in chosen], command=True)
+        reply, after = self.choose_senses(listing, [n - 1 for n in chosen], command=True,
+                                          restart=restart)
         self._sense_listings[(module, after.key)] = after
         reply = "\n".join([reply] + self._sense_rows(after.senses, studied=1))
         if not listed:

@@ -179,7 +179,8 @@ In the terminal and the Console, `SENSES word` lists the senses saved for a word
 the one studied with `*` and shows that sentence; `SENSES word --all` also lists the
 senses of its dictionary that were not saved. `SENSE 3 word` studies sense 3 of that
 list instead: it moves to the front, a sense from `--all` is saved, no sense is
-removed, and the word keeps its progress. If the word changed in another window or
+removed, and the word keeps its progress; `SENSE 3 word --restart` also starts its
+reviews over, as for a new word. If the word changed in another window or
 program since it was listed, nothing is changed and SENSE asks you to list it again.
 A word with your own definition (`word :: definition`) has no senses to choose.
 
@@ -190,8 +191,9 @@ it from anywhere (before Esc does anything else), and Ctrl+B `w` moves into it, 
 reopens it for the last word looked up. Each word in the Vocab list is a link to its
 senses, and the list keeps its place when it updates. The picker shows the module and dictionary, whether the
 first sense was chosen automatically or by you, and the sentence. Enter (or a double
-click) studies the highlighted sense at once, keeping the word's progress; choosing again
-undoes it. **All senses** looks up the dictionary's other senses in the background; one
+click) studies the highlighted sense at once, keeping the word's progress unless you tick
+**Start its reviews over** first (it unticks itself after each choice); choosing again
+undoes the choice. **All senses** looks up the dictionary's other senses in the background; one
 is saved only if you choose it. A list that changed in another window or program is
 reloaded with nothing highlighted, and a choice made from an outdated list is refused,
 so Enter never acts on a sense you did not pick. The Console uses `SENSES` and `SENSE`.

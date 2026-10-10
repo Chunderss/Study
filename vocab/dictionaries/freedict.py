@@ -6,12 +6,14 @@ and read timeouts), so this backend is deliberately defensive:
 
     * sends a real User-Agent (bare urllib gets 403'd)
     * short connect/read timeout
-    * a couple of retries with backoff
+    * a couple of retries with backoff, for network errors and for a reply
+      that arrives truncated or garbled (never for our own errors)
     * raises LookupFailed(recoverable=True) on transient errors so the CLI can
       offer a manual-definition fallback instead of crashing.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -54,33 +56,56 @@ class FreeDictionary(Dictionary):
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     data = json.load(resp)
-                return self._parse(data)
+                break
             except urllib.error.HTTPError as e:
                 if e.code == 404:
                     raise LookupFailed(f"'{word}' not found.", recoverable=False)
                 last_exc = e
-            except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
+            # Network failures (OSError covers URLError, timeouts and resets),
+            # and a reply that arrived truncated or garbled (IncompleteRead,
+            # BadStatusLine, bytes that are not JSON text): another attempt may
+            # get a whole one. Anything else is our own error and is raised.
+            except (OSError, http.client.HTTPException,
+                    json.JSONDecodeError, UnicodeDecodeError) as e:
                 last_exc = e
             if attempt < self.retries:
                 time.sleep(0.6 * (attempt + 1))
-        raise LookupFailed(
-            f"Could not reach the dictionary ({type(last_exc).__name__}). "
-            f"Check your connection or add a definition manually.",
-            recoverable=True,
-        )
+        else:
+            raise LookupFailed(
+                f"Could not reach the dictionary ({type(last_exc).__name__}). "
+                f"Check your connection or add a definition manually.",
+                recoverable=True,
+            )
+        return self._parse(data)  # a well-formed reply is not fetched again
 
     @staticmethod
     def _parse(data) -> List[Sense]:
+        # Valid JSON in a shape the service does not document is its problem,
+        # not proof that the word does not exist.
+        unexpected = LookupFailed(
+            "The dictionary sent a reply in an unexpected format. "
+            "Try again later or add a definition manually.", recoverable=True)
+        if not isinstance(data, list):
+            raise unexpected
         senses: List[Sense] = []
-        for entry in data if isinstance(data, list) else []:
-            for meaning in entry.get("meanings", []):
-                pos = meaning.get("partOfSpeech", "")
-                for d in meaning.get("definitions", []):
-                    text = (d.get("definition") or "").strip()
+        for entry in data:
+            meanings = entry.get("meanings", []) if isinstance(entry, dict) else None
+            if not isinstance(meanings, list):
+                raise unexpected
+            for meaning in meanings:
+                definitions = meaning.get("definitions", []) if isinstance(meaning, dict) else None
+                if not isinstance(definitions, list):
+                    raise unexpected
+                pos = meaning.get("partOfSpeech")
+                for d in definitions:
+                    if not isinstance(d, dict):
+                        raise unexpected
+                    text, example = d.get("definition"), d.get("example")
+                    text = text.strip() if isinstance(text, str) else ""
                     if text:
                         senses.append(Sense(
-                            definition=text, pos=pos,
-                            example=(d.get("example") or "").strip(),
+                            definition=text, pos=pos if isinstance(pos, str) else "",
+                            example=example.strip() if isinstance(example, str) else "",
                         ))
         if not senses:
             raise LookupFailed("No definitions returned.", recoverable=False)

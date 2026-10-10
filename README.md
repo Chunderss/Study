@@ -99,8 +99,9 @@ launch other apps, and LaTeX/Mermaid rendering is not provided.
 
 ## Dictionaries and study
 
-The portable desktop build includes WordNet and the part-of-speech tagger. Online Free
-Dictionary remains available. When a word is added from a sentence (from the EPUB
+The portable desktop build includes WordNet and the part-of-speech tagger, and reads
+NLTK data only from its `_internal` folder: `nltk_data` folders and `NLTK_DATA` elsewhere
+on the computer cannot replace them. Online Free Dictionary remains available. When a word is added from a sentence (from the EPUB
 reader), sense selection keeps the senses of the word's part of speech in that sentence
 and puts the one whose definition shares the most words with it first. The part of
 speech is usually right; the chosen sense is a best guess, so check it.

@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import zipfile
 
 import pytest
 pytest.importorskip("PySide6")
@@ -116,9 +117,28 @@ main()
 '''
 
 
-def run_smoke(home, mode, bundle=None):
-    # A simulated packaged app sees only its bundle's NLTK data.
+def plant_user_nltk_data(user):
+    """NLTK data a user's own NLTK left unzipped, cut short as an interrupted
+    unzip leaves it: the tagger in ~/nltk_data (also %APPDATA%\\nltk_data here)
+    and WordNet in an NLTK_DATA folder. NLTK reads an unzipped folder in any
+    data root before a zip. Returns the environment that names NLTK_DATA."""
+    from vocab.nltk_resources import NLTK_PACKAGES, POS_TAGGER
+    taggers = user / "nltk_data" / "taggers"
+    with zipfile.ZipFile(real_nltk.require(NLTK_PACKAGES[POS_TAGGER])) as archive:
+        archive.extractall(taggers)
+    damaged = list((taggers / POS_TAGGER).glob("*.json"))
+    assert damaged
+    for part in damaged:
+        part.write_bytes(part.read_bytes()[:999])
+    (user / "env_nltk_data" / "corpora" / "wordnet").mkdir(parents=True)
+    return {"NLTK_DATA": str(user / "env_nltk_data")}
+
+
+def run_smoke(home, mode, bundle=None, user_env=None):
+    # A simulated packaged app sees only its bundle's NLTK data, unless the
+    # test gives its user some.
     env = real_nltk.isolated_env(bundle.parent / "user") if bundle else dict(os.environ)
+    env.update(user_env or {})
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
     if sys.platform == "win32":
         env["QT_QPA_PLATFORM"] = "windows"  # the smoke opens a real EPUB reader
@@ -132,22 +152,25 @@ def run_smoke(home, mode, bundle=None):
                                         ("error-with-result", 1), ("label-with-result", 1),
                                         ("late-error", 1), ("no-pos-data", 1),
                                         ("noun-pos", 1), ("frozen", 0),
-                                        ("frozen-pip-advice", 1)])
+                                        ("frozen-user-data", 0), ("frozen-pip-advice", 1)])
 def test_smoke_exit_status_reflects_failures(tmp_path, tmp_path_factory, mode, code):
-    bundle = None
+    bundle = user_env = None
     if mode.startswith("frozen"):
         bundle = tmp_path_factory.mktemp("packaged") / "_internal"
         real_nltk.bundle_copy(bundle / "nltk_data")
         (bundle.parent / "user").mkdir()
+    if mode == "frozen-user-data":
+        # The packaged app reads only its bundle, so these cannot replace it.
+        user_env = plant_user_nltk_data(bundle.parent / "user")
     started = time.monotonic()
-    result = run_smoke(tmp_path, mode, bundle)
+    result = run_smoke(tmp_path, mode, bundle, user_env)
     if code is None:
         assert result.returncode != 0, result.stdout + result.stderr  # aborted
     else:
         assert result.returncode == code, result.stdout + result.stderr
     # Every run reaches the learning review; a clean run also opens both documents.
     assert (tmp_path / "modules" / "DesktopCheck" / "learning.json").is_file()
-    if mode in ("clean", "frozen"):
+    if mode in ("clean", "frozen", "frozen-user-data"):
         documents = tmp_path / "modules" / "DesktopCheck" / "documents"
         assert (documents / "check.epub").is_file() and (documents / "check.pdf").is_file()
     log = tmp_path / "desktop.log"
@@ -179,8 +202,9 @@ def test_smoke_exit_status_reflects_failures(tmp_path, tmp_path_factory, mode, c
         # The smoke ran DOCTOR's packaged branch, and rejects source-install advice.
         doctor = (tmp_path / "doctor.txt").read_text(encoding="utf-8")
         assert "Runtime     : packaged app" in doctor.splitlines()
-        if mode == "frozen":
+        if mode in ("frozen", "frozen-user-data"):
             assert "OK: using the offline dictionary" in doctor, doctor
+            assert "POS tagger  : present" in doctor.splitlines(), doctor
             assert not log.exists() or not log.read_text(encoding="utf-8").strip()
         else:
             assert "Packaged DOCTOR gives source-install advice" in result.stderr

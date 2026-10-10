@@ -86,9 +86,13 @@ def main() -> None:
         raise SystemExit(1)
     try:
         # PyInstaller places bundled data inside _MEIPASS, never the working dir.
+        # Read NLTK data only from there: NLTK prefers an unzipped folder in any
+        # data root to a zip in the first one, so a user's own (perhaps damaged)
+        # tagger or WordNet folder in ~/nltk_data, %APPDATA%\nltk_data or
+        # NLTK_DATA would replace the bundled zips.
         if getattr(sys, "frozen", False):
             import nltk
-            nltk.data.path.insert(0, str(Path(sys._MEIPASS) / "nltk_data"))
+            nltk.data.path[:] = [str(Path(sys._MEIPASS) / "nltk_data")]
         from .main_window import MainWindow
         from . import theme
         app.setStyleSheet(theme.stylesheet())

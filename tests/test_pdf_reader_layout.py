@@ -97,6 +97,14 @@ def test_fit_width_and_custom_zoom_are_remembered(window, qt):
     assert mode(viewer) == "FitToWidth"
 
 
+def test_an_older_record_of_fit_width_opens_fitted(window):
+    make_pdf(window)
+    # Older versions saved Fit width as the stale factor 1.0.
+    window.app.storage.save_reading_pos("Book", "book.pdf", {"page": 0, "zoom": 1.0})
+    viewer = window._open_viewer(str(window.app.paths.documents_dir("Book") / "book.pdf"))
+    assert mode(viewer) == "FitToWidth"
+
+
 @pytest.mark.parametrize("saved, factor", [({"page": 0, "zoom": 1.5}, 1.5), ({"zoom": 50}, 5.0),
                                            ({"zoom": 0.001}, 0.1)])
 def test_older_records_and_extreme_zoom_open_as_custom(window, saved, factor):
@@ -118,3 +126,15 @@ def test_zooming_in_from_fit_width_enlarges_the_page(window, qt):
     settle(qt)
     assert viewer._view.zoomFactor() == pytest.approx(shown * 1.25)
     assert viewer._view.horizontalScrollBar().maximum() > 0  # now wider than the pane
+
+
+def test_a_zoom_step_never_goes_the_wrong_way(window, monkeypatch):
+    make_pdf(window)
+    viewer = window._open_viewer(str(window.app.paths.documents_dir("Book") / "book.pdf"))
+    monkeypatch.setattr(viewer, "_effective_zoom", lambda: 6.0)  # Fit width above the limit
+    viewer._zoom(1.25)
+    assert viewer._view.zoomFactor() == pytest.approx(6.0)
+    monkeypatch.setattr(viewer, "_effective_zoom", lambda: 0.05)
+    viewer._zoom(0.8)
+    assert viewer._view.zoomFactor() == pytest.approx(0.05)
+

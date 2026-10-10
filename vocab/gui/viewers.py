@@ -240,9 +240,10 @@ class PdfViewer(QWidget):
             saved = self._storage.load_reading_pos(self._module, self._fname)
         except Exception:
             saved = {}
-        # Fit width is saved as a mode; a number (also in older records) is a
-        # custom zoom.
-        if saved.get("zoom_mode") != "fit_width" and "zoom" in saved:
+        # Fit width is saved as a mode; a number is a custom zoom. Older
+        # versions saved Fit width as its stale factor 1.0.
+        legacy_fit = "zoom_mode" not in saved and saved.get("zoom") == 1.0
+        if saved.get("zoom_mode") != "fit_width" and not legacy_fit and "zoom" in saved:
             try:
                 zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, float(saved["zoom"])))
                 self._view.setZoomMode(self._view.ZoomMode.Custom)
@@ -341,9 +342,11 @@ class PdfViewer(QWidget):
         return available / width if width > 0 and available > 0 else view.zoomFactor()
 
     def _zoom(self, factor: float):
-        zoom = self._effective_zoom() * factor
+        current = self._effective_zoom()
+        # Fit width can exceed the limits; a step never goes the other way.
+        low, high = min(self.ZOOM_MIN, current), max(self.ZOOM_MAX, current)
         self._view.setZoomMode(self._view.ZoomMode.Custom)
-        self._view.setZoomFactor(max(self.ZOOM_MIN, min(self.ZOOM_MAX, zoom)))
+        self._view.setZoomFactor(max(low, min(high, current * factor)))
 
     def _fit(self):
         from PySide6.QtPdfWidgets import QPdfView

@@ -17,10 +17,8 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QInputDialog, QLabel,
 
 from ..cli.app import App
 from ..core.storage import ModuleNotFound
-from ..dictionaries import get_dictionary
 from ..study.judge import get_judge
 from ..study.session import StudySession
-from . import theme
 from .components import (ConsoleComponent, DocumentsComponent, NotesComponent,
                          VocabComponent)
 from .context import WorkspaceContext
@@ -36,7 +34,6 @@ class MainWindow(QWidget):
     def __init__(self, root=None):
         super().__init__()
         self.app = App(root)
-        self._bootstrap_dictionary()
         self.ctx = WorkspaceContext(self.app)
         self.ctx.study_requested.connect(self._open_study)
         self.ctx.view_requested.connect(self._open_viewer)
@@ -84,11 +81,6 @@ class MainWindow(QWidget):
         # it moves by click or by keyboard. Connect last: a window that failed
         # to finish construction must not keep receiving focus changes.
         QApplication.instance().focusChanged.connect(self._on_focus_changed)
-
-    def _bootstrap_dictionary(self) -> None:
-        # Offline data is bundled by the desktop build. Source users may install
-        # it explicitly; startup must not wait for a download.
-        pass
 
     def _show_message(self, text):
         # Messages have their own line, so the status refresh that runs on

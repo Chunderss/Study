@@ -86,10 +86,8 @@ def test_selection_switch_and_clear_render_immediately(notes, qt):
     assert not notes.editor.isEnabled()
 
 
-def test_preview_toggle_uses_real_tmux_keys_and_preserves_text(qt, tmp_path, monkeypatch):
+def test_preview_toggle_uses_real_tmux_keys_and_preserves_text(qt, tmp_path):
     from vocab.gui.main_window import MainWindow
-    # No dictionary setup/network is needed to exercise Notes UI.
-    monkeypatch.setattr(MainWindow, "_bootstrap_dictionary", lambda self: None)
     win = MainWindow(root=tmp_path)
     win.app.cmd_create("Book"); win.app.cmd_use("Book")
     win.app.storage.save_note("Book", "One", "# Draft")

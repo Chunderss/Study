@@ -8,8 +8,8 @@ is therefore an ephemeral virtual session, not a persisted mixed list.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from typing import Dict, List, NoReturn
+from dataclasses import dataclass
+from typing import List, NoReturn
 
 from ..algorithms.base import Review, Scheduler
 from ..core.models import Word
@@ -34,13 +34,10 @@ class SessionResult:
     correct: int = 0
     skipped: int = 0        # changed or deleted elsewhere
     ungraded: int = 0       # the judge could not grade the typed answer
-    # home_list -> {word_key -> updated card}; flushed by the caller
-    dirty: Dict[str, Dict[str, dict]] = field(default_factory=dict)
 
-    def mark(self, home_list: str, key: str, card: dict, correct: bool) -> None:
+    def mark(self, correct: bool) -> None:
         self.reviewed += 1
         self.correct += int(correct)
-        self.dirty.setdefault(home_list, {})[key] = card
 
 
 def _due_cards_for_list(storage: Storage, scheduler: Scheduler, name: str,
@@ -207,7 +204,7 @@ class StudySession:
                 sc.card, Review.GOOD if correct else Review.AGAIN, time.time())
             stats[key] = new_card
             self.storage.save_stats(sc.home_list, stats)
-        self.result.mark(sc.home_list, key, new_card, correct)
+        self.result.mark(correct)
         self._i += 1
         return AnswerOutcome(
             correct=correct, box_before=box_before,
@@ -242,10 +239,11 @@ class StudySession:
         self._i += 1
 
     def finish(self) -> str:
-        """Flush all reviewed cards back to their HOME lists; return a summary."""
-        # Reviews were committed when answered. Replaying old cards here could
-        # overwrite progress from another session or resurrect deleted words.
-        self.result.dirty.clear()
+        """Return the session summary.
+
+        Reviews were committed when answered. Replaying old cards here could
+        overwrite progress from another session or resurrect deleted words.
+        """
         acc = (self.result.correct / self.result.reviewed * 100) if self.result.reviewed else 0.0
         summary = f"Session done: {self.result.correct}/{self.result.reviewed} correct ({acc:.0f}%)."
         if self.result.skipped:

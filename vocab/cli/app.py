@@ -11,19 +11,18 @@ import sys
 import time
 from typing import Callable, List, Optional
 
-from ..algorithms.base import Review, get_scheduler
+from ..algorithms.base import get_scheduler
 from ..core.config import Config
 from ..core import migrate as _migrate
 from ..core.models import Sense, Word
-from ..core.paths import InvalidListName, get_paths, sanitize_list_name, sanitize_module_name
+from ..core.paths import get_paths, sanitize_list_name
 from ..core.locking import write_lock
-from ..core.storage import (ListExists, ListNotFound, ModuleExists, ModuleNotFound, Storage,
-                             full_path, in_transaction)
+from ..core.storage import ListNotFound, Storage, full_path, in_transaction
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
 from ..dictionaries.base import SENSE_LIMIT
 from .. import nltk_resources
 from ..study.judge import get_judge
-from ..study.session import SessionResult, StudyCardUnavailable, StudySession, build_session
+from ..study.session import StudyCardUnavailable, StudySession
 from .parser import BODY_SEPARATOR, CommandSyntaxError, quote_arg
 
 # Callbacks the REPL supplies so STUDY can be interactive while staying testable.

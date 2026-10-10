@@ -227,8 +227,11 @@ class App:
                 lines.append(f"Cause: '{self.config.active_dictionary}' reported unavailable. {notice}")
         if tagger_problem and self.config.disambiguator in ("nlp", "ollama"):
             fix = _tagger_fix(tagger_problem)
-            lines.append("Note: sense selection cannot use the word's part of speech, so it")
-            lines.append("ranks definitions by their overlap with the sentence only.")
+            lines.append("Note: sense selection cannot filter definitions by the word's part")
+            if self.config.disambiguator == "nlp":
+                lines.append("of speech, so it ranks them by their overlap with the sentence only.")
+            else:  # the local model still chooses among them
+                lines.append("of speech before the local model chooses among them.")
             lines.append(f"Cause: {tagger_problem.reason}." + (" Fix:" if fix else ""))
             if fix:
                 lines.append(f"  {fix}")

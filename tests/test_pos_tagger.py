@@ -155,6 +155,22 @@ def test_missing_nltk_gives_the_pip_fix_not_dict_install(tmp_path, no_nltk):
     assert ranked[0] is bank[1]
 
 
+@pytest.mark.parametrize("engine", ["nlp", "ollama"])
+def test_doctor_tagger_note_matches_the_engine(tmp_path, monkeypatch, engine):
+    monkeypatch.setattr(nltk_resources, "pos_tagger_problem", lambda: TaggerProblem(
+        f"the NLTK data package '{POS_TAGGER}' is not installed", "no-data"))
+    app = App(root=str(tmp_path))
+    app.config.disambiguator = engine
+    note = " ".join(app.cmd_doctor().split("Note:", 1)[1].split())
+    assert "cannot filter definitions by the word's part of speech" in note
+    assert note.endswith(TAGGER_FIX)
+    if engine == "nlp":
+        assert "ranks them by their overlap with the sentence only" in note
+    else:  # the local model still chooses; only the part-of-speech filter is lost
+        assert "local model chooses among them" in note
+        assert "overlap" not in note and "only" not in note
+
+
 @pytest.fixture
 def downloads(monkeypatch):
     """WordNet works; the tagger is missing until a download brings it."""

@@ -225,7 +225,33 @@ class LearningComponent(BaseComponent):
 
     def refresh(self):
         old = self.selected()
-        old_id = old["id"] if old and self.module == self.app.current_module else None
+        same_module = self.module is not None and self.module == self.app.current_module
+        old_id = old["id"] if old and same_module else None
+        scroll = (self.entries.verticalScrollBar().value(),
+                  self.details.verticalScrollBar().value()) if same_module else None
+        # Selecting the same capture again must not scroll the list to it.
+        self.entries.setAutoScroll(scroll is None)
+        try:
+            self._rebuild(old_id)
+        finally:
+            self.entries.setAutoScroll(True)
+        if scroll is not None:
+            self._keep_scroll(old_id, *scroll)
+
+    def _keep_scroll(self, capture_id, entries, details):
+        """A refresh in the same module (a note saved, a word added, another
+        capture changed) keeps the list where it was, and the passage too
+        while the same capture is selected."""
+        def apply():
+            self.entries.doItemsLayout()  # the list lays out its rows lazily
+            self.entries.verticalScrollBar().setValue(entries)
+            selected = self.selected()
+            if capture_id is not None and (selected["id"] if selected else None) == capture_id:
+                self.details.verticalScrollBar().setValue(details)
+        apply()
+        QTimer.singleShot(0, self, apply)  # scroll ranges can settle a moment later
+
+    def _rebuild(self, old_id):
         self.module = self.app.current_module
         self.entries.clear()
         self.items = {}

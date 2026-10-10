@@ -16,6 +16,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -261,8 +262,15 @@ class Storage:
     # ---- notes (notes component) ---------------------------------------
     def _note_path(self, module: str, note: str) -> Path:
         module = sanitize_module_name(module)
-        stem = _sanitize_note_name(note)
-        return self.paths.notes_dir(module) / f"{stem}.md"
+        directory = self.paths.notes_dir(module)
+        # A file saved under a name that is not canonical ("Double.md.md",
+        # "Space .md") stays reachable by the name note_names() lists for it.
+        raw = (note or "").strip()
+        if raw and raw not in (".", "..") and _NOTE_CHARS.match(raw):
+            legacy = directory / f"{raw}.md"
+            if legacy.is_file():
+                return legacy
+        return directory / f"{_sanitize_note_name(note)}.md"
 
     def canonical_note_name(self, module: str, note: str) -> str:
         """The stored spelling of a note.
@@ -271,8 +279,8 @@ class Storage:
         buffers are keyed by the stored name, so callers must use this one.
         Distinct files that differ only in case (Linux) stay distinct.
         """
-        stem = _sanitize_note_name(note)
-        path = self._note_path(module, stem)
+        path = self._note_path(module, note)
+        stem = path.stem
         if path.exists():
             for candidate in path.parent.glob("*.md"):
                 if candidate.stem.casefold() == stem.casefold() and os.path.samefile(candidate, path):
@@ -326,13 +334,20 @@ class Storage:
         p = self._note_path(module, note)
         if not p.exists():
             raise ModuleNotFound(f"Note '{note}' does not exist in '{module}'.")
+        draft = self._draft_path(module, p.stem)  # the deleted note's own draft
         p.unlink()
-        self.clear_note_draft(module, note)
+        draft.unlink(missing_ok=True)
 
     # Recovery copies are separate from Markdown files so Save/Discard keeps
     # its usual meaning. Store the baseline too, for external-edit detection.
     def _draft_path(self, module, note):
-        return self.paths.module_dir(sanitize_module_name(module)) / "drafts" / f"{_sanitize_note_name(note)}.json"
+        # Callers pass a note's stored name (from note_names or create_note), so
+        # use it as is: drafts of "Double.md" and "Double" never share a file,
+        # even after one note's Markdown file is gone.
+        raw = (note or "").strip()
+        valid = raw not in ("", ".", "..") and _NOTE_CHARS.match(raw)
+        stem = raw if valid else _sanitize_note_name(note)
+        return self.paths.module_dir(sanitize_module_name(module)) / "drafts" / f"{stem}.json"
 
     def save_note_draft(self, module, note, baseline, content):
         # Locked so a module deleted by another process is not recreated here.
@@ -431,15 +446,21 @@ class Storage:
         return wl.name
 
 
+_NOTE_CHARS = re.compile(r"^[A-Za-z0-9 _.\-()']+$")
+
+
 def _sanitize_note_name(note: str) -> str:
-    """Note names double as filenames; keep them safe and simple."""
-    import re
+    """Note names double as filenames; keep them safe and simple.
+
+    Idempotent: a returned name normalizes to itself, so it reopens the same
+    note ("Space .md" -> "Space", "Double.md.md" -> "Double").
+    """
     note = (note or "").strip()
+    while note.lower().endswith(".md"):
+        note = note[:-3].rstrip()
     if not note:
         raise ValueError("Note name cannot be empty.")
-    if note.lower().endswith(".md"):
-        note = note[:-3]
-    if not re.match(r"^[A-Za-z0-9 _.\-()']+$", note):
+    if not _NOTE_CHARS.match(note):
         raise ValueError("Note name may only contain letters, numbers, spaces, and _ . - ( ) '")
     if len(note) > 100:
         raise ValueError("Note name too long (max 100 chars).")

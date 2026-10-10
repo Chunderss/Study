@@ -86,7 +86,8 @@ def test_unquoted_native_path_round_trips(app, tmp_path, prefix):
     assert definition(app, "ephemeral", "Copy") == "lasting a short time"
 
 
-def test_unclosed_quote_is_reported_and_writes_nothing(app, tmp_path, monkeypatch):
+def test_unclosed_quote_is_reported_and_writes_nothing(app, tmp_path, monkeypatch,
+                                                       documents_folder):
     cwd = tmp_path / "cwd"
     cwd.mkdir()
     monkeypatch.chdir(cwd)
@@ -94,10 +95,11 @@ def test_unclosed_quote_is_reported_and_writes_nothing(app, tmp_path, monkeypatc
     assert out.count("! Unclosed quote") == 2
     assert "Current list: Book" in out  # the REPL carries on
     assert list(cwd.iterdir()) == []
+    assert list(documents_folder.iterdir()) == []
     assert app.storage.load_words("Book").words == {}
 
 
-def test_a_path_with_quote_characters_is_rejected(app, tmp_path, monkeypatch):
+def test_a_path_with_quote_characters_is_rejected(app, tmp_path, monkeypatch, documents_folder):
     # Single quotes do not group, so a path written in them must not become a
     # file whose name starts or ends with a quote.
     monkeypatch.chdir(tmp_path)
@@ -106,14 +108,16 @@ def test_a_path_with_quote_characters_is_rejected(app, tmp_path, monkeypatch):
                  "IMPORT 'book.json'"):
         assert "cannot start or end with a quote" in run(app, line), line
     assert set(tmp_path.iterdir()) == before
+    assert list(documents_folder.iterdir()) == []
 
 
-def test_stats_flag_anywhere_and_as_in_any_case(app, tmp_path, monkeypatch):
+def test_stats_flag_anywhere_and_as_in_any_case(app, tmp_path, monkeypatch, documents_folder):
     monkeypatch.chdir(tmp_path)
     app.cmd_add("ephemeral", manual_def="lasting a short time")
     assert "(with progress)" in run(app, "EXPORT Book --stats book.json")
-    assert not (tmp_path / "--stats").exists()  # never a file name
-    assert "stats" in json.loads((tmp_path / "book.json").read_text(encoding="utf-8"))
+    assert not (documents_folder / "--stats").exists()  # never a file name
+    assert not (tmp_path / "book.json").exists()  # relative to the folder for files
+    assert "stats" in json.loads((documents_folder / "book.json").read_text(encoding="utf-8"))
     assert "imported progress" in run(app, 'IMPORT --STATS book.json AS "My Copy"')
     assert "ephemeral" in app.storage.load_words("My Copy").words
     assert "fresh progress" in run(app, "IMPORT book.json as Second Copy")
@@ -369,31 +373,35 @@ def test_bodyless_note_add_keeps_a_windows_case_alias_and_a_legacy_name(app, mon
     assert (notes_dir / "Double.md.md").read_text(encoding="utf-8") == "legacy text"
 
 
-def test_relative_paths_are_reported_in_full(app, tmp_path, monkeypatch):
-    # A relative name is relative to the working directory, which depends on
-    # how the program was started (from Explorer, the app's own folder, which
-    # an update may replace), so every reply names the full path.
+def test_relative_paths_are_reported_in_full(app, tmp_path, monkeypatch, documents_folder):
+    # A relative name is a file in the folder for files (the Documents folder
+    # by default), not in the working directory, which depends on how the
+    # program was started; every reply names the full path.
     cwd = tmp_path / "started here"
     cwd.mkdir()
     monkeypatch.chdir(cwd)
+    docs = documents_folder / "sub"
+    docs.mkdir()
+    monkeypatch.setattr(app, "files_folder", lambda: docs)
     app.cmd_add("ephemeral", manual_def="lasting a short time")
-    assert run(app, "EXPORT Book book.json") == f"Exported 'Book' -> {cwd / 'book.json'}"
-    assert (cwd / "book.json").is_file()
-    assert run(app, "EXPORT Book ../up.json") == f"Exported 'Book' -> {tmp_path / 'up.json'}"
-    assert (tmp_path / "up.json").is_file()
-    assert f"from {cwd / 'book.json'} (fresh progress)" in run(app, "IMPORT book.json as Copy")
+    assert run(app, "EXPORT Book book.json") == f"Exported 'Book' -> {docs / 'book.json'}"
+    assert (docs / "book.json").is_file()
+    assert run(app, "EXPORT Book ../up.json") == f"Exported 'Book' -> {documents_folder / 'up.json'}"
+    assert (documents_folder / "up.json").is_file()
+    assert f"from {docs / 'book.json'} (fresh progress)" in run(app, "IMPORT book.json as Copy")
     assert definition(app, "ephemeral", "Copy") == "lasting a short time"
-    (cwd / "broken.json").write_text("{not json", encoding="utf-8")
-    (cwd / "other.json").write_text('{"note": 1}', encoding="utf-8")
-    (cwd / "folder").mkdir()
+    (docs / "broken.json").write_text("{not json", encoding="utf-8")
+    (docs / "other.json").write_text('{"note": 1}', encoding="utf-8")
+    (docs / "folder").mkdir()
     out = loop(app, "IMPORT missing.json", "IMPORT broken.json", "IMPORT other.json",
                "EXPORT Book book.json/x.json", "EXPORT Book folder")
-    assert f"! Import file not found: {cwd / 'missing.json'}\n" in out
-    assert f"! Could not read {cwd / 'broken.json'}: " in out
-    assert f"! Cannot import {cwd / 'other.json'}: " in out
-    assert f"! Could not write {cwd / 'book.json' / 'x.json'}: " in out  # book.json is a file
-    assert f"! Could not write {cwd / 'folder'}: " in out  # not a temporary file's name
+    assert f"! Import file not found: {docs / 'missing.json'}\n" in out
+    assert f"! Could not read {docs / 'broken.json'}: " in out
+    assert f"! Cannot import {docs / 'other.json'}: " in out
+    assert f"! Could not write {docs / 'book.json' / 'x.json'}: " in out  # book.json is a file
+    assert f"! Could not write {docs / 'folder'}: " in out  # not a temporary file's name
     assert set(app.storage.list_names()) == {"Book", "Copy"}
+    assert list(cwd.iterdir()) == []  # the working directory plays no part
     if os.name != "nt":  # a path typed in full is shown as typed, not resolved
         (tmp_path / "real").mkdir()
         (tmp_path / "linked").symlink_to(tmp_path / "real", target_is_directory=True)

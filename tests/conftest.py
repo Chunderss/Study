@@ -38,3 +38,18 @@ def vocab_home(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("vocab-home")
     monkeypatch.setenv("VOCAB_HOME", str(home))
     return home
+
+
+@pytest.fixture(autouse=True)
+def documents_folder(tmp_path_factory, monkeypatch):
+    """Point the Documents folder, where relative paths in EXPORT, IMPORT
+    and the backup commands start, at a new temporary folder for each test,
+    so no test reads or writes the developer's real Documents folder.
+
+    Only this process is covered: a child process a test starts must be
+    given full paths.
+    """
+    from vocab.core import paths
+    folder = tmp_path_factory.mktemp("documents")
+    monkeypatch.setattr(paths, "documents_folder", lambda: folder)
+    return folder

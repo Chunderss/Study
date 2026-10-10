@@ -140,6 +140,11 @@ class Repl:
             return _path_problem(rest[1]) or app.cmd_export(rest[0], rest[1], include_stats=stats)
         if v == "IMPORT":
             return self._import(a)
+        if v == "FOLDER":
+            if len(a) > 1:
+                return ("Usage: FOLDER [<full path> | DEFAULT]   "
+                        "(quote a path that contains spaces)")
+            return (_path_problem(a[0]) if a else None) or app.cmd_folder(a[0] if a else "")
 
         return f"Unknown command '{cmd.verb}'. Type HELP."
 

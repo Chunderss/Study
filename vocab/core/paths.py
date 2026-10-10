@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -199,3 +200,128 @@ def get_paths(root: str | os.PathLike | None = None) -> Paths:
     p = Paths(_normalize_root(root) if root else _default_root())
     p.ensure_base()
     return p
+
+
+# ---- the folder for files ------------------------------------------------
+# Relative paths typed in EXPORT, IMPORT and the backup commands start in one
+# fixed folder, the user's Documents folder unless they choose another, rather
+# than in the working directory, which depends on how the program was started
+# (from Explorer, the app's own folder, which an update replaces).
+
+def _is_folder(path) -> bool:
+    try:
+        return Path(path).is_dir()
+    except OSError:
+        return False
+
+
+def _windows_documents():
+    """The Documents known folder, which follows OneDrive and folder
+    redirection, or None."""
+    import ctypes
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+    # FOLDERID_Documents {FDD39AD0-238F-46AF-ADB4-6C85480369C7}
+    folder_id = GUID(0xFDD39AD0, 0x238F, 0x46AF,
+                     (ctypes.c_ubyte * 8)(0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7))
+    # Own library objects, so these prototypes change nothing shared.
+    shell32 = ctypes.WinDLL("shell32")
+    ole32 = ctypes.WinDLL("ole32")
+    get_path = shell32.SHGetKnownFolderPath
+    get_path.argtypes = [ctypes.POINTER(GUID), wintypes.DWORD, wintypes.HANDLE,
+                         ctypes.POINTER(ctypes.c_void_p)]
+    get_path.restype = ctypes.c_long
+    ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+    ole32.CoTaskMemFree.restype = None
+    buffer = ctypes.c_void_p()
+    try:
+        if get_path(ctypes.byref(folder_id), 0, None, ctypes.byref(buffer)) != 0:
+            return None
+        return Path(ctypes.wstring_at(buffer.value))
+    finally:
+        ole32.CoTaskMemFree(buffer)
+
+
+def _xdg_documents(home: Path):
+    """XDG_DOCUMENTS_DIR from user-dirs.dirs, or None when it is not set."""
+    config = os.environ.get("XDG_CONFIG_HOME", "")
+    config = Path(config) if os.path.isabs(config) else home / ".config"
+    try:
+        text = (config / "user-dirs.dirs").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in text.splitlines():
+        name, _, value = line.strip().partition("=")
+        if name != "XDG_DOCUMENTS_DIR":
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1]
+        if value == "$HOME" or value.startswith("$HOME/"):
+            return Path(str(home) + value[len("$HOME"):])  # "$HOME/" alone: disabled, so home
+        if value.startswith("/"):
+            return Path(value)
+        return None
+    return None
+
+
+def platform_documents_folder() -> Path:
+    """The user's Documents folder, or the home folder when there is none.
+
+    Windows: the Documents known folder, then %USERPROFILE%\\Documents.
+    Linux and BSD: XDG_DOCUMENTS_DIR from user-dirs.dirs. Then ~/Documents.
+    """
+    home = Path.home()
+    candidates = []
+    if os.name == "nt":
+        try:
+            candidates.append(_windows_documents())
+        except (OSError, AttributeError, ValueError):
+            pass
+        profile = os.environ.get("USERPROFILE")
+        if profile:
+            candidates.append(Path(profile) / "Documents")
+    elif sys.platform != "darwin":
+        candidates.append(_xdg_documents(home))
+    candidates.append(home / "Documents")
+    for candidate in candidates:
+        if candidate is not None and _is_folder(candidate):
+            return candidate
+    return home
+
+
+def documents_folder() -> Path:
+    """The default folder for files (tests replace this function)."""
+    return platform_documents_folder()
+
+
+def expand_home(text: str) -> Path:
+    """``text`` as a path, with a leading '~' (alone, or followed by a
+    separator) meaning the home folder. '~user' is not expanded."""
+    seps = ("/", "\\") if os.name == "nt" else ("/",)
+    if text == "~" or any(text.startswith("~" + sep) for sep in seps):
+        return Path(os.path.expanduser(text))
+    return Path(text)
+
+
+def resolve_user_path(text: str, base) -> Path:
+    """The path a file command means by ``text``.
+
+    A full path is returned as typed; '~' is the home folder. A relative
+    path is joined to ``base`` (a folder, or a function returning one, called
+    only for a relative path), with '..' resolved as written. Windows paths
+    relative to a drive ('D:book.json') or to the current drive's root
+    ('\\book.json') are refused, since neither names one file for sure.
+    """
+    path = expand_home(text)
+    if path.is_absolute():
+        return path
+    if path.drive or path.root:
+        raise ValueError(f"{text} is not a full path; give a full path such as "
+                         "C:\\Users\\Pat\\book.json.")
+    folder = base() if callable(base) else base
+    return Path(os.path.normpath(Path(folder) / path))

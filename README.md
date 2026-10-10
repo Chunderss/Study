@@ -251,11 +251,29 @@ Vocabulary sharing remains available through Console commands:
 Without `--stats`, an import starts with fresh progress.
 Windows paths work as typed (backslashes are ordinary characters). Put double quotes
 around a name or path that contains spaces: `IMPORT "C:\Users\Pat Smith\book.json" as NewBook`.
-A relative path such as `book.json` is relative to the folder the program was started
-in, and the reply shows the full path of the file written or read. On Windows, starting
-VocabStudy.exe from Explorer makes that the application folder, which you may delete or
-replace when you install a new build, so give a full path to keep an export elsewhere:
-`EXPORT Book "C:\Users\Pat Smith\Documents\book.json"`.
+
+**Changed in this version: relative paths start in your Documents folder.** A relative
+path such as `book.json`, in the terminal and in the Console, now means a file in the
+*folder for files*, wherever the program was started. It used to mean a file in the
+folder the program was started in, which for VocabStudy.exe started from Explorer is the
+application folder that a new build replaces. The folder for files is your Documents
+folder unless you choose another: on Windows the Documents folder Explorer shows (it
+follows OneDrive and folder redirection), on Linux the XDG documents folder, otherwise
+`~/Documents`, or your home folder when there is none.
+
+- `FOLDER` shows the folder; `FOLDER <full path>` chooses another, which must exist;
+  `FOLDER DEFAULT` goes back to Documents. The choice is saved in `config.json` and used
+  by the terminal and the desktop app. An older version ignores it and drops it the next
+  time it saves a setting.
+- `~/book.json` is in your home folder, and a full path is used exactly as typed. `..`
+  in a relative path is resolved as written. Windows paths relative to a drive
+  (`D:book.json`) or to the current drive's root (`\book.json`) are refused.
+- If the chosen folder is not available (an unplugged drive) or the setting is damaged,
+  commands that use a relative path refuse and say so; nothing falls back to another
+  folder. Full paths still work.
+- Every reply shows the full path of the file written or read. Files exported with a
+  relative path before this change stay where they were written.
+
 These vocabulary exports do not include captures or notes. Back up the complete data
 folder to preserve books, notes, recovery copies, and concept reviews together.
 

@@ -40,7 +40,8 @@ def test_console_exports_to_an_unquoted_native_path(window, tmp_path):
     assert os.path.exists(path)
 
 
-def test_console_reports_an_unclosed_quote_and_keeps_the_line(window, tmp_path, monkeypatch):
+def test_console_reports_an_unclosed_quote_and_keeps_the_line(window, tmp_path, monkeypatch,
+                                                              documents_folder):
     monkeypatch.chdir(tmp_path)
     before = set(tmp_path.iterdir())
     window.workspace.set_focused_component("console")
@@ -51,13 +52,15 @@ def test_console_reports_an_unclosed_quote_and_keeps_the_line(window, tmp_path, 
     QTest.keyClick(component.cmd, Qt.Key_Return)
     assert "! Unclosed quote" in component.out.toPlainText()
     assert set(tmp_path.iterdir()) == before
+    assert list(documents_folder.iterdir()) == []
     # The line stays to be corrected, with the cursor at its end.
     assert component.cmd.text() == 'EXPORT Book "book.json'
     assert component.cmd.cursorPosition() == len(component.cmd.text())
     QTest.keyClicks(component.cmd, '"')
     QTest.keyClick(component.cmd, Qt.Key_Return)
     assert "Exported 'Book'" in component.out.toPlainText()
-    assert (tmp_path / "book.json").is_file() and component.cmd.text() == ""
+    assert (documents_folder / "book.json").is_file() and component.cmd.text() == ""
+    assert not (tmp_path / "book.json").exists()  # not the working directory
     assert "Current list: Book" in console(window, "WHERE")  # the Console carries on
 
 
@@ -128,14 +131,34 @@ def test_console_quoted_note_name(window):
     assert window.app.storage.load_note("Book", "My Note") == "first line"
 
 
-def test_console_reports_the_full_path_of_a_relative_file(window, tmp_path, monkeypatch):
+def test_console_reports_the_full_path_of_a_relative_file(window, tmp_path, monkeypatch,
+                                                          documents_folder):
     started = tmp_path / "app folder"  # the packaged app starts in its own folder
     started.mkdir()
     monkeypatch.chdir(started)
-    bundle = started / "book.json"
+    bundle = documents_folder / "book.json"
     assert f"Exported 'Book' -> {bundle}\n" in console(window, "EXPORT Book book.json")
     assert bundle.is_file()
     log = console(window, "IMPORT book.json as Copy")
     assert f"Imported module 'Copy' from {bundle} (fresh progress)" in log
     log = console(window, "IMPORT gone.json as Other")
-    assert f"! Import file not found: {started / 'gone.json'}" in log
+    assert f"! Import file not found: {documents_folder / 'gone.json'}" in log
+    assert list(started.iterdir()) == []  # never the app's own folder
+
+def test_console_relative_paths_use_the_files_folder(window, tmp_path, monkeypatch,
+                                                     documents_folder):
+    started = tmp_path / "app folder"
+    started.mkdir()
+    monkeypatch.chdir(started)
+    assert f"start in {documents_folder} (your Documents folder)" in console(window, "FOLDER")
+    chosen = tmp_path / "USB stick"
+    chosen.mkdir()
+    log = console(window, f'FOLDER "{chosen}"')
+    assert f"Relative file paths now start in {chosen}." in log
+    assert f"Exported 'Book' -> {chosen / 'book.json'}" in console(window, "EXPORT Book book.json")
+    assert (chosen / "book.json").is_file()
+    assert window.app.config.files_folder == str(chosen)
+    console(window, "FOLDER DEFAULT")
+    console(window, "EXPORT Book book.json")
+    assert (documents_folder / "book.json").is_file()
+    assert list(started.iterdir()) == []

@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 from typing import Callable, List, Optional
 
 from ..algorithms.base import get_scheduler
 from ..core.config import Config
 from ..core import migrate as _migrate
 from ..core.models import Sense, Word
-from ..core.paths import get_paths, sanitize_list_name
+from ..core import paths as _paths
+from ..core.paths import expand_home, get_paths, resolve_user_path, sanitize_list_name
 from ..core.locking import write_lock
 from ..core.storage import ListNotFound, Storage, full_path, in_transaction
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
@@ -536,15 +538,70 @@ class App:
         self.storage.delete_note(target, note)
         return f"Deleted note '{note}' from '{target}'."
 
+    # ---- the folder for files ---------------------------------------------
+    _FOLDER_HINT = ("Choose one with  FOLDER <full path>,  or  FOLDER DEFAULT  for your "
+                    "Documents folder.")
+
+    def files_folder(self) -> Path:
+        """The folder relative paths in file commands start in: the one chosen
+        with FOLDER, or the Documents folder. A chosen folder that is missing
+        (an unplugged drive) or a damaged setting is an error, never silently
+        replaced by another folder, and nothing is created."""
+        setting = self.config.files_folder
+        if setting == "":
+            return _paths.documents_folder()
+        where = self.paths.config_file
+        if not isinstance(setting, str):
+            raise ValueError(f"The folder for files in {where} is not a path ({setting!r}). "
+                             f"{self._FOLDER_HINT}")
+        folder = expand_home(setting)
+        if not folder.is_absolute():
+            raise ValueError(f"The folder for files in {where}, {setting}, is not a full path. "
+                             f"{self._FOLDER_HINT}")
+        if not _paths._is_folder(folder):
+            raise ValueError(f"The folder for files, {folder}, is not available. Connect it, or "
+                             "choose another with  FOLDER <full path>  (FOLDER DEFAULT uses your "
+                             "Documents folder). Paths typed in full still work.")
+        return folder
+
+    def user_path(self, text: str) -> Path:
+        """The file a command means: a full path as typed, '~' the home folder,
+        anything else relative to files_folder(), which only such a path reads."""
+        return resolve_user_path(text, self.files_folder)
+
+    def cmd_folder(self, arg: str = "") -> str:
+        """FOLDER: show, set (FOLDER <full path>) or reset (FOLDER DEFAULT) the
+        folder for files. The setting is saved in config.json."""
+        arg = (arg or "").strip()
+        if not arg:
+            folder = self.files_folder()  # reports a missing or damaged setting
+            if self.config.files_folder == "":
+                return (f"Relative file paths start in {folder} (your Documents folder). Change "
+                        "it with  FOLDER <full path>;  FOLDER DEFAULT goes back to Documents.")
+            return (f"Relative file paths start in {folder}.  FOLDER DEFAULT goes back to your "
+                    f"Documents folder, {_paths.documents_folder()}.")
+        if arg.lower() == "default":
+            self.config.change(self.paths, files_folder="")
+            return f"Relative file paths now start in your Documents folder, {_paths.documents_folder()}."
+        folder = expand_home(arg)
+        if not folder.is_absolute():
+            raise ValueError(f"FOLDER needs a full path, such as {Path.home() / 'Backups'}.")
+        if not _paths._is_folder(folder):
+            raise ValueError(f"{folder} is not a folder that exists. Create it first, or "
+                             "choose another.")
+        self.config.change(self.paths, files_folder=str(folder))
+        return f"Relative file paths now start in {folder}."
+
     # ---- import / export ------------------------------------------------
     def cmd_export(self, name: str, dest: str, include_stats: bool = False) -> str:
         target = self._resolve_target(name)
-        p = self.storage.export_list(target, dest, include_stats=include_stats)
+        p = self.storage.export_list(target, self.user_path(dest), include_stats=include_stats)
         extra = " (with progress)" if include_stats else ""
         return f"Exported '{target}' -> {p}{extra}"
 
     @in_transaction
     def cmd_import(self, src: str, new_name: Optional[str], with_stats: bool) -> str:
+        src = self.user_path(src)
         name = self.storage.import_list(src, new_name=new_name, with_stats=with_stats,
                                         card_problem=self.scheduler.card_problem)
         prog = "imported progress" if with_stats else "fresh progress"

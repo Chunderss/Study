@@ -22,6 +22,7 @@ class Config:
     disambiguator: str = "nlp"            # sense selection in context: nlp | ollama | base
     ollama_model: str = "llama3.2:3b"     # model used when disambiguator == "ollama"
     mechanical_repetition: bool = False   # write-the-definition mode toggle
+    files_folder: str = ""                # where relative file paths start; "" = Documents
 
     # Not a field: set when config.json exists but could not be read.
     load_error = ""

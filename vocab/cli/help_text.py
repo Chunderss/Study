@@ -82,8 +82,17 @@ SHARING
       --stats may go anywhere; the name after AS may be several words.
       Windows paths work as typed; quote a path that contains spaces:
         IMPORT "C:\Users\Pat Smith\book.json" as The Great Gatsby
-      A relative path such as book.json is relative to the folder the
-      program was started in; the reply shows the full path.
+
+FILES  (where EXPORT and IMPORT look for a relative path)
+  FOLDER                     show the folder for files: your Documents
+                             folder unless you chose another
+  FOLDER <full path>         use another (existing) folder for files
+  FOLDER DEFAULT             go back to your Documents folder
+      A relative path such as book.json is a file in that folder, wherever
+      the program was started. ~/book.json is in your home folder, and a full
+      path is used as typed. Replies show the full path.
+      Changed: relative paths used to start in the folder the program was
+      started in.
 
 OTHER
   DOCTOR                     diagnose setup (runtime, dictionaries, POS tagger)

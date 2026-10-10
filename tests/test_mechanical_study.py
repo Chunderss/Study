@@ -12,7 +12,10 @@ PROMPT = "  your definition (or 'q'): "
 
 
 @pytest.fixture
-def app(tmp_path):
+def app(tmp_path, monkeypatch):
+    # Repl.loop() first installs WordNet when it is missing, downloading it
+    # into ~/nltk_data; no test here needs a real dictionary.
+    monkeypatch.setattr(Repl, "_startup_checks", lambda self: None)
     app = App(tmp_path)
     app.cmd_create("Book")
     app.cmd_use("Book")

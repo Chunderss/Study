@@ -358,6 +358,9 @@ class MainWindow(QWidget):
         if self.app.config.load_error:
             labels.append("settings file unreadable, using defaults")
             problems.append(self.app.config.load_error)
+        if self.app.migration_problem:
+            labels.append("legacy lists need attention")
+            problems.append("Legacy lists were not fully migrated: " + self.app.migration_problem)
         try:
             dic, _ = self.app.effective_dictionary()
             dictionary = f"{dic.id} ({'offline' if not dic.requires_network else 'ONLINE'})"

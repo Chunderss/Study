@@ -32,6 +32,7 @@ class App:
         self.paths = get_paths(root)
         # One-time migration from the legacy lists/ layout to modules/.
         self.migration_note = ""
+        self.migration_problem = ""  # kept visible until the migration succeeds
         try:
             created = []
             if _migrate.needs_migration(self.paths):
@@ -44,6 +45,7 @@ class App:
                     f"(a backup was saved alongside): {', '.join(created)}")
         except Exception as e:  # never block startup on migration
             self.migration_note = f"(migration skipped: {e})"
+            self.migration_problem = str(e)
         self.storage = Storage(self.paths)
         try:
             self.storage.purge_leftovers()

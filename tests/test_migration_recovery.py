@@ -44,7 +44,8 @@ def test_failed_copy_retries_without_partial_module_or_backup_collision(tmp_path
     assert source.exists()
     assert not list(tmp_path.glob(".lists-migration-*"))
     assert migrate.migrate(paths) == ["Book"]
-    assert len(list(tmp_path.glob("lists.backup-same-second-*"))) == 2
+    # The retry reuses the verified backup of the unchanged lists.
+    assert len(list(tmp_path.glob("lists.backup-same-second-*"))) == 1
     assert Storage(paths).load_stats("Book")["word"]["box"] == 4
     assert (paths.documents_dir("Book") / "reference.pdf").read_bytes() == b"reference content"
     assert not migrate.needs_migration(paths)
@@ -182,3 +183,62 @@ def test_legacy_changes_during_copy_prevent_retirement(tmp_path, monkeypatch):
         migrate.migrate(paths)
     assert json.loads((source / "stats.json").read_text())["word"]["box"] == 5
     assert not list(tmp_path.glob("lists.migrated-*"))
+
+
+def conflict(paths):
+    legacy_list(paths, "Book")
+    paths.module_dir("Book").mkdir(parents=True)
+    (paths.module_dir("Book") / "module.json").write_text("{}", encoding="utf-8")
+
+
+def backups(tmp_path):
+    return sorted(tmp_path.glob("lists.backup-*"))
+
+
+def test_unchanged_failing_migration_keeps_one_backup(tmp_path):
+    paths = get_paths(tmp_path)
+    conflict(paths)
+    for _ in range(3):
+        with pytest.raises(migrate.MigrationIncomplete, match="existing module.*Book"):
+            migrate.migrate(paths)
+    assert len(backups(tmp_path)) == 1
+
+
+def test_changed_lists_get_a_new_uniquely_named_backup(tmp_path, monkeypatch):
+    paths = get_paths(tmp_path)
+    conflict(paths)
+    monkeypatch.setattr(migrate, "_stamp", lambda: "same-second")
+    with pytest.raises(migrate.MigrationIncomplete):
+        migrate.migrate(paths)
+    (paths.legacy_lists_dir / "Book" / "stats.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(migrate.MigrationIncomplete):
+        migrate.migrate(paths)
+    assert len(backups(tmp_path)) == 2
+
+
+def test_an_incomplete_backup_is_never_trusted(tmp_path):
+    paths = get_paths(tmp_path)
+    conflict(paths)
+    partial = tmp_path / "lists.backup-20000101-000000-partial"
+    (partial / "Book").mkdir(parents=True)
+    (partial / "Book" / "words.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(migrate.MigrationIncomplete):
+        migrate.migrate(paths)
+    assert len(backups(tmp_path)) == 2  # a complete new one beside the partial one
+
+
+def test_one_unusable_list_does_not_block_the_others(tmp_path):
+    paths = get_paths(tmp_path)
+    legacy_list(paths, "Notes")   # a reserved name
+    legacy_list(paths, "Zebra")
+    legacy_list(paths, "Broken")
+    (paths.legacy_lists_dir / "Broken" / "words.json").write_text("{damaged", encoding="utf-8")
+    with pytest.raises(migrate.MigrationIncomplete) as info:
+        migrate.migrate(paths)
+    message = str(info.value)
+    assert "'Notes'" in message and "'Broken'" in message and "Migrated: Zebra" in message
+    assert Storage(paths).list_names() == ["Zebra"]
+    assert migrate.needs_migration(paths)  # the originals stay pending
+    with pytest.raises(migrate.MigrationIncomplete):
+        migrate.migrate(paths)  # a retry keeps Zebra and reports the same two
+    assert Storage(paths).list_names() == ["Zebra"] and len(backups(tmp_path)) == 1

@@ -146,3 +146,23 @@ def test_sidebar_signals_recover_when_listing_itself_fails(window, qt, slot_erro
     rows = [window.module_list.item(i).data(Qt.UserRole) for i in range(window.module_list.count())]
     window.module_list.setCurrentRow(rows.index("Other"))
     assert window.app.current_module == "Other"
+
+
+def test_incomplete_legacy_migration_stays_visible(qt, tmp_path, slot_errors):
+    from vocab.core.paths import get_paths
+    import json
+    legacy = get_paths(tmp_path).legacy_lists_dir / "Notes"  # a reserved name
+    legacy.mkdir(parents=True)
+    (legacy / "words.json").write_text(json.dumps({"name": "Notes", "words": {}}), encoding="utf-8")
+    win = MainWindow(root=tmp_path)
+    try:
+        win.show()
+        for _ in range(2):
+            move_focus(win, qt)
+        assert "legacy lists need attention" in win.status.text()
+        assert "'Notes'" in win.status.toolTip()
+        assert slot_errors == []
+    finally:
+        win.close()
+        win.deleteLater()
+        qt.processEvents()

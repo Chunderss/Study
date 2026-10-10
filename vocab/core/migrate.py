@@ -50,6 +50,36 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+class MigrationIncomplete(RuntimeError, ValueError):
+    """Some legacy lists could not be migrated; lists/ stays pending."""
+
+
+def _listing(folder: Path) -> dict:
+    return {p.relative_to(folder).as_posix(): p.stat().st_size
+            for p in folder.rglob("*") if p.is_file()}
+
+
+def _tree_digest(folder: Path) -> dict:
+    return {p.relative_to(folder).as_posix(): _digest(p)
+            for p in folder.rglob("*") if p.is_file()}
+
+
+def _verified_backup(legacy: Path):
+    """A previous backup holding exactly the current lists/, if there is one.
+
+    A migration that keeps failing then does not copy everything again at
+    every start. An incomplete or outdated backup never matches.
+    """
+    listing, digest = _listing(legacy), None
+    for candidate in sorted(legacy.parent.glob("lists.backup-*"), reverse=True):
+        if not candidate.is_dir() or _listing(candidate) != listing:
+            continue
+        digest = digest or _tree_digest(legacy)
+        if _tree_digest(candidate) == digest:
+            return candidate
+    return None
+
+
 def _fingerprint(source: Path) -> dict:
     files = [source / "words.json"]
     if (source / "stats.json").exists():
@@ -111,46 +141,46 @@ def migrate(paths: Paths) -> List[str]:
     if not needs_migration(paths):
         return []
 
-    # 1. full backup first
-    backup = _archive_path(legacy, "backup")
-    shutil.copytree(legacy, backup)
+    # 1. full backup first (or the verified one of this exact lists/)
+    backup = _verified_backup(legacy)
+    if backup is None:
+        backup = _archive_path(legacy, "backup")
+        shutil.copytree(legacy, backup)
 
     created: List[str] = []
     conflicts: List[str] = []
+    problems: List[str] = []
     paths.modules_dir.mkdir(parents=True, exist_ok=True)
     snapshot = {src.name: _fingerprint(src) for src in _legacy_lists(backup)}
 
     for name, fingerprint in snapshot.items():
         src = backup / name
-        mod_dir = paths.module_dir(name)
+        try:
+            mod_dir = paths.module_dir(name)
+        except ValueError as error:
+            # One unusable name must not block the lists after it.
+            problems.append(f"list '{name}' cannot become a module: {error}")
+            continue
         if mod_dir.exists() or mod_dir.is_symlink():
             if not _already_migrated(mod_dir, name, fingerprint):
                 conflicts.append(name)
             continue
-
-        # A crash may leave staging files behind, but they cannot appear in the
-        # module picker or be mistaken for a completed migration on retry.
-        with tempfile.TemporaryDirectory(prefix=".lists-migration-", dir=paths.root) as temporary:
-            staged = Paths(Path(temporary))
-            staged.ensure_module(name)
-            shutil.copy2(src / "words.json", staged.words_file(name))
-            if (src / "stats.json").exists():
-                shutil.copy2(src / "stats.json", staged.stats_file(name))
-            if (src / "sources").is_dir():
-                shutil.copytree(src / "sources", staged.documents_dir(name), dirs_exist_ok=True)
-            _write_manifest(staged, name, fingerprint)
-            _verify(staged, name, fingerprint)
-            if mod_dir.exists() or mod_dir.is_symlink():
-                raise RuntimeError(f"Migration stopped: module '{name}' appeared while copying.")
-            staged.module_dir(name).rename(mod_dir)
-
+        try:
+            _migrate_one(paths, src, name, fingerprint, mod_dir)
+        except (ValueError, RuntimeError) as error:
+            problems.append(str(error))  # damaged data: report, continue with the rest
+            continue
         created.append(name)
 
     if conflicts:
-        raise RuntimeError(
+        problems.append(
             "Migration needs attention: existing module(s) have no matching completed "
             f"migration: {', '.join(conflicts)}. Existing modules and lists/ were kept "
             "unchanged; resolve the name conflicts before retrying.")
+    if problems:
+        raise MigrationIncomplete(" ".join(problems) + (
+            f" Migrated: {', '.join(created)}." if created else "") +
+            " lists/ was kept, so nothing is lost; fix these and restart to retry.")
     current = {src.name: _fingerprint(src) for src in _legacy_lists(legacy)}
     if current != snapshot:
         raise RuntimeError("Legacy lists changed during migration; lists/ was kept for recovery.")
@@ -159,6 +189,25 @@ def migrate(paths: Paths) -> List[str]:
     retired = _archive_path(legacy, "migrated")
     legacy.rename(retired)
     return created
+
+
+def _migrate_one(paths: Paths, src: Path, name: str, fingerprint: dict, mod_dir: Path) -> None:
+    """Copy one legacy list into a verified module, published in one step."""
+    # A crash may leave staging files behind, but they cannot appear in the
+    # module picker or be mistaken for a completed migration on retry.
+    with tempfile.TemporaryDirectory(prefix=".lists-migration-", dir=paths.root) as temporary:
+        staged = Paths(Path(temporary))
+        staged.ensure_module(name)
+        shutil.copy2(src / "words.json", staged.words_file(name))
+        if (src / "stats.json").exists():
+            shutil.copy2(src / "stats.json", staged.stats_file(name))
+        if (src / "sources").is_dir():
+            shutil.copytree(src / "sources", staged.documents_dir(name), dirs_exist_ok=True)
+        _write_manifest(staged, name, fingerprint)
+        _verify(staged, name, fingerprint)
+        if mod_dir.exists() or mod_dir.is_symlink():
+            raise RuntimeError(f"Migration stopped: module '{name}' appeared while copying.")
+        staged.module_dir(name).rename(mod_dir)
 
 
 def _write_manifest(paths: Paths, name: str, fingerprint: dict) -> None:

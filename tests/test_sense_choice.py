@@ -508,3 +508,100 @@ def test_a_failed_progress_write_leaves_the_senses_as_they_were(app, monkeypatch
     monkeypatch.setattr(app.storage, "save_stats", fail)
     assert say(app, "SENSE 2 flag --restart") == "! disk full"
     assert app.paths.words_file("Book").read_bytes() == before
+
+
+# ---- several senses studied ------------------------------------------------
+def test_sense_keeps_several_in_the_order_given(app, monkeypatch):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag", sentence=VERB_USE)
+    progress = app.paths.stats_file("Book").read_bytes()
+    say(app, "SENSES flag")
+    reply = say(app, "SENSE 3,1 flag")
+    assert reply.splitlines()[0] == (
+        "'flag' in 'Book' now studies 2 senses: verb: decorate with flags; "
+        "noun: a rectangular emblem of cloth  (its progress is kept)")
+    entry = raw(app, "flag")
+    assert senses_of(app, "flag") == [
+        "decorate with flags", "a rectangular emblem of cloth", "become less intense"]
+    assert entry["kept"] == 2 and app.paths.stats_file("Book").read_bytes() == progress
+    rows = numbered(say(app, "SENSES flag"))
+    assert [rows[n].split()[1] for n in (1, 2)] == ["*", "*"] and rows[3].split()[1] == "verb:"
+    assert "decorate with flags (+1 more)" in say(app, "LS")
+    say(app, "SENSE 2 flag")  # one again
+    assert "kept" not in raw(app, "flag")
+
+
+def test_study_shows_every_kept_sense_and_accepts_any_of_them(app, monkeypatch):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    say(app, "SENSE 3,2 flag")
+    shown = []
+    answers = iter(["", "y"])
+    app.run_study(["Book"], lambda prompt: next(answers), shown.append)
+    assert shown[2:5] == ["  1. verb: decorate with flags", "  2. verb: become less intense",
+                          '     "his energy flagged"']
+    assert app.storage.load_stats("Book")["flag"]["box"] == 2
+    stats = app.storage.load_stats("Book")
+    stats["flag"]["due"] = 0
+    app.storage.save_stats("Book", stats)
+    app.config.mechanical_repetition = True
+    shown.clear()
+    answers = iter(["grow less intense", ""])  # right for the second sense only; Enter keeps it
+    app.run_study(["Book"], lambda prompt: next(answers), shown.append)
+    assert app.storage.load_stats("Book")["flag"]["box"] == 3, shown
+    assert not any("Skipped" in line for line in shown)
+    assert "  reference: decorate with flags; become less intense" in shown
+
+
+def test_a_kept_sense_that_cannot_be_graded_leaves_the_others(app, monkeypatch):
+    looked_up(app, monkeypatch, [Sense("…"), Sense("become less intense", "verb")])
+    app.cmd_add("flag")
+    say(app, "SENSE 1,2 flag")
+    app.config.mechanical_repetition = True
+    shown = []
+    answers = iter(["become less intense", ""])  # Enter keeps the judge's verdict
+    app.run_study(["Book"], lambda prompt: next(answers), shown.append)
+    assert app.storage.load_stats("Book")["flag"]["box"] == 2, shown
+
+
+def test_a_session_skips_a_card_whose_kept_senses_changed(app, monkeypatch, tmp_path):
+    from vocab.study.session import StudyCardUnavailable, StudySession
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    session = StudySession(app.storage, app.scheduler, ["Book"])
+    other = App(tmp_path / "home")
+    other.cmd_use("Book")
+    other.cmd_sense("1,2", "flag")  # the same first sense; now two are studied
+    with pytest.raises(StudyCardUnavailable, match="changed in another session"):
+        session.answer(True)
+    assert app.storage.load_stats("Book")["flag"]["box"] == 1
+
+
+@pytest.mark.parametrize("kept", [0, 4, True, "2", 1.5])
+def test_import_rejects_unusable_kept_counts(app, tmp_path, kept):
+    entry = {"senses": [{"definition": d} for d in ("a", "b", "c")], "kept": kept}
+    source = tmp_path / "in.json"
+    source.write_text(json.dumps({"name": "In", "words": {"w": entry}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="'kept' must be a whole number from 1 to 3"):
+        app.cmd_import(str(source), None, with_stats=False)
+
+
+def test_export_and_import_keep_several_senses(app, monkeypatch, tmp_path):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag", sentence=VERB_USE)
+    say(app, "SENSE 3,2 flag")
+    say(app, f"EXPORT Book {tmp_path / 'out.json'}")
+    say(app, f"IMPORT {tmp_path / 'out.json'} as Copy")
+    entry = raw(app, "flag", "Copy")
+    assert entry == raw(app, "flag")
+    assert entry["kept"] == 2 and entry["context"] == VERB_USE and entry["choice"] == "user"
+
+
+def test_a_hand_edited_kept_count_is_read_safely_and_not_rewritten(app):
+    path = app.paths.words_file("Book")
+    path.write_text(json.dumps({"name": "Book", "words": {"flag": {
+        "senses": [{"definition": "a"}, {"definition": "b"}], "kept": 99}}}), encoding="utf-8")
+    before = path.read_bytes()
+    word = app.storage.load_words("Book").words["flag"]
+    assert word.kept == 2 and [s.definition for s in word.kept_senses()] == ["a", "b"]
+    assert path.read_bytes() == before

@@ -21,8 +21,9 @@ word can carry multiple senses (real dictionaries have several)::
 
 Optional keys are written only when set, so other entries stay as they were
 and older builds still read the file: "context" is the sentence a lookup
-ranked the senses for, and "choice" is "user" once the user chose which sense
-comes first (and so is studied).
+ranked the senses for, "choice" is "user" once the user chose which sense
+comes first, and "kept" says how many leading senses are studied (when more
+than the first).
 
 Scheduler state lives in a SEPARATE stats.json so progress is importable on its
 own and the words payload stays a clean, shareable dictionary.
@@ -63,9 +64,14 @@ class Word:
     senses: List[Sense] = field(default_factory=list)
     context: str = ""        # the sentence a lookup ranked the senses for
     choice: str = ""         # "user" once the user chose the first sense
+    kept: int = 1            # how many leading senses are studied
 
     def primary_definition(self) -> str:
         return self.senses[0].definition if self.senses else ""
+
+    def kept_senses(self) -> List[Sense]:
+        """The senses studied: the first ``kept`` (at least the first)."""
+        return self.senses[:max(1, min(self.kept, len(self.senses)))]
 
     def to_dict(self) -> dict:
         d = {
@@ -77,17 +83,24 @@ class Word:
             d["context"] = self.context
         if self.choice:
             d["choice"] = self.choice
+        if self.kept > 1:
+            d["kept"] = self.kept
         return d
 
     @classmethod
     def from_dict(cls, key: str, d: dict) -> "Word":
+        senses = [Sense.from_dict(s) for s in d.get("senses", [])]
+        kept = d.get("kept", 1)
+        if isinstance(kept, bool) or not isinstance(kept, int):
+            kept = 1  # a hand-edited value; import rejects it
         return cls(
             word=key,
             dictionary=str(d.get("dictionary", "")),
             added=str(d.get("added", "")) or utcnow_iso(),
-            senses=[Sense.from_dict(s) for s in d.get("senses", [])],
+            senses=senses,
             context=_text(d.get("context")),
             choice=_text(d.get("choice")),
+            kept=max(1, min(kept, len(senses))),
         )
 
     @property

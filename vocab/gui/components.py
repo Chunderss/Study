@@ -136,11 +136,13 @@ class VocabComponent(BaseComponent):
         blocks, linked = [], []
         for key in sorted(wl.words):
             w = wl.words[key]
-            pos = f"[{w.senses[0].pos}] " if w.senses and w.senses[0].pos else ""
+            studied = "".join(
+                "<br>&nbsp;&nbsp;&nbsp;&nbsp;"
+                + html.escape((f"[{sense.pos}] " if sense.pos else "") + sense.definition)
+                for sense in w.kept_senses())  # one line per sense studied
             # The link names a position, so no word text goes into a URL.
-            blocks.append(f'<p><a href="sense:{len(linked)}">{html.escape(w.word)}</a><br>'
-                          f"&nbsp;&nbsp;&nbsp;&nbsp;{html.escape(pos + w.primary_definition())}"
-                          "</p>")
+            blocks.append(f'<p><a href="sense:{len(linked)}">{html.escape(w.word)}</a>'
+                          f"{studied}</p>")
             linked.append(w.word)
         self._linked, self._linked_module = linked, name
         self.words.setHtml("".join(blocks))

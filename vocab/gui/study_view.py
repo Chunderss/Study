@@ -240,10 +240,18 @@ class StudyView(QWidget):
         if self._revealed or self.session.done:
             return
         view = self.session.current()
-        pos = f"{view.pos}:  " if view.pos else ""
-        text = f"{pos}{view.definition}"
-        if view.example:
-            text += f"\n\n“{view.example}”"
+        if len(view.senses) > 1:  # several senses studied: show them all
+            parts = []
+            for number, sense in enumerate(view.senses, 1):
+                pos = f"{sense.pos}:  " if sense.pos else ""
+                parts.append(f"{number}. {pos}{sense.definition}"
+                             + (f"\n“{sense.example}”" if sense.example else ""))
+            text = "\n\n".join(parts)
+        else:
+            pos = f"{view.pos}:  " if view.pos else ""
+            text = f"{pos}{view.definition}"
+            if view.example:
+                text += f"\n\n“{view.example}”"
         self.answer.setText(text)
         self._revealed = True
         self.reveal_btn.setEnabled(False)

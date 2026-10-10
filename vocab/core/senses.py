@@ -114,6 +114,7 @@ class SenseListing:
     extra: Tuple = ()
     note: str = ""
     chosen: bool = False      # the user chose the first sense
+    kept: int = 1             # how many leading senses are studied
 
     @property
     def key(self) -> str:
@@ -145,7 +146,7 @@ def parse_sense_numbers(text: str) -> List[int]:
 
 def reorder(word, offered, chosen):
     """A copy of ``word`` whose senses start with ``offered[i]`` for each i in
-    ``chosen``, marked as chosen by the user.
+    ``chosen``, in that order, all studied, marked as chosen by the user.
 
     ``offered`` is the word's saved senses followed by any extra dictionary
     senses (SENSES --all). Senses are moved by position, never matched by
@@ -154,4 +155,5 @@ def reorder(word, offered, chosen):
     """
     picked = set(chosen)
     rest = [sense for i, sense in enumerate(word.senses) if i not in picked]
-    return replace(word, senses=[offered[i] for i in chosen] + rest, choice="user")
+    return replace(word, senses=[offered[i] for i in chosen] + rest, choice="user",
+                   kept=len(chosen))

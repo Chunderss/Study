@@ -241,6 +241,9 @@ def _word_entry_problem(key, entry):
             return f"'{field}' must be text"
     if len(entry.get("context", "")) > CONTEXT_LIMIT:
         return f"'context' is longer than {CONTEXT_LIMIT} characters"
+    kept = entry.get("kept", 1)
+    if isinstance(kept, bool) or not isinstance(kept, int) or not 1 <= kept <= len(senses):
+        return f"'kept' must be a whole number from 1 to {len(senses)}, the senses it has"
     return None
 
 

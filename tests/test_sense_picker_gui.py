@@ -435,3 +435,60 @@ def test_the_picker_starts_the_reviews_over_only_when_asked(window, qt, monkeypa
     QTest.keyClick(native, Qt.Key_Down)
     QTest.keyClick(native, Qt.Key_Return)
     assert window.app.storage.load_stats("Book")["flag"]["box"] == 2
+
+
+# ---- several senses studied ------------------------------------------------
+def test_space_checks_several_and_the_button_keeps_them(window, qt, monkeypatch, no_dialogs):
+    vocab, native = reader_add(window, qt, monkeypatch)
+    picker = window.sense_picker
+    assert [picker.list.item(i).checkState() for i in range(3)] == [
+        Qt.Checked, Qt.Unchecked, Qt.Unchecked]
+    leader(native, Qt.Key_W)
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Space)
+    assert picker.list.item(2).checkState() == Qt.Checked
+    QTest.mouseClick(picker.use_btn, Qt.LeftButton)  # Study checked
+    entry = raw(window, "flag")
+    assert entry["kept"] == 2
+    assert definitions(window, "flag") == [
+        "a rectangular emblem of cloth", "decorate with flags", "become less intense"]
+    assert rows(picker)[:2] == ["noun · a rectangular emblem of cloth   (studied)",
+                                "verb · decorate with flags   (studied)"]
+    text = vocab.words.toPlainText()
+    assert "[noun] a rectangular emblem of cloth" in text and "[verb] decorate with flags" in text
+    picker.list.setFocus()
+    picker.list.setCurrentRow(2)
+    QTest.keyClick(picker.list, Qt.Key_Return)  # Enter: only the highlighted sense
+    assert "kept" not in raw(window, "flag")
+    assert definitions(window, "flag")[0] == "become less intense"
+
+
+def test_study_view_shows_and_grades_every_kept_sense(window, qt, monkeypatch):
+    from vocab.gui.study_view import StudyView
+    from vocab.study.judge import KeywordJudge
+    from vocab.study.session import StudySession
+    mock_lookup(window, monkeypatch)
+    window.app.cmd_add("flag", target="Book")
+    window.app.cmd_sense("3,2", "flag")
+    view = StudyView(StudySession(window.app.storage, window.app.scheduler, ["Book"]))
+    view.show()
+    view.setFocus()
+    qt.processEvents()
+    QTest.keyClick(view, Qt.Key_Space)
+    assert view.answer.text() == ("1. verb:  decorate with flags\n\n"
+                                  "2. verb:  become less intense\n“his energy flagged”")
+    view.deleteLater()
+    session = StudySession(window.app.storage, window.app.scheduler, ["Book"],
+                           mechanical=True, judge=KeywordJudge())
+    view = StudyView(session)
+    view.show()
+    qt.processEvents()
+    view.input.setText("grow less intense")
+    view._submit_typed()
+    assert view.answer.text() == "reference:  decorate with flags; become less intense"
+    assert window.app.storage.load_stats("Book")["flag"]["box"] == 1  # not recorded yet
+    QTest.keyClick(view, Qt.Key_Return)  # keep the judge's verdict
+    assert window.app.storage.load_stats("Book")["flag"]["box"] == 2
+    view.deleteLater()
+    qt.processEvents()

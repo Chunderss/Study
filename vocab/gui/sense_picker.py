@@ -2,8 +2,9 @@
 
 A small panel over the workspace, like the help panel: it never opens a
 dialog, never resizes a pane, and appears after a lookup without taking
-keyboard focus. Ctrl+B w moves into it; Enter studies the highlighted sense
-and Esc closes it, returning focus to where it was.
+keyboard focus. Ctrl+B w moves into it; Enter studies only the highlighted
+sense, Space checks several for Study checked, and Esc closes it, returning
+focus to where it was.
 
 Every change goes through App.choose_senses, the path SENSE uses in the
 terminal, so a choice made from senses that changed since they were shown
@@ -89,8 +90,8 @@ class SensePicker(QFrame):
         self.restart.setToolTip("Unchecked, the word keeps its progress when you choose a sense.")
         root.addWidget(self.restart)
         buttons = QHBoxLayout()
-        self.use_btn = QPushButton("Study this sense")
-        self.use_btn.clicked.connect(self.use_current)
+        self.use_btn = QPushButton("Study checked")
+        self.use_btn.clicked.connect(self.use_checked)
         self.more_btn = QPushButton("All senses")
         self.more_btn.clicked.connect(self.find_more)
         self.close_btn = QPushButton("Close")
@@ -99,7 +100,9 @@ class SensePicker(QFrame):
             buttons.addWidget(button)
         buttons.addStretch(1)
         root.addLayout(buttons)
-        self.hint = QLabel("Enter: study the highlighted sense · Esc: close", objectName="Muted")
+        self.hint = QLabel("Enter: study only the highlighted sense · Space: check several · "
+                           "Esc: close", objectName="Muted")
+        self.hint.setWordWrap(True)
         root.addWidget(self.hint)
         for label in (self.title, self.where, self.state, self.context, self.status, self.hint):
             label.setFocusPolicy(Qt.NoFocus)
@@ -183,7 +186,8 @@ class SensePicker(QFrame):
             self.context.setText(f"“{listing.context}”" if listing.context
                                  else "Added without a sentence")
             for index, sense in enumerate(listing.senses):
-                self._add_row(sense, index, studied=index == 0, choosable=not listing.manual)
+                self._add_row(sense, index, studied=index < listing.kept,
+                              choosable=not listing.manual)
             if listing.extra:
                 separator = QListWidgetItem(f"More from {listing.dictionary} — saved only if "
                                             "you choose one")
@@ -214,7 +218,10 @@ class SensePicker(QFrame):
             font = QFont(item.font())
             font.setBold(True)
             item.setFont(font)
-        if not choosable:
+        if choosable:
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if studied else Qt.Unchecked)
+        else:
             item.setFlags(Qt.ItemIsEnabled)
         self.list.addItem(item)
 
@@ -242,6 +249,19 @@ class SensePicker(QFrame):
             self.status.setText("Highlight a sense with the arrow keys, then press Enter.")
             return
         self._choose([item.data(Qt.UserRole)])
+
+    def use_checked(self) -> None:
+        """Study the checked senses, in list order (the first comes first)."""
+        listing = self._listing
+        if listing is None or listing.manual:
+            return
+        checked = [item.data(Qt.UserRole) for item in
+                   (self.list.item(row) for row in range(self.list.count()))
+                   if item.flags() & Qt.ItemIsUserCheckable and item.checkState() == Qt.Checked]
+        if not checked:
+            self.status.setText("Check at least one sense (Space), then Study checked.")
+            return
+        self._choose(checked)
 
     def _choose(self, chosen) -> None:
         try:
@@ -275,11 +295,16 @@ class SensePicker(QFrame):
             return  # the word changed meanwhile; its list was reloaded
         listing = current.with_extra(result.extra, result.note)
         row, restart = self.list.currentRow(), self.restart.isChecked()
+        checks = [self.list.item(i).checkState() for i in range(self.list.count())]
         self._listing = listing
         count = len(listing.extra)
         self._fill(listing, status=listing.note or (
             f"{count} more from {listing.dictionary}, saved only if you choose one."))
-        self.list.setCurrentRow(row)  # the same word: keep the user's place
+        # The same word: keep the user's place, checks and option.
+        for i, state in enumerate(checks):
+            if self.list.item(i).flags() & Qt.ItemIsUserCheckable:
+                self.list.item(i).setCheckState(state)
+        self.list.setCurrentRow(row)
         self.restart.setChecked(restart)
 
     # ---- focus and placement ---------------------------------------------

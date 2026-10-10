@@ -352,7 +352,9 @@ class App:
         rows = [f"'{target}' ({len(wl.words)} words):"]
         for key in sorted(wl.words):
             w = wl.words[key]
-            rows.append(f"  {w.word:<20} {w.primary_definition()[:70]}")
+            more = len(w.kept_senses()) - 1
+            rows.append(f"  {w.word:<20} {w.primary_definition()[:70]}"
+                        + (f" (+{more} more)" if more else ""))
         return "\n".join(rows)
 
     # ---- words ----------------------------------------------------------
@@ -541,7 +543,8 @@ class App:
             raise ValueError(f"'{word.strip()}' is not in '{module}'.")
         return SenseListing(module=module, word=saved.word, dictionary=saved.dictionary,
                             senses=tuple(saved.senses), context=saved.context,
-                            expected=expected, chosen=saved.chosen)
+                            expected=expected, chosen=saved.chosen,
+                            kept=len(saved.kept_senses()))
 
     def more_senses(self, listing: SenseListing) -> SenseListing:
         """The listing with its dictionary's senses that are not saved, in the
@@ -602,15 +605,15 @@ class App:
         how = "by you" if listing.chosen else "automatically"
         lines = [f"{head} [{listing.dictionary or 'dictionary not recorded'}]",
                  f"First sense chosen {how}.  {sentence}"]
-        lines += self._sense_rows(listing.senses, studied=1)
+        lines += self._sense_rows(listing.senses, studied=listing.kept)
         if listing.extra:
             lines.append(f"More from {listing.dictionary} (saved only if you choose one):")
             lines += self._sense_rows(listing.extra, start=len(listing.senses) + 1)
         if listing.note:
             lines.append(f"({listing.note})")
         if typed and len(listing.offered) > 1:
-            lines.append(f"* = studied.  Study another:  SENSE 2 {typed}   "
-                         "(its progress is kept)")
+            lines.append(f"* = studied.  Study another:  SENSE 2 {typed}    Several:  "
+                         f"SENSE 2,1 {typed}   (its progress is kept)")
         else:
             lines.append("* = studied.")
         if typed and not show_all:
@@ -661,10 +664,13 @@ class App:
         stats = self.storage.load_stats(module) if restart else None  # validated first
         word = wl.words[listing.key]
         new = reorder(word, offered, chosen)
-        first = new.senses[0]
-        what = f"{first.pos + ': ' if first.pos else ''}{first.definition}"
-        if new.senses == word.senses and word.chosen and not restart:
-            reply = f"'{name}' in '{module}' already studies: {what}  (nothing was changed)"
+        studied = new.kept_senses()
+        what = "; ".join(f"{sense.pos + ': ' if sense.pos else ''}{sense.definition}"
+                         for sense in studied)
+        what = f" {len(studied)} senses: {what}" if len(studied) > 1 else f": {what}"
+        same = new.senses == word.senses and new.kept_senses() == word.kept_senses()
+        if same and word.chosen and not restart:
+            reply = f"'{name}' in '{module}' already studies{what}  (nothing was changed)"
         else:
             wl.add(new)
             progress = "its progress is kept"
@@ -674,24 +680,23 @@ class App:
                 progress = "its reviews start over, due now"
             else:
                 self.storage.save_words(wl)  # its progress (stats.json) is kept as it is
-            if new.senses != word.senses:
-                reply = f"'{name}' in '{module}' now studies: {what}  ({progress})"
+            if not same:
+                reply = f"'{name}' in '{module}' now studies{what}  ({progress})"
             elif restart:
-                reply = f"'{name}' in '{module}' keeps studying: {what}  ({progress})"
+                reply = f"'{name}' in '{module}' keeps studying{what}  ({progress})"
             else:
-                reply = f"'{name}' in '{module}' keeps studying: {what}  (now chosen by you)"
+                reply = f"'{name}' in '{module}' keeps studying{what}  (now chosen by you)"
             if len(new.senses) > len(word.senses):
                 reply += (f"\n    Saved from {listing.dictionary}; '{name}' now has "
                           f"{len(new.senses)} senses.")
         return reply, self.sense_listing(module, name)
 
     def cmd_sense(self, numbers: str, word: str, restart: bool = False) -> str:
-        """SENSE <n> <word> [--restart]: study sense n of the latest SENSES
-        list of word, or of its senses as saved when this session listed
-        none; --restart also starts its reviews over."""
+        """SENSE <n>[,<n>...] <word> [--restart]: study sense n (or several,
+        in the order given) of the latest SENSES list of word, or of its
+        senses as saved when this session listed none; --restart also starts
+        its reviews over."""
         chosen = parse_sense_numbers(numbers)
-        if len(chosen) > 1:
-            raise ValueError(f"Choose one sense:  SENSE {chosen[0]} {_typed_word(word.strip())}")
         module = self.storage.canonical_name(self._resolve_target(None))
         listing = self._sense_listings.get((module, word.strip().lower()))
         listed = listing is not None
@@ -700,7 +705,7 @@ class App:
         reply, after = self.choose_senses(listing, [n - 1 for n in chosen], command=True,
                                           restart=restart)
         self._sense_listings[(module, after.key)] = after
-        reply = "\n".join([reply] + self._sense_rows(after.senses, studied=1))
+        reply = "\n".join([reply] + self._sense_rows(after.senses, studied=after.kept))
         if not listed:
             reply += "\n(No SENSES list was shown here, so the number followed the saved order.)"
         return reply
@@ -1080,8 +1085,15 @@ class App:
                 ans = prompt("  press Enter to reveal (or 'q'): ")
                 if ans.strip().lower() == "q":
                     break
-                pos = f"{view.pos}: " if view.pos else ""
-                echo(f"  {pos}{view.definition}")
+                if len(view.senses) > 1:  # several senses studied: show them all
+                    for number, sense in enumerate(view.senses, 1):
+                        pos = f"{sense.pos}: " if sense.pos else ""
+                        echo(f"  {number}. {pos}{sense.definition}")
+                        if sense.example:
+                            echo(f"     \"{sense.example}\"")
+                else:
+                    pos = f"{view.pos}: " if view.pos else ""
+                    echo(f"  {pos}{view.definition}")
                 # Enter means missed, as it always has.
                 if self._record_verdict(session, prompt, echo, False) is _STOP:
                     break

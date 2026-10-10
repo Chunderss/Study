@@ -8,11 +8,11 @@ is therefore an ephemeral virtual session, not a persisted mixed list.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, NoReturn
 
 from ..algorithms.base import Review, Scheduler
-from ..core.models import Word
+from ..core.models import Sense, Word
 from ..core.storage import ModuleNotFound, Storage
 
 
@@ -95,6 +95,7 @@ class CardView:
     definition: str         # primary definition (revealed answer)
     example: str            # example sentence for the primary sense, if any
     box_before: int         # Leitner box before this review (for animation)
+    senses: List[Sense] = field(default_factory=list)  # every sense studied, first first
 
 
 @dataclass
@@ -186,6 +187,7 @@ class StudySession:
             definition=sc.word.primary_definition(),
             example=(sense.example if sense else ""),
             box_before=int(sc.card.get("box", 1)),
+            senses=list(sc.word.kept_senses()),
         )
 
     # ---- actions --------------------------------------------------------
@@ -221,6 +223,7 @@ class StudySession:
             # Legacy words without an added timestamp get a default on each load;
             # compare the answer content rather than that generated metadata.
             if (stats.get(key) != sc.card or current_word.senses != sc.word.senses or
+                    current_word.kept != sc.word.kept or
                     current_word.dictionary != sc.word.dictionary):
                 self._unavailable("the word or its progress changed in another session.")
             box_before = int(sc.card.get("box", 1))
@@ -250,12 +253,16 @@ class StudySession:
         typed = typed.strip()
         if not typed:
             raise ValueError("Type a definition first.")
-        reference = self.queue[self._i].word.primary_definition()
-        jr = self.judge.score(typed, reference)
+        definitions = [s.definition for s in self.queue[self._i].word.kept_senses()]
+        # With several senses studied, an answer right for any of them counts:
+        # the suggestion comes from the first passing one, else the best score.
+        results = [self.judge.score(typed, definition) for definition in definitions or [""]]
+        gradable = [jr for jr in results if jr.gradable]
+        jr = max(gradable, key=lambda result: (result.passed, result.score)) if gradable else results[0]
         self._judgement = Judgement(
-            typed=typed, reference=reference, feedback=jr.feedback,
-            score=jr.score if jr.gradable else None,
-            suggested=jr.passed if jr.gradable else None)
+            typed=typed, reference="; ".join(definitions), feedback=jr.feedback,
+            score=jr.score if gradable else None,
+            suggested=jr.passed if gradable else None)
         return self._judgement
 
     def answer(self, correct: bool) -> AnswerOutcome:

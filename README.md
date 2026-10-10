@@ -178,25 +178,30 @@ The word keeps the sentence it was added from (at most 500 characters around the
 In the terminal and the Console, `SENSES word` lists the senses saved for a word, marks
 the one studied with `*` and shows that sentence; `SENSES word --all` also lists the
 senses of its dictionary that were not saved. `SENSE 3 word` studies sense 3 of that
-list instead: it moves to the front, a sense from `--all` is saved, no sense is
-removed, and the word keeps its progress; `SENSE 3 word --restart` also starts its
-reviews over, as for a new word. If the word changed in another window or
-program since it was listed, nothing is changed and SENSE asks you to list it again.
-A word with your own definition (`word :: definition`) has no senses to choose.
+list instead: it moves to the front, a sense from `--all` is saved, no sense is removed,
+and the word keeps its progress; `SENSE 3 word --restart` also starts its reviews over,
+as for a new word. `SENSE 3,1 word` studies several senses, in that order: revealing the
+card shows them all, numbered, and a typed answer in mechanical mode passes when it
+passes for any one of them. If the word changed in another window or program since it
+was listed, nothing is changed and SENSE asks you to list it again. A word with your own
+definition (`word :: definition`) has no senses to choose.
 
-In the desktop app, adding a word with several senses from Vocab or with **Add word**
-in an EPUB shows the sense picker in a corner of the workspace, away from the pane you
-are typing or reading in. It does not take keyboard focus or resize anything: Esc closes
-it from anywhere (before Esc does anything else), and Ctrl+B `w` moves into it, or
-reopens it for the last word looked up. Each word in the Vocab list is a link to its
-senses, and the list keeps its place when it updates. The picker shows the module and dictionary, whether the
-first sense was chosen automatically or by you, and the sentence. Enter (or a double
-click) studies the highlighted sense at once, keeping the word's progress unless you tick
-**Start its reviews over** first (it unticks itself after each choice); choosing again
-undoes the choice. **All senses** looks up the dictionary's other senses in the background; one
-is saved only if you choose it. A list that changed in another window or program is
-reloaded with nothing highlighted, and a choice made from an outdated list is refused,
-so Enter never acts on a sense you did not pick. The Console uses `SENSES` and `SENSE`.
+In the desktop app, adding a word with several senses from Vocab or with **Add word** in
+an EPUB shows the sense picker in a corner of the workspace, away from the pane you are
+typing or reading in. It does not take keyboard focus or resize anything: Esc closes it
+from anywhere (before Esc does anything else), and Ctrl+B `w` moves into it, or reopens
+it for the last word looked up. Each word in the Vocab list is a link to its senses, the
+senses it studies are listed under it, and the list keeps its place when it updates. The
+picker shows the module and dictionary, whether the first sense was chosen automatically
+or by you, and the sentence. Enter (or a double click) studies only the highlighted
+sense at once; Space checks several and **Study checked** studies those, in list order.
+Either keeps the word's progress unless you tick **Start its reviews over** first (it
+unticks itself after each choice); choosing again undoes the choice. **All senses**
+looks up the dictionary's other senses in the background; one is saved only if you
+choose it. A list that changed in another window or program is reloaded with nothing
+highlighted, and a choice made from an outdated list is refused, so Enter never acts on
+a sense you did not pick. The Console uses `SENSES` and `SENSE`.
+
 Vocabulary lookups from Vocab and the EPUB reader run in the background. Failed additions
 keep the input for retrying; lookups stay attached to the module where they started.
 The optional Ollama sense selector requires a separately installed local server.
@@ -270,7 +275,8 @@ split into words, so only whole matching words count there.
 Numbers are key terms only in a definition without other key terms ("1984"), so "a
 hundred years" passes for "a period of 100 years"; 1,760 and 1760 are the same number.
 A definition made only of short or common words ("an ox", "to go") is compared on those
-words. When a card's definition has no words at all, the judge makes no suggestion and you
+words. A word studied with several senses (see `SENSE` above) passes when the answer
+passes for any one of them, and the reference lists them all. When a card's definition has no words at all, the judge makes no suggestion and you
 choose: Enter does nothing in the study view and asks again in the terminal.
 
 ## Your data

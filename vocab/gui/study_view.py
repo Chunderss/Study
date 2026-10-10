@@ -7,6 +7,8 @@ modes mirror the terminal:
 
 Keyboard-first (matches the command-driven spirit):
   Space / Enter = reveal ;  J / Y = got it ;  F / N = missed it ;  Esc = end
+These keys count alone or with Shift; with Ctrl, Alt or Meta they are left to
+shortcuts, so a reflex Ctrl+F or Ctrl+Y never records an answer.
 In reveal mode the view itself keeps keyboard focus after each card change, so
 a second Space or Enter never lands on a grade button. The buttons stay
 reachable with Tab and the mouse; Space or Enter activates the focused one.
@@ -305,6 +307,11 @@ class StudyView(QWidget):
         key = e.key()
         if e.isAutoRepeat():
             e.accept()
+            return
+        if e.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
+            # A chord such as Ctrl+F or Ctrl+Y is a shortcut, never an answer.
+            # Shift (Caps Lock habits) and the keypad stay plain keys.
+            super().keyPressEvent(e)
             return
         if key == Qt.Key_Escape:
             self._end()

@@ -41,8 +41,8 @@ class Keys:
     def target(self):
         return self.window.windowHandle() if self.native else self.qt.focusWidget()
 
-    def press(self, key):
-        QTest.keyClick(self.target(), key)
+    def press(self, key, modifiers=Qt.NoModifier):
+        QTest.keyClick(self.target(), key, modifiers)
         self.qt.processEvents()
 
     def hold(self, key, repeats=3):
@@ -191,6 +191,29 @@ def test_enter_activates_the_tab_reached_end_and_continue_in_mechanical_mode(win
     keys.tab_to(view.end_btn)
     keys.press(Qt.Key_Return)           # ends the session instead of continuing
     assert view._ended and view.session.reviewed == 2
+
+
+@DELIVERY
+def test_ctrl_alt_or_meta_letters_never_grade(window, qt, delivery):
+    keys = Keys(window, qt, delivery)
+    view = _open_study(window, qt)
+    keys.press(Qt.Key_Space)
+    chords = [(Qt.ControlModifier, Qt.Key_F), (Qt.ControlModifier, Qt.Key_Y),
+              (Qt.ControlModifier, Qt.Key_J), (Qt.ControlModifier, Qt.Key_N),
+              (Qt.AltModifier, Qt.Key_F), (Qt.AltModifier, Qt.Key_Y),
+              (Qt.MetaModifier, Qt.Key_J), (Qt.MetaModifier, Qt.Key_N),
+              (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_Y)]
+    for modifiers, key in chords:      # find, redo and other reflex shortcuts
+        keys.press(key, modifiers)
+    assert view._revealed and view.session.reviewed == 0
+    assert all(card["reps"] == 0 for card in window.app.storage.load_stats("Book").values())
+
+    keys.press(Qt.Key_Y, Qt.ShiftModifier)      # Shift still grades
+    assert (view.session.reviewed, view.session.result.correct) == (1, 1)
+    keys.press(Qt.Key_Enter, Qt.KeypadModifier)  # so does the keypad
+    assert view._revealed
+    keys.press(Qt.Key_F, Qt.ShiftModifier)
+    assert (view.session.reviewed, view.session.result.correct) == (2, 1)
 
 
 def test_focused_study_card_describes_its_state(window, qt):

@@ -10,29 +10,36 @@ This is a pluggable seam (like Dictionary / Scheduler / Judge):
     Disambiguator.rank(word, sentence, senses) -> reordered list[Sense]
 
 Backends:
-  * NlpDisambiguator  — zero-cost, no downloads beyond WordNet's own POS tagger:
-        1. POS-tag the word in its sentence, keep only senses of that part of
-           speech (fixes the "ephemeral"/tense class of error).
-        2. Among those, use NLTK's Lesk (gloss/context overlap) to pick the best
-           and float it to the front.
+  * NlpDisambiguator  — zero-cost and offline; it never downloads anything:
+        1. POS-tag the word in its sentence with NLTK's English tagger
+           (nltk_resources.POS_TAGGER, installed with WordNet and bundled in
+           the desktop app) and keep only senses of that part of speech
+           (fixes the "ephemeral"/tense class of error). Without the tagger
+           this step is skipped, and DOCTOR and DISAMBIG say so.
+        2. Among those, use a Lesk-style gloss/context overlap to pick the
+           best and float it to the front.
   * OllamaDisambiguator — STUB for now: if a local Ollama server is running,
         ask a small model which sense fits; else fall back to NLP. Enabled via
         config.disambiguator = "ollama". Costs nothing to leave off.
 
 get_disambiguator(name) returns the configured backend, always degrading to NLP
-(and NLP degrades to "unchanged") so word-adding never breaks.
+(and NLP to gloss overlap alone) so word-adding never breaks.
 """
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from typing import List, Optional
 
+from .. import nltk_resources
 from ..core.models import Sense
 from ..dictionaries.base import SENSE_LIMIT
 
 # WordNet single-letter POS codes we map our human-readable Sense.pos back to.
 _HUMAN_TO_WN = {"noun": "n", "verb": "v", "adjective": "a", "adverb": "r"}
+# Punctuation at either end of a token.
+_EDGE_PUNCTUATION = re.compile(r"^\W+|\W+$")
 
 
 class Disambiguator:
@@ -44,26 +51,36 @@ class Disambiguator:
 
 
 class NlpDisambiguator(Disambiguator):
-    """POS-filter + Lesk. No network, no model download (uses NLTK taggers)."""
+    """POS-filter + Lesk. No network and no downloads (uses NLTK's tagger)."""
 
     id = "nlp"
 
     def _ensure_tagger(self) -> bool:
-        try:
-            import nltk
-        except Exception:
-            return False
-        return True  # optional POS data is used if already installed
+        return nltk_resources.pos_tagger_problem() is None
 
     def _wn_pos_of(self, word: str, sentence: str) -> Optional[str]:
+        wl = word.strip().lower()
+        if not wl:
+            return None
         try:
             import nltk
-            toks = nltk.word_tokenize(sentence)
+            # A single sentence: Treebank tokens without Punkt's sentence
+            # splitting, so the tagger is the only data needed.
+            toks = []
+            for tok in nltk.word_tokenize(sentence, preserve_line=True):
+                core = _EDGE_PUNCTUATION.sub("", tok)
+                if core and core != tok and core.lower() == wl:
+                    # Punctuation left attached to the word ("flag…", or
+                    # "flag." before another sentence): tag the word alone.
+                    start = tok.find(core)
+                    toks += [part for part in (tok[:start], core, tok[start + len(core):])
+                             if part]
+                else:
+                    toks.append(tok)
             tags = nltk.pos_tag(toks)
         except Exception:
             return None
         tag = None
-        wl = word.lower()
         for w, t in tags:
             if w.lower() == wl:
                 tag = t
@@ -83,9 +100,8 @@ class NlpDisambiguator(Disambiguator):
     def rank(self, word: str, sentence: str, senses: List[Sense]) -> List[Sense]:
         if not sentence or len(senses) <= 1:
             return senses
-        if not self._ensure_tagger():
-            return senses
-        target_wn = self._wn_pos_of(word, sentence)
+        # Without the tagger, rank by gloss overlap alone (pure Python).
+        target_wn = self._wn_pos_of(word, sentence) if self._ensure_tagger() else None
 
         # 1) POS filter: senses whose part of speech matches the usage.
         if target_wn:
@@ -115,7 +131,6 @@ class NlpDisambiguator(Disambiguator):
     @staticmethod
     def _lesk_index(sentence: str, senses: List[Sense]) -> int:
         """Return index of the sense whose gloss best overlaps the sentence."""
-        import re
         stop = {"the", "a", "an", "of", "to", "and", "in", "is", "was", "were",
                 "that", "this", "it", "he", "she", "they", "his", "her", "with",
                 "for", "on", "at", "as", "by", "be", "are", "or", "but"}
@@ -186,7 +201,6 @@ class OllamaDisambiguator(Disambiguator):
                                          headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=20) as r:
                 resp = json.load(r).get("response", "")
-            import re
             m = re.search(r"\d+", resp)
             if m:
                 idx = int(m.group())

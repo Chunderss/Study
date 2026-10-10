@@ -221,6 +221,20 @@ def main() -> None:
                 review.rate("good")
                 assert store.load("DesktopCheck")[item["id"]]["card"]["reps"] == 1
                 review.deleteLater()
+                # Sense selection must tag the part of speech offline with the
+                # tagger in the bundle (never a download or another copy). This
+                # checks WordNet and the nlp engine whatever the home configures.
+                from .. import nltk_resources
+                from ..study.disambiguate import get_disambiguator
+                problem = nltk_resources.pos_tagger_problem()
+                assert problem is None, f"Part-of-speech tagging unavailable: {problem.reason}"
+                if getattr(sys, "frozen", False):
+                    import nltk
+                    found = str(nltk.data.find(f"taggers/{nltk_resources.POS_TAGGER}/"))
+                    assert found.startswith(str(Path(sys._MEIPASS))), f"Tagger not bundled: {found}"
+                flag = get_dictionary("wordnet").lookup("flag")
+                ranked = get_disambiguator("nlp").rank("flag", "His energy began to flag.", flag)
+                assert ranked[0].pos == "verb", f"'flag' in a verb context chose: {ranked[0]}"
                 check_documents(win)
                 win.workspace.set_focused_component("learning")
                 assert isinstance(win.workspace.focused.component, LearningComponent)

@@ -150,8 +150,8 @@ class Repl:
             return self.app.cmd_dict_use(a[1])
         if sub == "install" and len(a) > 1:
             dic = get_dictionary(a[1])
-            if not dic.available() and dic.install_cost:
-                if not self._confirm(f"'{a[1]}' needs {dic.install_cost}. Download now?"):
+            if dic.needs_install() and dic.install_cost:
+                if not self._confirm(f"'{a[1]}' needs {dic.pending_cost()}. Download now?"):
                     return "Cancelled."
             return self.app.cmd_dict_install(a[1])
         if sub == "list":
@@ -219,8 +219,10 @@ class Repl:
         """Make the offline dictionary 'just work' on first run.
 
         If the configured dictionary is WordNet and nltk is installed but the
-        corpus isn't downloaded yet, fetch it automatically (one-time, ~40 MB)
-        so the user never has to think about it. If WordNet can't be made
+        corpus isn't downloaded yet, fetch it and the part-of-speech tagger
+        automatically (one time, see WordNet.install_cost) so the user never has
+        to think about it. A corpus without the tagger is left alone: DOCTOR
+        reports it and DICT INSTALL wordnet adds it. If WordNet can't be made
         available at all (nltk missing), warn loudly and point at DOCTOR instead
         of silently falling back to the online API (which times out).
         """
@@ -240,7 +242,8 @@ class Repl:
             nltk_present = False
 
         if preferred.id == "wordnet" and nltk_present:
-            self.echo("First run: downloading the offline WordNet dictionary (~40 MB, one time)...")
+            self.echo("First run: downloading the offline WordNet dictionary, one time: "
+                      f"{preferred.install_cost}...")
             try:
                 preferred.install()
             except Exception as e:

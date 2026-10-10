@@ -10,13 +10,24 @@ pytest.importorskip("PySide6")
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Runs the real entry point with an offline stand-in for the WordNet corpus.
+# Runs the real entry point with offline stand-ins for the WordNet corpus and
+# the part-of-speech tagger (the packaged smoke test uses the bundled ones).
 SCRIPT = r'''
 import sys
+from vocab import nltk_resources
 from vocab.core.models import Sense
 from vocab.dictionaries.wordnet import WordNet
-WordNet.lookup = lambda self, word: [Sense("a procedure for evaluation")]
-if sys.argv[2] == "slot-error":
+from vocab.study.disambiguate import NlpDisambiguator
+WordNet.lookup = lambda self, word: [Sense("a procedure for evaluation", "noun"),
+                                     Sense("decline in vigor", "verb")]
+nltk_resources.pos_tagger_problem = lambda: None
+NlpDisambiguator._wn_pos_of = lambda self, word, sentence: "v"
+if sys.argv[2] == "no-pos-data":
+    nltk_resources.pos_tagger_problem = lambda: nltk_resources.TaggerProblem(
+        "injected missing tagger", "no-data")
+elif sys.argv[2] == "noun-pos":
+    NlpDisambiguator._wn_pos_of = lambda self, word, sentence: "n"
+elif sys.argv[2] == "slot-error":
     from vocab.gui.main_window import MainWindow
     show = MainWindow._show_message
     def failing(self, text):
@@ -100,7 +111,8 @@ def run_smoke(home, mode):
 @pytest.mark.parametrize("mode, code", [("clean", 0), ("slot-error", 1), ("book-script-runs", 1),
                                         ("reader-error", 1), ("qt-fatal", None),
                                         ("error-with-result", 1), ("label-with-result", 1),
-                                        ("late-error", 1)])
+                                        ("late-error", 1), ("no-pos-data", 1),
+                                        ("noun-pos", 1)])
 def test_smoke_exit_status_reflects_failures(tmp_path, mode, code):
     started = time.monotonic()
     result = run_smoke(tmp_path, mode)
@@ -134,6 +146,10 @@ def test_smoke_exit_status_reflects_failures(tmp_path, mode, code):
         assert "injected late error" in log.read_text(encoding="utf-8")
         assert "Smoke check: ! injected late error" in result.stderr
         assert "failed:" not in result.stderr and "Document checks reported" not in result.stderr
+    elif mode == "no-pos-data":
+        assert "Part-of-speech tagging unavailable: injected missing tagger" in result.stderr
+    elif mode == "noun-pos":
+        assert "'flag' in a verb context chose: " in result.stderr
     elif mode == "qt-fatal":
         # PySide words a qFatal() made from Python itself; Qt's own keep their text.
         assert "ERROR Qt QtFatalMsg:" in log.read_text(encoding="utf-8")

@@ -20,12 +20,22 @@ from ..core.storage import (ListExists, ListNotFound, ModuleExists, ModuleNotFou
                              in_transaction)
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
 from ..dictionaries.base import SENSE_LIMIT
+from .. import nltk_resources
 from ..study.judge import get_judge
 from ..study.session import SessionResult, StudyCardUnavailable, StudySession, build_session
 
 # Callbacks the REPL supplies so STUDY can be interactive while staying testable.
 Prompt = Callable[[str], str]        # prompt(text) -> user input line
 Echo = Callable[[str], None]         # echo(text) -> None (print)
+
+
+def _tagger_fix(problem: nltk_resources.TaggerProblem) -> str:
+    """The command that makes part-of-speech tagging work, or ''."""
+    if problem.kind == "no-nltk":
+        return 'pip install "vocab-study[wordnet]"'
+    if problem.kind == "no-data":
+        return "dict install wordnet"
+    return ""  # the data is there but unreadable: the reason names the cause
 
 
 class App:
@@ -128,6 +138,10 @@ class App:
             except Exception:
                 corpus_ok = False
         lines.append(f"WordNet data: {'present' if corpus_ok else 'MISSING'}")
+        tagger_problem = nltk_resources.pos_tagger_problem()
+        tagger_state = ("present" if tagger_problem is None
+                        else "UNUSABLE" if tagger_problem.kind == "unusable" else "MISSING")
+        lines.append(f"POS tagger  : {tagger_state}")
 
         # 3. dictionaries
         lines.append("-" * 40)
@@ -158,6 +172,13 @@ class App:
                 lines.append("  dict install wordnet")
             else:
                 lines.append(f"Cause: '{self.config.active_dictionary}' reported unavailable. {notice}")
+        if tagger_problem and self.config.disambiguator in ("nlp", "ollama"):
+            fix = _tagger_fix(tagger_problem)
+            lines.append("Note: sense selection cannot use the word's part of speech, so it")
+            lines.append("ranks definitions by their overlap with the sentence only.")
+            lines.append(f"Cause: {tagger_problem.reason}." + (" Fix:" if fix else ""))
+            if fix:
+                lines.append(f"  {fix}")
         return "\n".join(lines)
 
     @property
@@ -353,6 +374,12 @@ class App:
             if st["engine"] == "ollama":
                 state = "running" if st["ollama_up"] else "NOT running -> falls back to nlp"
                 lines.append(f"  model  : {st['model']}  ({state})")
+            problem = (nltk_resources.pos_tagger_problem()
+                       if st["engine"] in ("nlp", "ollama") else None)
+            if problem:
+                fix = _tagger_fix(problem)
+                lines.append(f"  note   : {problem.reason}; the POS filter is off"
+                             + (f" (fix: {fix})" if fix else ""))
             lines += ["",
                       "  nlp    - POS filter + Lesk, offline, zero cost (default)",
                       "  ollama - local LLM via Ollama; best quality; needs the server running",
@@ -385,15 +412,19 @@ class App:
 
     def cmd_dict_install(self, dict_id: str) -> str:
         dic = get_dictionary(dict_id)
-        if dic.available():
+        if not dic.needs_install():
             return f"'{dict_id}' is already available."
-        cost = dic.install_cost or "no download"
+        cost = dic.pending_cost() or "no download"
         # The REPL confirms cost before calling this; here we just do it.
         dic.install()
-        ok = dic.available()
-        return (f"Installed '{dict_id}' ({cost})." if ok
-                else f"Attempted install of '{dict_id}' but it is still unavailable. "
-                     f"You may need:  pip install \"vocab-study[{dict_id}]\"")
+        if not dic.needs_install():
+            return f"Installed '{dict_id}' ({cost})."
+        if dic.available():  # WordNet works, but its part-of-speech tagger does not
+            problem = nltk_resources.pos_tagger_problem()
+            return (f"Installed '{dict_id}', but part-of-speech tagging still does not work"
+                    + (f": {problem.reason}." if problem else "."))
+        return (f"Attempted install of '{dict_id}' but it is still unavailable. "
+                f"You may need:  pip install \"vocab-study[{dict_id}]\"")
 
     def cmd_dict_use(self, dict_id: str) -> str:
         dic = get_dictionary(dict_id)

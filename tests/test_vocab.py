@@ -436,8 +436,9 @@ class TestModulesAndNotes(unittest.TestCase):
             Sense(definition="lasting a very short time", pos="adjective"),
         ]
         ranked = dis.rank("ephemeral", "the ephemeral joys of childhood", senses)
-        # Only assert the reordering when the POS tagger is actually available;
-        # without it (no corpus/network) rank() is a safe no-op by design.
+        # Only assert the reordering when the POS tagger is actually available
+        # (tests/test_pos_tagger.py requires it); without it rank() compares
+        # definitions with the sentence only, which leaves this pair as it is.
         if dis._wn_pos_of("ephemeral", "the ephemeral joys of childhood") == "a":
             self.assertEqual(ranked[0].pos, "adjective")
         # safe no-ops regardless of tagger

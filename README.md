@@ -6,14 +6,16 @@ A desktop workspace for reading, source-linked questions and concepts, vocabular
 
 Extract **VocabStudy-Windows.zip**, open the extracted `VocabStudy` folder, and
 double-click **VocabStudy.exe**. Keep `_internal` beside the executable; it contains
-Python, Qt, and the offline English WordNet dictionary. End users do not need
-Python, PowerShell, or an internet connection for WordNet lookups.
+Python, Qt, the offline English WordNet dictionary, and NLTK's English part-of-speech
+tagger. End users do not need Python, PowerShell, or an internet connection for
+WordNet lookups.
 
 To produce that ZIP from this source:
 
 - On Windows, install **Python 3.12** with its Python Launcher, then double-click
   **build_windows.bat**. It installs build dependencies into `.venv-build`, downloads
-  WordNet, and creates `dist\VocabStudy-Windows.zip`. Building requires internet.
+  WordNet and the tagger, and creates `dist\VocabStudy-Windows.zip`. Building requires
+  internet.
 - Or run the repository's **Desktop tests and Windows executable** GitHub Actions
   workflow and download its `VocabStudy-Windows` artifact. It runs the tests, builds
   the ZIP, and smoke-tests the packaged executable with a temporary data directory.
@@ -97,14 +99,21 @@ launch other apps, and LaTeX/Mermaid rendering is not provided.
 
 ## Dictionaries and study
 
-The portable desktop build includes WordNet. Online Free Dictionary remains available.
+The portable desktop build includes WordNet and the part-of-speech tagger. Online Free
+Dictionary remains available. When a word is added from a sentence (from the EPUB
+reader), sense selection keeps the senses of the word's part of speech in that sentence
+and puts the one whose definition shares the most words with it first. The part of
+speech is usually right; the chosen sense is a best guess, so check it.
 Vocabulary lookups from Vocab and the EPUB reader run in the background. Failed additions
 keep the input for retrying; lookups stay attached to the module where they started.
 The optional Ollama sense selector requires a separately installed local server.
 
 The Console supports `DICT`, `DICT USE wordnet`, `DICT USE freedict`, `MODE MECH ON`,
-`DISAMBIG nlp|ollama|base`, `STATS`, and `HELP`. Source installations can use
-`DICT INSTALL wordnet`; downloads are explicit and may take a while. Console commands
+`DISAMBIG nlp|ollama|base`, `STATS`, `DOCTOR`, and `HELP`. Source installations can use
+`DICT INSTALL wordnet` (about 13 MB: WordNet and the tagger; about 1.5 MB if only the
+tagger is missing). Downloads are explicit and may take a while; the terminal
+interface's first run downloads both when WordNet is the configured dictionary but is
+missing. `DOCTOR` and `DISAMBIG` report a missing tagger. Console commands
 other than the main Vocab/reader lookup path run synchronously.
 
 Leitner schedules reviews across five boxes (1, 3, 7, 16, 35 days). Each answer saves
@@ -191,4 +200,6 @@ python tools/build_desktop.py
 
 The builder uses [PyInstaller](https://pyinstaller.org/en/stable/) in folder mode,
 which bundles the Qt PDF/WebEngine helpers alongside the app. It downloads English
-WordNet data into `build/nltk_data` and produces a portable ZIP under `dist/`.
+WordNet and NLTK's English part-of-speech tagger into `build/nltk_data`, checks that a
+copy of exactly the bundled files works offline, and produces a portable ZIP under
+`dist/`. `python tools/build_desktop.py --data-only` stops after the data check.

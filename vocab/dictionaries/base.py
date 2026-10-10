@@ -43,6 +43,14 @@ class Dictionary(ABC):
     def available(self) -> bool:
         """True if this backend can be used right now (installed / importable)."""
 
+    def needs_install(self) -> bool:
+        """True if install() would add something this backend is missing."""
+        return not self.available()
+
+    def pending_cost(self) -> str:
+        """What install() would download now (install_cost unless partly installed)."""
+        return self.install_cost
+
     @abstractmethod
     def install(self) -> None:
         """Download/prepare any required data. No-op for zero-install backends."""

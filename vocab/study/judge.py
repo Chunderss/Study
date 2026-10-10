@@ -62,6 +62,12 @@ _NEGATIVE = _NEGATORS | {
     "abstains", "abstained", "abstaining", "exempt", "exempted", "cant", "wont",
 }
 _CONTRACTIONS = [
+    # an apostrophe typed with a look-alike (ʼ ‘ ` ′, or ´, which NFKC turns
+    # into a space and a combining accent) ...
+    (re.compile(r"(?<=n)(?:[\u02bc\u2018`\u2032]|\u0020\u0301)(?=t\b)", re.IGNORECASE), "'"),
+    # ... or as a space ("isn t"), before a word or the end of a clause
+    (re.compile(r"\b(ca|wo|sha|do|does|did|is|are|was|were|has|have|had|could"
+                r"|should|would|must|need)n t(?=\s|$|[,;:!?)])", re.IGNORECASE), r"\1n't"),
     (re.compile(r"\bcan['’]t\b", re.IGNORECASE), "cannot"),
     (re.compile(r"\bwon['’]t\b", re.IGNORECASE), "will not"),
     (re.compile(r"\bshan['’]t\b", re.IGNORECASE), "shall not"),

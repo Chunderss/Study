@@ -238,3 +238,25 @@ def test_contractions_read_as_not():
     for answer in ("go", "ca"):                 # no "ca" or "wo" fragments
         result = judge.score(answer, "can't go")
         assert result.score == 0.0 and result.missed == {"cannot"}
+
+
+@pytest.mark.parametrize("apostrophe", ["´", "`", "ʼ", "‘", "′"])
+def test_contractions_typed_with_an_apostrophe_look_alike_read_as_not(apostrophe):
+    assert judge.score(f"it doesn{apostrophe}t last", "not lasting").score == 1.0
+    assert judge.score(f"doesn{apostrophe}t work", "does not work").score == 1.0
+    assert judge.score(f"can{apostrophe}t go", "cannot go").score == 1.0
+    assert judge.score(f"won{apostrophe}t stop", "will not stop").score == 1.0
+    rejected = judge.score("lasting", f"isn{apostrophe}t lasting")
+    assert rejected.score == 0.0
+    assert "Negated differently from the definition: lasting." in rejected.feedback
+
+
+def test_a_space_typed_for_the_apostrophe_reads_as_not():
+    assert judge.score("isn t moving", "not moving").score == 1.0
+    assert judge.score("it doesn t last", "not lasting").score == 1.0
+    assert judge.score("I don t know", "not knowing").score == 1.0
+    assert judge.score("can t go", "cannot go").score == 1.0
+    assert judge.score("won t stop", "will not stop").score == 1.0
+    assert judge.score("moving", "isn t moving").score == 0.0
+    # only before a word or the end of a clause, so an initial stays a name
+    assert judge.score("Don T. Smith", "Don Smith").score == 1.0

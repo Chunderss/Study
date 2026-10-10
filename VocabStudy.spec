@@ -15,12 +15,16 @@ if missing:
 a = Analysis(
     [str(root / "packaging" / "desktop.py")],
     pathex=[str(root)],
-    # Only the packages the app uses, as the zips NLTK reads in place.
-    datas=[(str(corpus / bundled), str(Path("nltk_data") / Path(bundled).parent))
-           for bundled in NLTK_PACKAGES.values()],
     hiddenimports=["PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtWebEngineWidgets"],
     excludes=["tkinter", "matplotlib", "scipy", "numpy", "pandas", "torch", "sentence_transformers"],
 )
+# PyInstaller's nltk hook adds every NLTK data folder on this machine
+# (~/nltk_data, %APPDATA%\nltk_data, NLTK_DATA), including a tagger that
+# nltk.download unzipped, which NLTK would read before the verified zip.
+# Ship only the packages the app uses, as the zips NLTK reads in place.
+a.datas = [entry for entry in a.datas if Path(entry[0]).parts[:1] != ("nltk_data",)] + [
+    (str(Path("nltk_data") / bundled), str(corpus / bundled), "DATA")
+    for bundled in NLTK_PACKAGES.values()]
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [], exclude_binaries=True,

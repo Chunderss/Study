@@ -241,23 +241,65 @@ def test_build_verifies_the_zip_that_ships(tmp_path, monkeypatch):
         build.provision_nltk_data(corpus, download=lambda *a, **k: pytest.fail("downloaded"))
 
 
-def test_spec_bundles_the_tagger(tmp_path, monkeypatch):
+def _run_spec(tmp_path, monkeypatch, hooked=()):
+    """Run VocabStudy.spec with PyInstaller stand-ins and return the datas it
+    hands to COLLECT. Like Analysis, the stand-in lists the spec's own datas
+    first, then what hooks add (``hooked``), and keeps the first entry for
+    each destination."""
     monkeypatch.setattr(sys, "path", list(sys.path))  # the spec extends it
+    collected = []
+
+    def analysis(*args, datas=(), **kwargs):
+        toc = [(os.path.join(dest, Path(src).name), src, "DATA") for src, dest in datas]
+        taken = {os.path.normcase(os.path.normpath(entry[0])) for entry in toc}
+        toc += [entry for entry in hooked
+                if os.path.normcase(os.path.normpath(entry[0])) not in taken]
+        return type("A", (), {"pure": [], "scripts": [], "binaries": [], "datas": toc})()
+
+    names = dict(SPECPATH=str(tmp_path), PYZ=lambda *a, **k: None, EXE=lambda *a, **k: None,
+                 COLLECT=lambda exe, binaries, datas, **k: collected.extend(datas),
+                 Analysis=analysis)
+    source = (ROOT / "VocabStudy.spec").read_text(encoding="utf-8")
+    exec(compile(source, "VocabStudy.spec", "exec"), names)
+    return collected
+
+
+def _shipped_nltk_data(datas):
+    return sorted((Path(dest).as_posix(), Path(src)) for dest, src, kind in datas
+                  if Path(dest).parts[0] == "nltk_data")
+
+
+def test_spec_bundles_the_tagger(tmp_path, monkeypatch):
     corpus = tmp_path / "build" / "nltk_data"
     (corpus / "corpora").mkdir(parents=True)
     (corpus / "corpora" / "wordnet.zip").write_bytes(b"zip")
-    datas = []
-    names = dict(SPECPATH=str(tmp_path), PYZ=lambda *a, **k: None, EXE=lambda *a, **k: None,
-                 COLLECT=lambda *a, **k: None,
-                 Analysis=lambda *a, **k: datas.extend(k["datas"]) or type("A", (), {
-                     "pure": [], "scripts": [], "binaries": [], "datas": []})())
-    source = (ROOT / "VocabStudy.spec").read_text(encoding="utf-8")
     with pytest.raises(SystemExit, match=POS_TAGGER):
-        exec(compile(source, "VocabStudy.spec", "exec"), dict(names))
+        _run_spec(tmp_path, monkeypatch)
     (corpus / "taggers" / POS_TAGGER).mkdir(parents=True)  # an unzipped copy is not shipped
     (corpus / "taggers" / f"{POS_TAGGER}.zip").write_bytes(b"zip")
-    exec(compile(source, "VocabStudy.spec", "exec"), dict(names))
-    assert sorted((Path(src).relative_to(corpus).as_posix(), Path(dest).as_posix())
-                  for src, dest in datas) == [
-        ("corpora/wordnet.zip", "nltk_data/corpora"),
-        (f"taggers/{POS_TAGGER}.zip", "nltk_data/taggers")]
+    assert _shipped_nltk_data(_run_spec(tmp_path, monkeypatch)) == [
+        ("nltk_data/corpora/wordnet.zip", corpus / "corpora" / "wordnet.zip"),
+        (f"nltk_data/taggers/{POS_TAGGER}.zip", corpus / "taggers" / f"{POS_TAGGER}.zip")]
+
+
+def test_spec_ships_no_other_nltk_data_from_the_build_machine(tmp_path, monkeypatch):
+    # PyInstaller's nltk hook adds every NLTK data folder on the build machine,
+    # e.g. ~/nltk_data holding a tagger nltk.download unzipped (which NLTK would
+    # read before the verified zip), a second WordNet zip and other packages.
+    corpus = tmp_path / "build" / "nltk_data"
+    for bundled in NLTK_PACKAGES.values():
+        (corpus / bundled).parent.mkdir(parents=True, exist_ok=True)
+        (corpus / bundled).write_bytes(b"zip")
+    builder = tmp_path / "builder" / "nltk_data"
+    hooked = [(os.path.join("nltk_data", *name.split("/")), str(builder / name), "DATA")
+              for name in ("corpora/wordnet.zip", f"taggers/{POS_TAGGER}/{POS_TAGGER}.weights.json",
+                           f"taggers/{POS_TAGGER}.zip", "tokenizers/punkt_tab/english/collocations.tab")]
+    # The rest of what Analysis collects ships unchanged, nltk's own files included.
+    others = [(os.path.join("nltk", "VERSION"), str(tmp_path / "site" / "nltk" / "VERSION"), "DATA"),
+              ("base_library.zip", str(tmp_path / "work" / "base_library.zip"), "DATA")]
+    shipped = _run_spec(tmp_path, monkeypatch, hooked + others)
+    assert [entry for entry in shipped if entry in others] == others
+    assert _shipped_nltk_data(shipped) == [
+        ("nltk_data/corpora/wordnet.zip", corpus / "corpora" / "wordnet.zip"),
+        (f"nltk_data/taggers/{POS_TAGGER}.zip", corpus / "taggers" / f"{POS_TAGGER}.zip")]
+    assert len(shipped) == len(others) + len(NLTK_PACKAGES)

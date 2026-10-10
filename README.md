@@ -209,4 +209,5 @@ The builder uses [PyInstaller](https://pyinstaller.org/en/stable/) in folder mod
 which bundles the Qt PDF/WebEngine helpers alongside the app. It downloads English
 WordNet and NLTK's English part-of-speech tagger into `build/nltk_data`, checks that a
 copy of exactly the bundled files works offline, and produces a portable ZIP under
-`dist/`. `python tools/build_desktop.py --data-only` stops after the data check.
+`dist/`. The app ships only those two zips, not other NLTK data on the build machine.
+`python tools/build_desktop.py --data-only` stops after the data check.

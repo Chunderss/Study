@@ -10,7 +10,7 @@ The application is Vocab Study, a Python desktop study workspace. Within the che
 - `vocab/gui/`: PySide6 windows, Markdown editing, PDF/EPUB readers, and shortcuts.
 - `vocab/cli/`: terminal commands and REPL.
 - `vocab/algorithms/`, `vocab/study/`, `vocab/dictionaries/`: scheduling, answer evaluation, and dictionary providers.
-- `tests/`: automated regressions; `tools/`: GUI checks and build scripts.
+- `tests/`: automated regressions; `tools/`: the desktop build script plus manual GUI check and screenshot scripts (`gui_*.py`). CI runs only `build_desktop.py` directly; `tests/test_tools.py` runs the viewer and disambiguation checks.
 - `packaging/desktop.py` and `VocabStudy.spec`: desktop packaging. Generated assets and bundles belong in `build/` and `dist/`.
 
 ## Build, Test, and Development Commands

@@ -1,9 +1,9 @@
-"""Verify LEADER-mode hotkeys via the HotkeyFilter directly (deterministic;
-offscreen QTest can't route synthetic keys through an app-level filter).
+"""Verify LEADER-mode hotkeys by calling the HotkeyFilter directly.
 
-Flow tested: leader chord (Ctrl+Shift+Space) arms; the next PLAIN key runs the
+Flow tested: the leader chord (Ctrl+B) arms; the next PLAIN key runs the
 command and is consumed so a focused text box never types it. This is the model
 that dodges OS/driver global-hotkey conflicts (the second key has no modifiers).
+tests/test_native_hotkeys.py delivers leader keys through the window instead.
 """
 import os
 import sys
@@ -53,39 +53,39 @@ def main() -> int:
     n0 = len(ws._panes)
     a, k = leader(win, Qt.Key_V)
     assert a and k, f"leader/command not consumed: {a},{k}"
-    assert len(ws._panes) == n0 + 1, "Space v did not split vertically"
+    assert len(ws._panes) == n0 + 1, "Ctrl+B then v did not split vertically"
     print("[ok] Ctrl+B then v  → split vertical")
 
     # leader - -> split horizontal
     n1 = len(ws._panes)
     leader(win, Qt.Key_Minus)
-    assert len(ws._panes) == n1 + 1, "Space - did not split horizontally"
+    assert len(ws._panes) == n1 + 1, "Ctrl+B then - did not split horizontally"
     print("[ok] Ctrl+B then -  → split horizontal")
 
     # leader z -> zoom (the conflict-prone one, now a plain letter)
     leader(win, Qt.Key_Z)
-    assert ws.is_zoomed, "Space z did not zoom"
+    assert ws.is_zoomed, "Ctrl+B then z did not zoom"
     leader(win, Qt.Key_Z)
-    assert not ws.is_zoomed, "Space z did not un-zoom"
+    assert not ws.is_zoomed, "Ctrl+B then z did not un-zoom"
     print("[ok] Ctrl+B then z  → zoom toggle")
 
     # leader n -> cycle component
     before = ws.focused.factory_key
     leader(win, Qt.Key_N)
-    assert ws.focused.factory_key != before, "Space n did not cycle"
+    assert ws.focused.factory_key != before, "Ctrl+B then n did not cycle"
     print("[ok] Ctrl+B then n  → cycle component")
 
     # leader b -> sidebar
     vis = win.sidebar.isVisible()
     leader(win, Qt.Key_B)
-    assert win.sidebar.isVisible() != vis, "Space b did not toggle sidebar"
+    assert win.sidebar.isVisible() != vis, "Ctrl+B then b did not toggle the sidebar"
     leader(win, Qt.Key_B)
     print("[ok] Ctrl+B then b  → sidebar toggle")
 
     # leader x -> close (the one that was intercepted as a direct chord)
     n2 = len(ws._panes)
     leader(win, Qt.Key_X)
-    assert len(ws._panes) == n2 - 1, "Space x did not close a pane"
+    assert len(ws._panes) == n2 - 1, "Ctrl+B then x did not close a pane"
     print("[ok] Ctrl+B then x  → close pane (no more Ctrl+Shift+X conflict)")
 
     # leader 1 -> focus pane by number

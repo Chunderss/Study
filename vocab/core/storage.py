@@ -236,7 +236,7 @@ def _word_entry_problem(key, entry):
         for field in ("pos", "example"):
             if field in sense and not isinstance(sense[field], str):
                 return f"'{field}' must be text"
-    for field in ("dictionary", "added", "context"):
+    for field in ("dictionary", "added", "context", "choice"):
         if field in entry and not isinstance(entry[field], str):
             return f"'{field}' must be text"
     if len(entry.get("context", "")) > CONTEXT_LIMIT:

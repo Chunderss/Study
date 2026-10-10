@@ -172,13 +172,18 @@ the sentence or is simply the dictionary's first, and how many more senses were 
 The word keeps the sentence it was added from (at most 500 characters around the word).
 In the terminal and the Console, `SENSES word` lists the senses saved for a word, marks
 the one studied with `*` and shows that sentence; `SENSES word --all` also lists the
-senses of its dictionary that were not saved.
+senses of its dictionary that were not saved. `SENSE 3 word` studies sense 3 of that
+list instead: it moves to the front, a sense from `--all` is saved, no sense is
+removed, and the word keeps its progress. If the word changed in another window or
+program since it was listed, nothing is changed and SENSE asks you to list it again.
+A word with your own definition (`word :: definition`) has no senses to choose.
 Vocabulary lookups from Vocab and the EPUB reader run in the background. Failed additions
 keep the input for retrying; lookups stay attached to the module where they started.
 The optional Ollama sense selector requires a separately installed local server.
 
 The Console supports `DICT`, `DICT USE wordnet`, `DICT USE freedict`, `MODE MECH ON`,
-`DISAMBIG nlp|ollama|base`, `SENSES word [--all]`, `STATS`, `DOCTOR`, and `HELP`. Source installations can use
+`DISAMBIG nlp|ollama|base`, `SENSES word [--all]`, `SENSE n word`, `STATS`, `DOCTOR`, and
+`HELP`. Source installations can use
 `DICT INSTALL wordnet` (about 13 MB: WordNet and the tagger; about 1.5 MB if only the
 tagger is missing). Downloads are explicit and may take a while; the terminal
 interface's first run downloads both when WordNet is the configured dictionary but is

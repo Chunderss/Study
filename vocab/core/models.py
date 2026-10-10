@@ -13,14 +13,16 @@ word can carry multiple senses (real dictionaries have several)::
           "senses": [
             {"pos": "adjective", "definition": "lasting a very short time"}
           ],
-          "context": "Fame is ephemeral."
+          "context": "Fame is ephemeral.",
+          "choice": "user"
         }
       }
     }
 
 Optional keys are written only when set, so other entries stay as they were
 and older builds still read the file: "context" is the sentence a lookup
-ranked the senses for.
+ranked the senses for, and "choice" is "user" once the user chose which sense
+comes first (and so is studied).
 
 Scheduler state lives in a SEPARATE stats.json so progress is importable on its
 own and the words payload stays a clean, shareable dictionary.
@@ -60,6 +62,7 @@ class Word:
     added: str = field(default_factory=utcnow_iso)
     senses: List[Sense] = field(default_factory=list)
     context: str = ""        # the sentence a lookup ranked the senses for
+    choice: str = ""         # "user" once the user chose the first sense
 
     def primary_definition(self) -> str:
         return self.senses[0].definition if self.senses else ""
@@ -72,6 +75,8 @@ class Word:
         }
         if self.context:
             d["context"] = self.context
+        if self.choice:
+            d["choice"] = self.choice
         return d
 
     @classmethod
@@ -82,7 +87,13 @@ class Word:
             added=str(d.get("added", "")) or utcnow_iso(),
             senses=[Sense.from_dict(s) for s in d.get("senses", [])],
             context=_text(d.get("context")),
+            choice=_text(d.get("choice")),
         )
+
+    @property
+    def chosen(self) -> bool:
+        """Whether the user chose the first sense (SENSE, or the sense picker)."""
+        return self.choice == "user"
 
 
 def _text(value) -> str:

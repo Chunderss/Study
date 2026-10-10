@@ -172,3 +172,16 @@ def test_console_lists_a_words_senses(window, monkeypatch):
     assert "Others:  SENSES flag" in log
     log = console(window, "SENSES flag")
     assert "   2   verb: become less intense" in log.splitlines()
+
+
+def test_console_chooses_a_sense_and_the_vocab_pane_shows_it(window, monkeypatch):
+    from vocab.core.models import Sense
+    monkeypatch.setattr(window.app, "_lookup_senses", lambda word, sentence="": (
+        [Sense("an emblem", "noun"), Sense("become less intense", "verb")], "wordnet", ""))
+    vocab = window.workspace.focused.component
+    window.workspace.split_vertical()  # the Console opens beside this Vocab pane
+    console(window, "ADD flag")
+    console(window, "SENSES flag")
+    log = console(window, "SENSE 2 flag")
+    assert "'flag' in 'Book' now studies: verb: become less intense  (its progress is kept)" in log
+    assert "become less intense" in vocab.words.toPlainText()

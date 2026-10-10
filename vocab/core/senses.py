@@ -5,6 +5,7 @@ Standard library only; the terminal and the desktop app share it.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Iterable, List, Tuple
@@ -112,6 +113,7 @@ class SenseListing:
     expected: object
     extra: Tuple = ()
     note: str = ""
+    chosen: bool = False      # the user chose the first sense
 
     @property
     def key(self) -> str:
@@ -127,3 +129,29 @@ class SenseListing:
 
     def with_extra(self, extra=(), note: str = "") -> "SenseListing":
         return replace(self, extra=tuple(unsaved(extra, self.senses)), note=note)
+
+
+def parse_sense_numbers(text: str) -> List[int]:
+    """Sense numbers as typed after SENSE ("2", or "3,1"), from 1 upward."""
+    if not re.fullmatch(r"\d+(,\d+)*", text.strip()):
+        raise ValueError(f"Write sense numbers like 2, or 3,1 for several, not '{text}'.")
+    numbers = [int(part) for part in text.split(",")]
+    if 0 in numbers:
+        raise ValueError("Sense numbers start at 1.")
+    if len(set(numbers)) != len(numbers):
+        raise ValueError("Give each sense number once.")
+    return numbers
+
+
+def reorder(word, offered, chosen):
+    """A copy of ``word`` whose senses start with ``offered[i]`` for each i in
+    ``chosen``, marked as chosen by the user.
+
+    ``offered`` is the word's saved senses followed by any extra dictionary
+    senses (SENSES --all). Senses are moved by position, never matched by
+    text, so senses that read the same both stay: the saved list only changes
+    order, and grows by the extra senses chosen.
+    """
+    picked = set(chosen)
+    rest = [sense for i, sense in enumerate(word.senses) if i not in picked]
+    return replace(word, senses=[offered[i] for i in chosen] + rest, choice="user")

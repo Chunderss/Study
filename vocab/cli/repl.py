@@ -6,6 +6,7 @@ prompts (e.g. before a large dictionary download), and error formatting.
 """
 from __future__ import annotations
 
+import re
 import sys
 from typing import List, Optional
 
@@ -15,6 +16,12 @@ from ..dictionaries import get_dictionary
 from .app import App
 from .help_text import BANNER, HELP
 from .parser import Command, parse
+
+
+# Sense-selection engines, which SENSE <engine> still switches to (see DISAMBIG).
+ENGINES = ("nlp", "ollama", "base")
+SENSE_USAGE = ("Usage: SENSE <n> <word>   (SENSES <word> numbers its senses; DISAMBIG shows "
+               "how the first one is chosen)")
 
 
 def _takes_body(cmd: Command) -> bool:
@@ -148,8 +155,10 @@ class Repl:
             return app.cmd_doctor()
         if v == "MODE":
             return self._mode(a)
-        if v in ("DISAMBIG", "SENSE"):
+        if v == "DISAMBIG":
             return app.cmd_disambig(a[0] if a else "")
+        if v == "SENSE":
+            return self._sense(a)
 
         if v == "STUDY":
             names = [" ".join(a)] if a else ([app.current_list] if app.current_list else [])
@@ -205,6 +214,16 @@ class Repl:
                 return "Cancelled; nothing was written."
             return self.app.cmd_backup(name, str(exists.path), replace=True,
                                        progress=self.progress)
+
+    def _sense(self, a: List[str]) -> str:
+        """SENSE <n> <word> chooses a sense. The number comes first because a
+        word may be several words, as in ADDL. SENSE nlp|ollama|base is still
+        the old, undocumented alias of DISAMBIG."""
+        if len(a) == 1 and a[0].lower() in ENGINES:
+            return self.app.cmd_disambig(a[0])
+        if len(a) < 2 or not re.fullmatch(r"[\d,]+", a[0]):
+            return SENSE_USAGE
+        return self.app.cmd_sense(a[0], " ".join(a[1:]))
 
     def _dict(self, a: List[str]) -> str:
         if not a:

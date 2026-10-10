@@ -19,7 +19,8 @@ from ..core import migrate as _migrate
 from ..core.models import Sense, Word
 from ..core import paths as _paths
 from ..core.paths import expand_home, get_paths, resolve_user_path, sanitize_list_name
-from ..core.senses import LookedUp, SenseListing, quoted_sentence, saved_context
+from ..core.senses import (LookedUp, SenseListing, parse_sense_numbers, quoted_sentence,
+                           reorder, saved_context)
 from ..core.locking import write_lock
 from ..core.storage import ListNotFound, Storage, full_path, in_transaction, size_text
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
@@ -511,7 +512,7 @@ class App:
             raise ValueError(f"'{word.strip()}' is not in '{module}'.")
         return SenseListing(module=module, word=saved.word, dictionary=saved.dictionary,
                             senses=tuple(saved.senses), context=saved.context,
-                            expected=expected)
+                            expected=expected, chosen=saved.chosen)
 
     def more_senses(self, listing: SenseListing) -> SenseListing:
         """The listing with its dictionary's senses that are not saved, in the
@@ -569,18 +570,98 @@ class App:
                 lines.append(f"To use dictionary senses instead:  DEL {typed}  then  ADD {typed}"
                              "   (its progress starts over)")
             return "\n".join(lines)
+        how = "by you" if listing.chosen else "automatically"
         lines = [f"{head} [{listing.dictionary or 'dictionary not recorded'}]",
-                 f"First sense chosen automatically.  {sentence}"]
+                 f"First sense chosen {how}.  {sentence}"]
         lines += self._sense_rows(listing.senses, studied=1)
         if listing.extra:
             lines.append(f"More from {listing.dictionary} (saved only if you choose one):")
             lines += self._sense_rows(listing.extra, start=len(listing.senses) + 1)
         if listing.note:
             lines.append(f"({listing.note})")
-        lines.append("* = studied.")
+        if typed and len(listing.offered) > 1:
+            lines.append(f"* = studied.  Study another:  SENSE 2 {typed}   "
+                         "(its progress is kept)")
+        else:
+            lines.append("* = studied.")
         if typed and not show_all:
             lines.append(f"SENSES {typed} --all  also lists the dictionary's other senses.")
         return "\n".join(lines)
+
+    @in_transaction
+    def choose_senses(self, listing: SenseListing, chosen: List[int],
+                      command: bool = False) -> tuple[str, SenseListing]:
+        """Study ``listing.offered[i]`` for i in ``chosen`` (0-based): move it
+        to the front, adding it when it is an extra dictionary sense.
+
+        Refused, writing nothing, when the word or its module changed since
+        the listing was read (another window or process, a newer lookup, a
+        module recreated under the same name) or the word has your own
+        definition. Progress (stats.json) is not touched. Returns the reply
+        and the word's listing after the change.
+        """
+        typed = _typed_word(listing.word, command)
+        name, module = listing.word, listing.module
+        try:
+            current = self.word_state(module, name)
+        except ListNotFound:
+            raise ValueError(f"'{module}' no longer exists, so nothing was changed.") from None
+        if current != listing.expected:
+            if current[1] is None:
+                raise ValueError(f"'{name}' is no longer in '{module}', so nothing was changed.")
+            again = f" List them again:  SENSES {typed}" if command and typed else ""
+            raise ValueError(f"'{name}' changed since its senses were listed (in another window "
+                             f"or program), so nothing was changed.{again}")
+        if listing.manual:
+            raise ValueError(f"'{name}' has your own definition, so there are no dictionary "
+                             "senses to choose.")
+        offered = listing.offered
+        if not chosen:
+            raise ValueError("Choose a sense.")
+        if len(set(chosen)) != len(chosen):
+            raise ValueError("Give each sense number once.")
+        if any(not 0 <= i < len(offered) for i in chosen):
+            count = len(offered)
+            hint = (f" SENSES {typed} --all lists the dictionary's other senses."
+                    if command and typed and not listing.extra else "")
+            raise ValueError(f"'{name}' has {count} sense{'' if count == 1 else 's'} to choose "
+                             f"from; choose {'1' if count == 1 else f'1 to {count}'}.{hint}")
+        wl = self.storage.load_words(module)
+        word = wl.words[listing.key]
+        new = reorder(word, offered, chosen)
+        first = new.senses[0]
+        what = f"{first.pos + ': ' if first.pos else ''}{first.definition}"
+        if new.senses == word.senses and word.chosen:
+            reply = f"'{name}' in '{module}' already studies: {what}  (nothing was changed)"
+        else:
+            wl.add(new)
+            self.storage.save_words(wl)  # its progress (stats.json) is kept as it is
+            if new.senses == word.senses:
+                reply = f"'{name}' in '{module}' keeps studying: {what}  (now chosen by you)"
+            else:
+                reply = f"'{name}' in '{module}' now studies: {what}  (its progress is kept)"
+            if len(new.senses) > len(word.senses):
+                reply += (f"\n    Saved from {listing.dictionary}; '{name}' now has "
+                          f"{len(new.senses)} senses.")
+        rows = "\n".join(self._sense_rows(new.senses, studied=1))
+        return f"{reply}\n{rows}", self.sense_listing(module, name)
+
+    def cmd_sense(self, numbers: str, word: str) -> str:
+        """SENSE <n> <word>: study sense n of the latest SENSES list of word,
+        or of its senses as saved when this session listed none."""
+        chosen = parse_sense_numbers(numbers)
+        if len(chosen) > 1:
+            raise ValueError(f"Choose one sense:  SENSE {chosen[0]} {_typed_word(word.strip())}")
+        module = self.storage.canonical_name(self._resolve_target(None))
+        listing = self._sense_listings.get((module, word.strip().lower()))
+        listed = listing is not None
+        if not listed:
+            listing = self.sense_listing(module, word)
+        reply, after = self.choose_senses(listing, [n - 1 for n in chosen], command=True)
+        self._sense_listings[(module, after.key)] = after
+        if not listed:
+            reply += "\n(No SENSES list was shown here, so the number followed the saved order.)"
+        return reply
 
     def cmd_senses(self, word: str, show_all: bool = False) -> str:
         """List a word's saved senses (SENSES); with show_all, also the senses

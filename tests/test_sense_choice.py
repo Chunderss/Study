@@ -282,3 +282,194 @@ def test_the_add_reply_points_to_senses(app, monkeypatch):
         'Others:  USE "Moby Dick"  then  SENSES whale')
     from vocab.cli.help_text import HELP
     assert "SENSES <word> [--all]" in HELP
+
+
+# ---- SENSE chooses ---------------------------------------------------------
+def senses_of(app, word, module="Book"):
+    return [s["definition"] for s in raw(app, word, module)["senses"]]
+
+
+def test_sense_switches_to_the_real_wordnet_sense_and_keeps_progress(app, monkeypatch):
+    real_nltk.require("corpora/wordnet.zip")
+    app.config.active_dictionary = "wordnet"
+    tag_as(monkeypatch, "v")
+    app.cmd_add("flag", sentence=VERB_USE)
+    assert senses_of(app, "flag")[0] == "communicate or signal with a flag"  # a wrong guess
+    stats = app.storage.load_stats("Book")
+    stats["flag"]["box"] = 3
+    app.storage.save_stats("Book", stats)
+    progress = app.paths.stats_file("Book").read_bytes()
+    listing = say(app, "SENSES flag")
+    number = next(n for n, row in numbered(listing).items() if "become less intense" in row)
+    before = senses_of(app, "flag")
+    reply = say(app, f"SENSE {number} flag")
+    assert reply.splitlines()[0] == ("'flag' in 'Book' now studies: verb: become less intense"
+                                     "  (its progress is kept)")
+    assert numbered(reply)[1] == "   1 * verb: become less intense"
+    after = senses_of(app, "flag")
+    # Moved to the front; the others keep their order and nothing is dropped.
+    assert after == [before[number - 1]] + before[:number - 1] + before[number:]
+    assert app.paths.stats_file("Book").read_bytes() == progress
+    assert raw(app, "flag")["context"] == VERB_USE and raw(app, "flag")["choice"] == "user"
+    assert "First sense chosen by you." in say(app, "SENSES flag")
+    assert "become less intense" in say(app, "LS")
+
+
+def test_sense_can_choose_a_sense_listed_by_all(app):
+    real_nltk.require("corpora/wordnet.zip")
+    app.config.active_dictionary = "wordnet"
+    app.cmd_add("flag")
+    say(app, "SENSES flag --all")
+    reply = say(app, "SENSE 12 flag")
+    assert "Saved from wordnet; 'flag' now has 7 senses." in reply
+    word = app.storage.load_words("Book").words["flag"]
+    assert word.primary_definition() == "become less intense" and len(word.senses) == 7
+    assert say(app, "SENSE 9 flag").startswith(  # the list now holds the 7 saved senses
+        "! 'flag' has 7 senses to choose from; choose 1 to 7. SENSES flag --all lists")
+
+
+def test_sense_never_drops_senses_that_read_the_same(app):
+    real_nltk.require("corpora/wordnet.zip")
+    app.config.active_dictionary = "wordnet"
+    # WordNet's 'occasional' has two senses "occurring from time to time",
+    # each with its own example.
+    app.cmd_add("occasional")
+    entry = raw(app, "occasional")
+    say(app, "SENSES occasional")
+    say(app, "SENSE 1 occasional")  # the first sense: only marked as chosen
+    assert raw(app, "occasional") == {**entry, "choice": "user"}
+    say(app, "SENSE 3 occasional")
+    examples = [s["example"] for s in raw(app, "occasional")["senses"]]
+    assert sorted(examples) == sorted(s["example"] for s in entry["senses"])
+    assert examples[0] == entry["senses"][2]["example"]
+    before = app.paths.words_file("Book").read_bytes()
+    assert "(nothing was changed)" in say(app, "SENSE 1 occasional")
+    assert app.paths.words_file("Book").read_bytes() == before
+
+
+def test_sense_refuses_numbers_from_a_listing_another_window_reordered(app, monkeypatch, tmp_path):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    say(app, "SENSES flag")  # 2 = become less intense
+    other = App(tmp_path / "home")
+    other.cmd_use("Book")
+    assert not say(other, "SENSE 3 flag").startswith("!")  # now 2 = the emblem
+    before = app.paths.words_file("Book").read_bytes()
+    reply = say(app, "SENSE 2 flag")
+    assert reply == ("! 'flag' changed since its senses were listed (in another window or "
+                     "program), so nothing was changed. List them again:  SENSES flag")
+    assert app.paths.words_file("Book").read_bytes() == before
+    say(app, "SENSES flag")
+    assert not say(app, "SENSE 3 flag").startswith("!")  # listed again, it works
+    assert senses_of(app, "flag")[0] == "become less intense"
+
+
+def test_sense_refuses_when_the_word_changed_since_it_was_listed(app, monkeypatch, tmp_path):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag", sentence=VERB_USE)
+    say(app, "SENSES flag")
+    App(tmp_path / "home").cmd_add("flag", target="Book", manual_def="my own meaning")
+    before = app.paths.words_file("Book").read_bytes()
+    assert say(app, "SENSE 2 flag").startswith("! 'flag' changed since its senses were listed")
+    assert app.paths.words_file("Book").read_bytes() == before
+    App(tmp_path / "home").cmd_delete_word("flag", target="Book")
+    assert say(app, "SENSE 2 flag") == "! 'flag' is no longer in 'Book', so nothing was changed."
+
+
+def test_sense_refuses_a_module_recreated_under_the_same_name(app, monkeypatch, tmp_path):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    say(app, "SENSES flag")
+    other = App(tmp_path / "home")
+    looked_up(other, monkeypatch)
+    other.cmd_delete("Book")
+    other.cmd_create("Book")
+    other.cmd_add("flag", target="Book")  # the same entry, in a new module
+    before = app.paths.words_file("Book").read_bytes()
+    assert say(app, "SENSE 2 flag").startswith("! 'flag' changed since its senses were listed")
+    assert app.paths.words_file("Book").read_bytes() == before
+
+
+def test_sense_refuses_a_listing_from_a_deleted_module(app, monkeypatch, tmp_path):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    listing = app.sense_listing("Book", "flag")
+    App(tmp_path / "home").cmd_delete("Book")
+    with pytest.raises(ValueError, match="'Book' no longer exists, so nothing was changed."):
+        app.choose_senses(listing, [1])
+
+
+def test_sense_leaves_a_manual_definition_alone(app):
+    app.cmd_add("ephemeral", manual_def="my careful definition")
+    before = app.paths.words_file("Book").read_bytes()
+    assert say(app, "SENSE 1 ephemeral") == (
+        "! 'ephemeral' has your own definition, so there are no dictionary senses to choose.")
+    assert app.paths.words_file("Book").read_bytes() == before
+
+
+@pytest.mark.parametrize("numbers, message", [
+    ("0", "! Sense numbers start at 1."),
+    ("4", "! 'flag' has 3 senses to choose from; choose 1 to 3. SENSES flag --all lists"),
+    ("2,2", "! Give each sense number once."),
+    ("1,,2", "! Write sense numbers like 2"),
+    (",", "! Write sense numbers like 2")])
+def test_sense_rejects_numbers_that_do_not_name_listed_senses(app, monkeypatch, numbers, message):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    before = app.paths.words_file("Book").read_bytes()
+    assert say(app, f"SENSE {numbers} flag").startswith(message)
+    assert app.paths.words_file("Book").read_bytes() == before
+
+
+def test_sense_numbers_choose_and_engine_names_still_switch_the_engine(app, monkeypatch):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    reply = say(app, "SENSE 3 flag")
+    assert "now studies: verb: decorate with flags" in reply
+    assert reply.endswith("(No SENSES list was shown here, so the number followed the saved order.)")
+    assert say(app, "SENSE base") == "Sense selection set to base."  # the old alias
+    assert say(app, "SENSE NLP") == "Sense selection set to nlp."
+    for line in ("SENSE flag", "SENSE", "SENSE nlp flag"):  # usage, not "Unknown engine"
+        assert say(app, line).startswith("Usage: SENSE <n> <word>"), line
+    from vocab.cli.help_text import HELP
+    assert "SENSE <n> <word>" in HELP
+
+
+def test_a_multiword_term_chooses_by_number(app, monkeypatch):
+    looked_up(app, monkeypatch)
+    app.cmd_add("ice cream")
+    say(app, 'SENSES "ice cream"')
+    assert "now studies: verb: become less intense" in say(app, "SENSE 2 ice cream")
+
+
+def test_a_lookup_that_started_before_a_choice_keeps_the_choice(app, monkeypatch, tmp_path):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag", sentence=VERB_USE)
+    other = App(tmp_path / "home")
+    other.cmd_use("Book")
+
+    def choose_meanwhile(word, sentence=""):
+        assert not say(other, "SENSE 3 flag").startswith("!")
+        return list(THREE), "wordnet", ""
+    monkeypatch.setattr(app, "_lookup_senses", choose_meanwhile)
+    assert "already in 'Book'" in app.cmd_add("flag", sentence="They raised the flag.")
+    assert senses_of(app, "flag")[0] == "decorate with flags"
+    assert raw(app, "flag")["context"] == VERB_USE
+
+
+def test_import_rejects_a_choice_that_is_not_text(app, tmp_path):
+    entry = {"senses": [{"definition": "a"}], "choice": 1}
+    source = tmp_path / "in.json"
+    source.write_text(json.dumps({"name": "In", "words": {"w": entry}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="'choice' must be text"):
+        app.cmd_import(str(source), None, with_stats=False)
+
+
+def test_export_and_import_keep_the_choice(app, monkeypatch, tmp_path):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag", sentence=VERB_USE)
+    say(app, "SENSE 3 flag")
+    say(app, f"EXPORT Book {tmp_path / 'out.json'}")
+    say(app, f"IMPORT {tmp_path / 'out.json'} as Copy")
+    assert raw(app, "flag", "Copy") == raw(app, "flag")
+    assert raw(app, "flag", "Copy")["choice"] == "user"

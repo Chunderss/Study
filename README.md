@@ -48,10 +48,13 @@ Ctrl+B, release it, then `v` to split, `n` to cycle components, `z` to zoom,
    the book. Deleting the capture removes its highlight.
 3. Open **Learning** from the sidebar or View menu. Open questions appear first;
    edit one to mark it resolved. You can also paste a passage using **+ Capture**.
+   **Edit**, **Source** and **Delete** act on the highlighted capture, and Delete
+   names it before removing it. With nothing highlighted, they are unavailable.
 4. Choose **Review next due concept**. Write an explanation from memory, then
    **Compare with source**. Rate yourself **Needs work** or **Understood** to save
    the attempt and schedule the next review. Closing an unfinished review leaves
-   the schedule unchanged and asks before discarding an explanation.
+   the schedule unchanged and asks before discarding an explanation. Starting a
+   review clears the highlight, so no passage is shown while you recall.
 5. Select a capture and click **Source** to return to its PDF page or highlighted
    EPUB passage. Older captures fall back to their saved position when the passage
    cannot be matched. Click **‹ Learning** to return to the same capture and list

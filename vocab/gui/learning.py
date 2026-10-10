@@ -157,6 +157,17 @@ class ReviewDialog(QDialog):
         super().reject()
 
 
+class _CaptureList(QListWidget):
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        # Taking keyboard focus makes the first row current without
+        # highlighting it, and nothing draws that row. Drop it, so the first
+        # arrow key highlights the first capture instead of the second.
+        row = self.currentItem()
+        if row is not None and not row.isSelected():
+            self.selectionModel().clearCurrentIndex()
+
+
 class LearningComponent(BaseComponent):
     TITLE = "Learning"
 
@@ -169,30 +180,38 @@ class LearningComponent(BaseComponent):
         layout = QVBoxLayout(self)
         self.summary = plain_label("")
         layout.addWidget(self.summary)
-        self.entries = QListWidget()
+        self.entries = _CaptureList()
         self.entries.currentItemChanged.connect(self._selected)
+        self.entries.itemSelectionChanged.connect(self._selected)
         self.entries.itemActivated.connect(self.edit)
         layout.addWidget(self.entries, 1)
         self.details = QPlainTextEdit()
         self.details.setReadOnly(True)
         layout.addWidget(self.details, 1)
         row = QHBoxLayout()
+        self.target_buttons = []  # act on the highlighted capture
         for title, method in (("+ Capture", self.capture), ("Edit", self.edit), ("Source", self.open_source), ("Delete", self.delete)):
             button = QPushButton(title)
             button.clicked.connect(method)
             row.addWidget(button)
+            if title != "+ Capture":
+                self.target_buttons.append(button)
         layout.addLayout(row)
         self.review_button = QPushButton("Review next due concept")
         self.review_button.clicked.connect(self.review)
         layout.addWidget(self.review_button)
         self.refresh()
+        self._selected()
 
     def focus_default(self):
         self.entries.setFocus()
 
     def selected(self):
+        """The highlighted capture. The list can also have a current row that
+        is not highlighted (a row takes keyboard focus, or Ctrl+click clears
+        it); Edit, Source and Delete never act on that one."""
         row = self.entries.currentItem()
-        return self.items.get(row.data(Qt.UserRole)) if row else None
+        return self.items.get(row.data(Qt.UserRole)) if row and row.isSelected() else None
 
     def navigation_state(self):
         item = self.selected()
@@ -280,6 +299,8 @@ class LearningComponent(BaseComponent):
 
     def _selected(self, *_):
         item = self.selected()
+        for button in self.target_buttons:
+            button.setEnabled(item is not None)
         if not item:
             self.details.clear()
             return
@@ -308,7 +329,10 @@ class LearningComponent(BaseComponent):
 
     def delete(self):
         item = self.selected()
-        if not item or QMessageBox.question(self, "Delete capture", "Delete this capture and its review history?") != QMessageBox.Yes:
+        # The capture is named after the first line, so it always shows as plain text.
+        if not item or QMessageBox.question(
+                self, "Delete capture",
+                f"Delete this capture and its review history?\n\n{item['prompt']}") != QMessageBox.Yes:
             return
         try:
             self.store.delete(self.module, item["id"], item["revision"])
@@ -324,7 +348,9 @@ class LearningComponent(BaseComponent):
         self.refresh()
         due = self.store.due(self.items)
         if due:
-            # Hide the detail pane before opening the recall prompt.
-            self.entries.clearSelection()
+            # Hide the detail pane before opening the recall prompt, and leave
+            # no current row: a refresh meanwhile must not select it again,
+            # and afterwards Edit, Source and Delete wait for a new selection.
+            self.entries.setCurrentItem(None)
             self.details.clear()
             ReviewDialog(self.ctx, self.module, self.items[due[0]], self).exec()

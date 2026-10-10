@@ -431,12 +431,11 @@ class Storage:
         module = sanitize_module_name(module)
         directory = self.paths.notes_dir(module)
         # A file saved under a name that is not canonical ("Double.md.md",
-        # "Space .md") stays reachable by the name note_names() lists for it.
-        raw = (note or "").strip()
-        if raw and raw not in (".", "..") and _NOTE_CHARS.match(raw):
-            legacy = directory / f"{raw}.md"
-            if legacy.is_file():
-                return legacy
+        # "Space .md") stays reachable by the name note_names() lists for it,
+        # spaces included ("Double.md", "Space ").
+        for stored in dict.fromkeys((note or "", (note or "").strip())):
+            if _stored_note_stem(stored) and (directory / f"{stored}.md").is_file():
+                return directory / f"{stored}.md"
         return directory / f"{_sanitize_note_name(note)}.md"
 
     def canonical_note_name(self, module: str, note: str) -> str:
@@ -509,11 +508,9 @@ class Storage:
     # its usual meaning. Store the baseline too, for external-edit detection.
     def _draft_path(self, module, note):
         # Callers pass a note's stored name (from note_names or create_note), so
-        # use it as is: drafts of "Double.md" and "Double" never share a file,
-        # even after one note's Markdown file is gone.
-        raw = (note or "").strip()
-        valid = raw not in ("", ".", "..") and _NOTE_CHARS.match(raw)
-        stem = raw if valid else _sanitize_note_name(note)
+        # use it as is: drafts of "Double.md", "Space " and "Double" never share
+        # a file, even after one note's Markdown file is gone.
+        stem = note if _stored_note_stem(note) else _sanitize_note_name(note)
         return self.paths.module_dir(sanitize_module_name(module)) / "drafts" / f"{stem}.json"
 
     def save_note_draft(self, module, note, baseline, content):
@@ -650,6 +647,12 @@ class Storage:
 
 
 _NOTE_CHARS = re.compile(r"^[A-Za-z0-9 _.\-()']+$")
+
+
+def _stored_note_stem(note) -> bool:
+    """Whether ``note`` can be a stored note's file stem exactly as given."""
+    return (isinstance(note, str) and note.strip() not in ("", ".", "..")
+            and _NOTE_CHARS.match(note) is not None)
 
 
 def _sanitize_note_name(note: str) -> str:

@@ -157,3 +157,46 @@ wait_for(lambda: settled(viewer, "A"), viewer)
 viewer.save_position()
 assert saved() == {"chapter": 0, "scroll": 0.0, "zoom": 1.5}, saved()
 ''')
+
+
+def test_a_link_into_the_same_chapter_keeps_the_live_position(tmp_path):
+    run_reader(tmp_path, r'''
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                  '<item id="a" href="a.xhtml"/><item id="b" href="b.xhtml"/></manifest>'
+                  '<spine><itemref idref="a"/><itemref idref="b"/></spine></package>')
+    book.writestr("a.xhtml", page.format("A", "<p>Text</p>" * 300 + '<a id="ref" href="a.xhtml#fn1">1</a>'
+                                         '<a id="self" href="a.xhtml">top</a><p id="fn1">The note</p>'))
+    book.writestr("b.xhtml", page.format("B", "<p>Second chapter text</p>" * 400))
+viewer = open_viewer()
+wait_for(lambda: settled(viewer, "A"), viewer)
+js(viewer, "window.scrollTo(0, document.documentElement.scrollHeight); true;")
+wait_for(lambda: viewer.source_location()["scroll"] > .9)
+bottom = viewer.source_location()["scroll"]
+js(viewer, 'document.getElementById("ref").click(); true;')  # its target is already in view
+QTest.qWait(300)
+assert viewer._document_loaded and viewer.source_location()["scroll"] == bottom
+viewer.save_position()
+assert saved()["scroll"] == bottom, saved()
+''')
+
+
+def test_returning_before_the_next_chapter_appears_keeps_the_reader_working(tmp_path):
+    run_reader(tmp_path, r'''
+viewer = open_viewer()
+wait_for(lambda: settled(viewer, "A"), viewer)
+js(viewer, "window.scrollTo(0, document.documentElement.scrollHeight * .5); true;")
+wait_for(lambda: viewer.source_location()["scroll"] > .4)
+viewer._go(1)
+viewer._go(-1)  # before chapter B could load
+QTest.qWait(500)
+assert viewer._document_loaded and viewer._web.title() == "A" and viewer._idx == 0
+js(viewer, "window.scrollTo(0, document.documentElement.scrollHeight * .7); true;")
+wait_for(lambda: viewer.source_location()["scroll"] > .6)
+captures = []
+ctx.capture_requested.connect(lambda *args: captures.append(args))
+js(viewer, 'var r = document.createRange(); r.selectNodeContents(document.body.lastElementChild); '
+           'getSelection().removeAllRanges(); getSelection().addRange(r); true;')
+viewer._capture()
+wait_for(lambda: bool(captures))
+''')

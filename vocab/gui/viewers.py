@@ -390,6 +390,7 @@ class EpubViewer(QWidget):
         # moment after a load; it is used once it has changed for this one.
         self._stale_scroll = 0.0
         self._scroll_fresh = False
+        self._loaded_path = None  # the last document that finished loading
         # Nothing is saved until a chapter was requested successfully, so a
         # reader whose first load failed keeps the previously saved place.
         self._position_known = False
@@ -544,6 +545,7 @@ class EpubViewer(QWidget):
 
     def _on_loaded(self) -> None:
         self._document_loaded = True
+        self._loaded_path = Path(self._requested_url.toLocalFile()).resolve()
         if self._web.page().scrollPosition().y() != self._stale_scroll:
             self._scroll_fresh = True  # the cache already shows this document
         self._web.show()
@@ -764,21 +766,28 @@ class EpubViewer(QWidget):
             return
         self._set_chapter(i)
         self._position_known = True
-        same_document = (self._document_loaded and self._requested_url.isLocalFile() and
-                         Path(url.toLocalFile()).resolve() == Path(self._requested_url.toLocalFile()).resolve())
+        # The page Chromium last finished loading, even if another load was
+        # requested since and has not appeared yet.
+        same_document = Path(url.toLocalFile()).resolve() == self._loaded_path
+        in_flight = not self._document_loaded
         self._current_path = self._source_paths[str(Path(url.toLocalFile()).resolve())]
         self._error.hide()
         self._requested_url = url
         self._load_generation += 1
         requested = self._pending_scroll if self._pending_scroll is not None else 0.0
         if same_document:
-            # Chromium treats the page already shown as an in-page jump, with
-            # no load events: restore the requested place directly.
-            self._requested_scroll = requested
-            self._stale_scroll = self._web.page().scrollPosition().y()
-            self._scroll_fresh = False
-            if fragment:
-                self._web.setUrl(url)
+            # Chromium treats the page it shows as an in-page jump, with no
+            # load events: restore the requested place directly. Loading it
+            # also cancels a navigation still in flight.
+            self._document_loaded = True
+            if self._pending_scroll is None:
+                self._scroll_fresh = True  # Qt's cached scroll is this document's
+            else:
+                self._requested_scroll = requested
+                self._stale_scroll = self._web.page().scrollPosition().y()
+                self._scroll_fresh = False
+            if fragment or in_flight:
+                self._web.load(url)
             generation = self._load_generation
             QTimer.singleShot(0, self, lambda: self._restore_location(generation))
             return
@@ -849,6 +858,7 @@ class EpubViewer(QWidget):
             self._on_loaded()
         elif info.status() == QWebEngineLoadingInfo.LoadStatus.LoadFailedStatus:
             self._document_loaded = False
+            self._loaded_path = None
             self._position_known = False  # keep the previously saved place
             self._web.hide()
             self._show_error(f"Could not read chapter: {info.errorString()}")

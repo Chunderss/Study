@@ -89,6 +89,14 @@ def test_only_well_formed_xhtml_is_read_as_xml(tmp_path):
         f'<html {NS}><body>plain</body></html>': False,          # a legacy charset
         '<?xml version="1.0" encoding="UTF-8"?>'
         f'<html {NS}><body>plain</body></html>': True,
+        '<!DOCTYPE html [<!ENTITY nbsp "&#160;">]>'               # declared by the chapter,
+        f'<html {NS}><head><title/></head><body title="a&nbsp;b">A&nbsp;B</body></html>': True,  # EPUB 3
+        f'<!DOCTYPE html><html {NS}><head><title/></head><body><!-- &nbsp; -->'
+        '<style><![CDATA[p::after { content: "&copy;" }]]></style></body></html>': True,
+        '<!DOCTYPE html PUBLIC "-//WAPFORUM//DTD XHTML Mobile 1.2//EN" "x.dtd">'
+        f'<html {NS}><body>&nbsp;</body></html>': True,
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN " "x.dtd">'
+        f'<html {NS}><body>&nbsp;</body></html>': False,         # Chromium compares it as written
         '<!DOCTYPE html SYSTEM "custom.dtd">'
         f'<html {NS}><body>&custom;</body></html>': False,       # unknown to Chromium
         '<html><body><p/></body></html>': False,                 # no XHTML namespace

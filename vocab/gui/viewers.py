@@ -48,10 +48,16 @@ _XHTML_PUBLIC_IDS = {
     "-//W3C//DTD XHTML 1.0 Transitional//EN", "-//W3C//DTD XHTML 1.0 Strict//EN",
     "-//W3C//DTD XHTML 1.0 Frameset//EN", "-//W3C//DTD XHTML 1.1//EN",
     "-//W3C//DTD XHTML Basic 1.0//EN", "-//W3C//DTD XHTML 1.1 plus MathML 2.0//EN",
-    "-//W3C//DTD XHTML 1.1 plus MathML 2.0 plus SVG 1.1//EN",
-    "-//WAPFORUM//DTD XHTML Mobile 1.0//EN",
+    "-//W3C//DTD XHTML 1.1 plus MathML 2.0 plus SVG 1.1//EN", "-//W3C//DTD MathML 2.0//EN",
+    "-//WAPFORUM//DTD XHTML Mobile 1.0//EN", "-//WAPFORUM//DTD XHTML Mobile 1.1//EN",
+    "-//WAPFORUM//DTD XHTML Mobile 1.2//EN",
 }
 _ENTITY_REFERENCE = re.compile(r"&([A-Za-z_:][\w.:-]*);")
+# Not markup that can hold entity references: comments, CDATA, instructions.
+_NOT_REFERENCES = re.compile(r"<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>", re.S)
+# The public identifier as written: Blink compares it literally, while expat
+# reports it with its whitespace normalized.
+_PUBLIC_ID = re.compile(r"<!DOCTYPE\s+\S+\s+PUBLIC\s+(\"[^\"]*\"|'[^']*')", re.I)
 _XML_ENTITIES = {"lt", "gt", "amp", "quot", "apos"}
 
 
@@ -65,15 +71,20 @@ def _renders_as_xhtml(source: Path) -> bool:
     except OSError:
         return False
     parser = xml.parsers.expat.ParserCreate(namespace_separator=" ")
-    found = {"root": None, "doctype": None, "encoding": None}
+    found = {"root": None, "encoding": None, "declared": set()}
 
     def start(name, _attributes):
         if found["root"] is None:
             found["root"] = name
 
     parser.StartElementHandler = start
-    parser.StartDoctypeDeclHandler = lambda _name, _system, public, _internal: found.update(doctype=public)
     parser.XmlDeclHandler = lambda _version, encoding, _standalone: found.update(encoding=encoding)
+
+    def declared(name, is_parameter, *_rest):
+        if not is_parameter:
+            found["declared"].add(name)  # the chapter's own entities
+
+    parser.EntityDeclHandler = declared
     try:
         parser.Parse(data, True)
     except (xml.parsers.expat.ExpatError, ValueError):
@@ -83,12 +94,12 @@ def _renders_as_xhtml(source: Path) -> bool:
     # Only UTF-8 and UTF-16. QtWebEngine 6.11's renderer crashes on some
     # legacy charsets, and Chromium does not know every label Python does;
     # those chapters stay on the HTML path, decoded as UTF-8 as before.
-    declared = (found["encoding"] or "utf-8").lower().replace("_", "-")
+    charset = (found["encoding"] or "utf-8").lower().replace("_", "-")
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        if declared not in ("utf-8", "utf-16"):
+        if charset not in ("utf-8", "utf-16"):
             return False
         encoding = "utf-16"
-    elif declared in ("utf-8", "utf8"):
+    elif charset in ("utf-8", "utf8"):
         encoding = "utf-8-sig"
     else:
         return False
@@ -96,11 +107,15 @@ def _renders_as_xhtml(source: Path) -> bool:
         text = data.decode(encoding)
     except UnicodeDecodeError:
         return False
-    # Named entities anywhere, attribute values included (expat does not
+    # Undeclared named entities, attribute values included (expat does not
     # report those), must be ones Chromium resolves for the doctype.
-    names = set(_ENTITY_REFERENCE.findall(text)) - _XML_ENTITIES
-    return not names or (found["doctype"] in _XHTML_PUBLIC_IDS
-                         and names <= set(html.entities.name2codepoint))
+    names = (set(_ENTITY_REFERENCE.findall(_NOT_REFERENCES.sub("", text)))
+             - _XML_ENTITIES - found["declared"])
+    if not names:
+        return True
+    public = _PUBLIC_ID.search(text)
+    return (public is not None and public.group(1)[1:-1] in _XHTML_PUBLIC_IDS
+            and names <= set(html.entities.name2codepoint))
 
 
 class EpubBook:

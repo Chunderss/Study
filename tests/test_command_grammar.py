@@ -209,23 +209,42 @@ TYPED_TERMS = [  # (typed after ADD, the term it adds)
 ]
 
 
-def test_add_manually_hint_typed_as_shown_adds_that_term(app, monkeypatch):
+def timed_out(word, sentence=""):
     from vocab.dictionaries import LookupFailed
+    raise LookupFailed("The online dictionary timed out.", recoverable=True)
+
+
+def add_manually_hint(app, line):
+    """The command the reply to ``line`` suggests, up to its '::'."""
+    with pytest.raises(ValueError) as failed:
+        run(app, line)
+    return re.search(r"\(add manually:  (.+) :: <your definition>\)$", str(failed.value)).group(1)
+
+
+def test_add_manually_hint_typed_as_shown_adds_that_term(app, monkeypatch):
     for word in ("std", "quoted", "say", "ice"):  # what an unquoted hint would replace
         app.cmd_add(word, manual_def=f"my {word}")
-
-    def timed_out(word, sentence=""):
-        raise LookupFailed("The online dictionary timed out.", recoverable=True)
     monkeypatch.setattr(app, "_lookup_senses", timed_out)
     for typed, term in TYPED_TERMS:
         before = entries(app)
-        with pytest.raises(ValueError) as failed:
-            run(app, f"ADD {typed}")
-        hinted = re.search(r"\(add manually:  (.+) :: <your definition>\)$", str(failed.value))
-        assert f"Added '{term}'" in run(app, f"{hinted.group(1)} :: my own definition"), typed
+        hinted = add_manually_hint(app, f"ADD {typed}")
+        assert f"Added '{term}'" in run(app, f"{hinted} :: my own definition"), typed
         after = entries(app)
         assert after.pop(term.lower()) == (term, "manual", "my own definition")
         assert after == before  # no other entry changed
+
+
+def test_add_manually_hint_after_addl_names_the_same_module(app, monkeypatch):
+    run(app, 'CREATE "Moby Dick"')
+    app.cmd_add("sperm whale", manual_def="mine")  # in Book, the current module
+    before = entries(app)
+    monkeypatch.setattr(app, "_lookup_senses", timed_out)
+    hinted = add_manually_hint(app, 'ADDL "Moby Dick" sperm whale')
+    assert hinted == 'ADDL "Moby Dick" "sperm whale"'
+    assert "-> Moby Dick" in run(app, f"{hinted} :: a large toothed whale")
+    assert entries(app, "Moby Dick") == {
+        "sperm whale": ("sperm whale", "manual", "a large toothed whale")}
+    assert entries(app) == before  # the current module is untouched
 
 
 def test_replace_hint_typed_after_add_replaces_that_term(app, monkeypatch):

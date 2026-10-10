@@ -327,6 +327,7 @@ class App:
 
     def cmd_add(self, word: str, target: Optional[str] = None,
                 manual_def: Optional[str] = None, sentence: str = "") -> str:
+        named = bool(target)  # ADDL names the module; ADD uses the current one
         target = self._resolve_target(target)
         word_clean = word.strip()
         if not word_clean:
@@ -342,8 +343,9 @@ class App:
             try:
                 senses, dict_id, notice = self._lookup_senses(word_clean, sentence)
             except LookupFailed as e:
+                verb = f"ADDL {quote_arg(target)}" if named else "ADD"
                 typed = _typed_word(word_clean)
-                hint = f"  (add manually:  ADD {typed} :: <your definition>)" if typed else ""
+                hint = f"  (add manually:  {verb} {typed} :: <your definition>)" if typed else ""
                 raise ValueError(f"{e}{hint if e.recoverable else ''}") from e
         return self.add_resolved_word(word_clean, target, senses, dict_id, notice,
                                       expected=expected, command=True)

@@ -699,18 +699,32 @@ class Storage:
         return wl.name
 
     def _publish_new_module(self, wl: WordList, stats: Dict[str, dict]) -> None:
-        """Build a module in a hidden staging folder, then move it into place in
-        one step: a failure part way leaves no half-made module to block a retry."""
+        """Build a module in a hidden staging folder inside modules/ (so the
+        same filesystem, even if modules/ links to another drive), then move it
+        into place in one step: a failure part way leaves no half-made module
+        to block a retry."""
         if _leftover_kind(wl.name):
             raise InvalidListName(f"'{wl.name}' is reserved for Vocab Study's temporary folders.")
+        final = self.paths.module_dir(wl.name)
+        if os.path.lexists(final):
+            raise ModuleExists(f"A folder named '{wl.name}' already exists in "
+                               f"{self.paths.modules_dir} but is not a module. Move or remove "
+                               "it, or choose another name.")
         self.paths.modules_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=".vocab-staging-", dir=self.paths.root) as temporary:
-            staged = Storage(Paths(Path(temporary)))
+        staging = self.paths.modules_dir / f"{STAGING_PREFIX}{uuid.uuid4().hex}"
+        staging.mkdir()
+        try:
+            staged = Storage(Paths(staging))
             staged.paths.ensure_module(wl.name)
             staged.save_module(Module(name=wl.name, metadata={"id": uuid.uuid4().hex}))
             staged.save_words(wl)
             staged.save_stats(wl.name, stats)
-            staged.paths.module_dir(wl.name).rename(self.paths.module_dir(wl.name))
+            staged.paths.module_dir(wl.name).rename(final)
+        finally:
+            try:
+                _remove_tree(staging)
+            except OSError:
+                pass  # hidden, and purged by purge_leftovers()
 
 
 _NOTE_CHARS = re.compile(r"^[A-Za-z0-9 _.\-()']+$")

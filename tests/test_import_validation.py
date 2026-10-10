@@ -154,3 +154,30 @@ def test_schedulers_keep_their_contract():
 
     with pytest.raises(TypeError, match="due_order"):
         Unfinished()
+
+
+def test_new_modules_are_built_beside_their_final_place(app, tmp_path, monkeypatch):
+    # A rename never crosses filesystems, even when modules/ links to another drive.
+    renames, rename = [], Path.rename
+    def record(self, target):
+        renames.append(self)
+        return rename(self, target)
+    monkeypatch.setattr(Path, "rename", record)
+    bundle = tmp_path / "bundle.json"
+    app.cmd_export("Source", str(bundle))
+    app.cmd_import(str(bundle), "Copy", False)
+    app.cmd_create("Fresh")
+    assert renames and all(app.paths.modules_dir in path.parents for path in renames)
+    assert nothing_left(app)
+
+
+def test_a_folder_that_is_not_a_module_is_reported_and_kept(app, tmp_path):
+    leftover = app.paths.module_dir("Alpha") / "documents" / "book.pdf"
+    leftover.parent.mkdir(parents=True)
+    leftover.write_bytes(b"%PDF")
+    bundle = tmp_path / "bundle.json"
+    app.cmd_export("Source", str(bundle))
+    for attempt in (lambda: app.cmd_create("Alpha"), lambda: app.cmd_import(str(bundle), "Alpha", False)):
+        with pytest.raises(Exception, match="already exists .* but is not a module"):
+            attempt()
+    assert leftover.read_bytes() == b"%PDF" and nothing_left(app)

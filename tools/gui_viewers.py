@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # Import this checkout even when another copy of vocab is installed.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
 from vocab.gui import theme
 
@@ -136,7 +137,6 @@ def main() -> int:
     print("[ok] storage.save/load_reading_pos round-trips")
 
     # a NEW EpubViewer for that book must restore chapter + zoom from storage
-    win.app.storage.add_document("Book", epath)   # ensure present (test.epub name)
     # point the viewer's ctx at module 'Book'
     win.app.cmd_use("Book")
     ev3 = make_viewer(os.path.join(tmp, "test.epub"), win.ctx)
@@ -150,6 +150,14 @@ def main() -> int:
     got2 = st.load_reading_pos("Book", "test.epub")
     assert got2.get("chapter") == 0, f"on_replaced did not persist chapter: {got2}"
     print("[ok] on_replaced (pane swap / back button) saves current chapter")
+
+    # Close every viewer before QApplication goes: a WebEngine page that
+    # outlives its profile crashes the interpreter at exit.
+    for widget in (ev, pv, ev2, ev3, win):
+        widget.close()
+        widget.deleteLater()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
 
     print("\nVIEWERS PASSED")
     return 0

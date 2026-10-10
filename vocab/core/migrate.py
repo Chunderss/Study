@@ -59,9 +59,15 @@ def _listing(folder: Path) -> dict:
             for p in folder.rglob("*") if p.is_file()}
 
 
-def _tree_digest(folder: Path) -> dict:
-    return {p.relative_to(folder).as_posix(): _digest(p)
-            for p in folder.rglob("*") if p.is_file()}
+def _tree_digest(folder: Path, known=None) -> dict:
+    """Hashes by relative path; also recorded by full path in ``known``."""
+    digests = {}
+    for p in folder.rglob("*"):
+        if p.is_file():
+            digests[p.relative_to(folder).as_posix()] = value = _digest(p)
+            if known is not None:
+                known[str(p)] = value
+    return digests
 
 
 def _verified_backup(legacy: Path):
@@ -69,34 +75,29 @@ def _verified_backup(legacy: Path):
 
     A migration that keeps failing then does not copy everything again at
     every start. An incomplete or outdated backup never matches.
-    Returns (backup, digest of its files) or (None, None).
+    Returns (backup, hashes of its files by full path) or (None, {}).
     """
     listing, digest = _listing(legacy), None
     for candidate in sorted(legacy.parent.glob("lists.backup-*"), reverse=True):
         if not candidate.is_dir() or _listing(candidate) != listing:
             continue
         digest = digest or _tree_digest(legacy)
-        if _tree_digest(candidate) == digest:
-            return candidate, digest
-    return None, None
+        known = {}
+        if _tree_digest(candidate, known) == digest:
+            return candidate, known
+    return None, {}
 
 
-def _fingerprint(source: Path) -> dict:
+def _fingerprint(source: Path, known=None) -> dict:
+    """Hashes of a list's files. ``known`` holds hashes already computed, by
+    full path; a file spelled differently there (another case) is hashed again."""
+    known = known or {}
     files = [source / "words.json"]
     if (source / "stats.json").exists():
         files.append(source / "stats.json")
     if (source / "sources").is_dir():
         files.extend(p for p in (source / "sources").rglob("*") if p.is_file())
-    return {p.relative_to(source).as_posix(): _digest(p) for p in sorted(files)}
-
-
-def _fingerprint_from(digest: dict, name: str) -> dict:
-    """_fingerprint of list ``name``, taken from a digest of the whole tree."""
-    prefix = name + "/"
-    return {relative[len(prefix):]: value for relative, value in digest.items()
-            if relative.startswith(prefix)
-            and (relative[len(prefix):] in ("words.json", "stats.json")
-                 or relative[len(prefix):].startswith("sources/"))}
+    return {p.relative_to(source).as_posix(): known.get(str(p)) or _digest(p) for p in sorted(files)}
 
 
 def _provenance(name: str, fingerprint: dict) -> dict:
@@ -152,7 +153,7 @@ def migrate(paths: Paths) -> List[str]:
         return []
 
     # 1. full backup first (or the verified one of this exact lists/)
-    backup, digest = _verified_backup(legacy)
+    backup, known = _verified_backup(legacy)
     if backup is None:
         backup = _archive_path(legacy, "backup")
         shutil.copytree(legacy, backup)
@@ -162,8 +163,7 @@ def migrate(paths: Paths) -> List[str]:
     problems: List[str] = []
     paths.modules_dir.mkdir(parents=True, exist_ok=True)
     # A reused backup was just hashed in full; don't read it all again.
-    snapshot = {src.name: _fingerprint_from(digest, src.name) if digest else _fingerprint(src)
-                for src in _legacy_lists(backup)}
+    snapshot = {src.name: _fingerprint(src, known) for src in _legacy_lists(backup)}
 
     for name, fingerprint in snapshot.items():
         src = backup / name

@@ -166,7 +166,7 @@ def test_unavailable_module_keeps_reader_open_when_learning_return_fails(window)
     assert not window.app.storage.exists("Book")
     back_button(viewer).click()
     assert window.workspace.focused.component is viewer
-    assert "Cannot return to Learning" in window.status.text()
+    assert "Cannot return to Learning" in window.message.text()
 
 
 def test_regular_reader_back_still_opens_documents(window):
@@ -182,4 +182,4 @@ def test_missing_source_keeps_learning_selection(window):
     component.open_source()
     assert window.workspace.focused.component is component
     assert component.selected()["id"] == item["id"]
-    assert "moved or deleted" in window.status.text()
+    assert "moved or deleted" in window.message.text()

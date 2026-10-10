@@ -7,7 +7,13 @@ keeps components decoupled and independently testable.
 """
 from __future__ import annotations
 
+from collections import deque
+
 from PySide6.QtCore import QObject, Signal, Slot, QRunnable, QThreadPool
+
+
+# Recent log lines, for a Console opened later. Kept in memory only.
+MESSAGE_HISTORY = 200
 
 
 class WorkspaceContext(QObject):
@@ -33,6 +39,9 @@ class WorkspaceContext(QObject):
     def __init__(self, app):
         super().__init__()
         self.app = app
+        # Connected first, so a line is recorded before other slots run.
+        self.messages = deque(maxlen=MESSAGE_HISTORY)
+        self.log.connect(self.messages.append)
         from .note_buffers import NoteBuffers
         self.notes = NoteBuffers(app.storage, self)
         self._pool = QThreadPool(self)

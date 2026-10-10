@@ -13,7 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QInputDialog, QLabel,
                                QListWidget, QListWidgetItem, QMessageBox,
-                               QPushButton, QVBoxLayout, QWidget, QMenuBar)
+                               QPushButton, QSizePolicy, QVBoxLayout, QWidget, QMenuBar)
 
 from ..cli.app import App
 from ..core.storage import ModuleNotFound
@@ -59,21 +59,27 @@ class MainWindow(QWidget):
         self.ctx.changed.connect(self._refresh_modules)
         self.ctx.module_changed.connect(self._refresh_modules)
         self.ctx.log.connect(self._show_message)
-        self._refresh_modules()
-        if self.app.migration_note and not self.app.migration_problem:
-            self.ctx.log.emit(self.app.migration_note)  # a problem is reported by the status bar
+        # The message line shows the latest message, so the hint goes first and
+        # notices about the user's data go last.
+        self.ctx.log.emit("Shortcuts (tmux-style): press Ctrl+B, then a key (e.g. v split, z zoom, "
+                          "x close). Press F1 for the full list.")
+        logged = len(self.ctx.messages)
+        self._refresh_modules()  # reports status problems, which keep a marker there
         if self.app.config.load_error:
             # The status bar keeps a marker while settings run on defaults.
             logging.error(self.app.config.load_error)
-        self.ctx.log.emit("Shortcuts (tmux-style): press Ctrl+B, then a key (e.g. v split, z zoom, "
-                          "x close). Press F1 for the full list.")
+        if self._session_warning:
+            self.ctx.log.emit(self._session_warning)
+        if self.app.migration_note and not self.app.migration_problem:
+            self.ctx.log.emit(self.app.migration_note)  # a problem is reported by the status bar
         recovered = self.ctx.notes.dirty_buffers()
         if recovered:
             self.ctx.log.emit(f"Recovered {len(recovered)} unsaved note draft(s). Open Notes to review and save them.")
         if self.ctx.notes.recovery_errors:
             self.ctx.log.emit("! " + " · ".join(self.ctx.notes.recovery_errors))
-        if self._session_warning:
-            self.ctx.log.emit(self._session_warning)
+        hidden = len(self.ctx.messages) - logged - 1
+        if hidden > 0:
+            self.message.setText(f"{self.message.text()}  (+{hidden} more: View → Console)")
         # Keep the pane highlight in sync with the REAL keyboard focus, whether
         # it moves by click or by keyboard. Connect last: a window that failed
         # to finish construction must not keep receiving focus changes.
@@ -85,8 +91,14 @@ class MainWindow(QWidget):
         pass
 
     def _show_message(self, text):
-        self.status.setText(text)
-        self.status.setToolTip(text)
+        # Messages have their own line, so the status refresh that runs on
+        # every focus change cannot replace them. The Console keeps earlier ones.
+        self._message_text = text
+        # One line, so a message of several lines (an added word and its sense)
+        # never changes the height of the panes above.
+        self.message.setText("  ·  ".join(line.strip() for line in text.splitlines() if line.strip()))
+        # The fixed line first keeps the whole tooltip plain text.
+        self.message.setToolTip(f"View → Console lists recent messages.\n\n{text}" if text else "")
 
     # ---- component factory ---------------------------------------------
     def _make_component(self, key: str):
@@ -153,7 +165,14 @@ class MainWindow(QWidget):
         self.workspace.confirm_unsaved = self._confirm_unsaved
         body.addWidget(self.workspace, 1)
 
-        # status / keyhint bar
+        # latest message, above the status / keyhint bar
+        self.message = QLabel("", objectName="Muted")
+        self.message.setTextFormat(Qt.PlainText)
+        self.message.setContentsMargins(14, 4, 14, 0)
+        # A long message (a file path) must not widen the window; the tooltip has it all.
+        self.message.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._message_text = ""
+        outer.addWidget(self.message)
         self.status = QLabel("", objectName="Muted")
         self.status.setContentsMargins(14, 4, 14, 8)
         outer.addWidget(self.status)
@@ -378,8 +397,11 @@ class MainWindow(QWidget):
             labels.append("dictionary setting")
             problems.append(str(error))
         problem = " · ".join(problems)
-        if problem and problem != self._status_problem:
-            self.ctx.log.emit("! " + problem)  # once per distinct problem
+        if problem != self._status_problem:
+            if problem:
+                self.ctx.log.emit("! " + problem)  # once per distinct problem
+            elif self._message_text == "! " + self._status_problem:
+                self._show_message("")  # the problem it reported is gone
         self._status_problem = problem
         z = "  ·  ZOOM" if self.workspace.is_zoomed else ""
         sense = f"    ·    sense: {self.app.config.disambiguator}"

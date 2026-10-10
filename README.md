@@ -36,6 +36,13 @@ an already built Windows executable. The portable app is unsigned.
 Ctrl+B, release it, then `v` to split, `n` to cycle components, `z` to zoom,
 `s` to save a note, or `r` to toggle its preview. **Ctrl+S** also saves the focused note.
 
+The bottom line shows the module, its due count and the dictionary. The line above it
+shows the latest message on one line, such as a recovered draft, a workspace that
+could not be restored, or a finished study session; hover over it for the full text.
+When startup brings several notices, it shows the last one and how many more there
+are. **View → Console** lists recent messages, including those from before it was
+opened. Messages are kept in memory only, until the app closes.
+
 ## Read → capture → explain → revisit
 
 1. Open a book from **Documents**. In EPUBs, highlight a passage and click **Capture**.

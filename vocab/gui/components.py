@@ -476,6 +476,8 @@ class ConsoleComponent(BaseComponent):
         self.cmd.returnPressed.connect(self._run)
         row.addWidget(self.cmd, 1)
         lay.addLayout(row)
+        for text in ctx.messages:  # logged before this Console opened
+            self.log(text)
         ctx.log.connect(self.log)
 
     def focus_default(self) -> None:

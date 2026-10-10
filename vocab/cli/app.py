@@ -487,7 +487,9 @@ class App:
             view = session.current()
             echo(f"\n[{view.index}/{view.total}] {view.word}")
             if mechanical:
-                ans = prompt("  your definition (or 'q'): ").strip()
+                ans = ""
+                while not ans:  # like the GUI, a blank line is not an answer
+                    ans = prompt("  your definition (or 'q'): ").strip()
                 if ans.lower() == "q":
                     break
                 try:

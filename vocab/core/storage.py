@@ -52,6 +52,24 @@ class DataFileError(ValueError):
         self.reason = str(reason)
 
 
+# Application-owned temporary names; never listed as modules or documents.
+STAGING_PREFIX = ".vocab-staging-"
+
+
+def _publish_file(staging: Path, dest: Path, exists_message: str) -> None:
+    """Move a finished file into place without replacing one that appeared."""
+    try:
+        os.link(staging, dest)  # refuses an existing destination
+        return
+    except FileExistsError:
+        raise FileExistsError(exists_message) from None
+    except OSError:
+        pass  # no hard links on this filesystem (FAT, some network drives)
+    if dest.exists():
+        raise FileExistsError(exists_message)
+    os.rename(staging, dest)  # under the write lock; Windows refuses an existing target
+
+
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
@@ -475,22 +493,43 @@ class Storage:
         d = self.paths.documents_dir(sanitize_module_name(module))
         if not d.exists():
             return []
-        return sorted(p.name for p in d.iterdir() if p.is_file())
+        return sorted(p.name for p in d.iterdir()
+                      if p.is_file() and not p.name.startswith(STAGING_PREFIX))
 
-    @in_transaction
     def add_document(self, module: str, src: Path) -> str:
+        """Copy a document into a module.
+
+        The copy is written under a hidden staging name beside its final one
+        and published only once complete, so a failed copy leaves nothing that
+        blocks a retry. The write lock is held to check and publish, not during
+        a long copy.
+        """
         module = sanitize_module_name(module)
         if not self.exists(module):
             raise ModuleNotFound(f"Module '{module}' does not exist.")
         src = Path(src)
-        if not src.exists():
+        if not src.is_file():
             raise ModuleNotFound(f"File not found: {src}")
         dest_dir = self.paths.documents_dir(module)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / src.name
+        exists = f"Document '{src.name}' already exists in '{module}'."
         if dest.exists():
-            raise FileExistsError(f"Document '{src.name}' already exists in '{module}'.")
-        shutil.copy2(src, dest)
+            raise FileExistsError(exists)
+        staging = dest_dir / f"{STAGING_PREFIX}{uuid.uuid4().hex}"
+        try:
+            # Contents only: a read-only source must not make the copy read-only.
+            shutil.copyfile(src, staging)
+            with open(staging, "rb+") as copy:
+                os.fsync(copy.fileno())
+            with self.transaction():
+                if not self.exists(module):
+                    raise ModuleNotFound(f"Module '{module}' does not exist.")
+                if dest.exists():
+                    raise FileExistsError(exists)
+                _publish_file(staging, dest, exists)
+        finally:
+            staging.unlink(missing_ok=True)
         return dest.name
 
     # ---- reading position (per document) -------------------------------

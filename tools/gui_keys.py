@@ -10,6 +10,8 @@ import sys
 import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Import this checkout even when another copy of vocab is installed.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PySide6.QtCore import Qt, QEvent
 from PySide6.QtGui import QKeyEvent

@@ -1,6 +1,8 @@
 """Render PNG screenshots of the tiling workspace offscreen."""
 import os, sys, tempfile
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Import this checkout even when another copy of vocab is installed.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from vocab.gui import theme

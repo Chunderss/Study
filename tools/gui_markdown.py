@@ -1,6 +1,9 @@
 """Exercise the styled Notes UI and measure preview geometry before screenshots."""
 import os
+import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Import this checkout even when another copy of vocab is installed.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 import tempfile
 from pathlib import Path

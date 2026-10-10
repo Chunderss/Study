@@ -2,9 +2,10 @@
 
 Optional feature. `available()` is False until both the `nltk` package and the
 `wordnet` corpus are present. `install()` downloads nltk_resources.NLTK_PACKAGES
-on demand: the corpus and the part-of-speech tagger that sense selection uses.
-The CLI surfaces that cost before calling it, and the desktop build bundles the
-same packages (tools/build_desktop.py, VocabStudy.spec).
+on demand: the corpus and the part-of-speech tagger that sense selection uses,
+or only the tagger when the corpus already works. The CLI surfaces that cost
+(`pending_cost()`) before calling it, and the desktop build bundles the same
+packages (tools/build_desktop.py, VocabStudy.spec).
 """
 from __future__ import annotations
 
@@ -58,7 +59,11 @@ class WordNet(Dictionary):
                 "feature first:  pip install \"vocab-study[wordnet]\"",
                 recoverable=True,
             ) from e
-        for package in nltk_resources.NLTK_PACKAGES:
+        # What pending_cost() announced. NLTK would fetch WordNet again unless it
+        # is in NLTK's download folder, even when it works from another one.
+        packages = ([nltk_resources.POS_TAGGER] if self.available()
+                    else list(nltk_resources.NLTK_PACKAGES))
+        for package in packages:
             nltk.download(package, quiet=True, raise_on_error=True)
 
     def lookup(self, word: str) -> List[Sense]:

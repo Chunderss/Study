@@ -181,7 +181,7 @@ def test_installing_wordnet_installs_the_tagger_too(tmp_path, downloads):
     app = App(root=str(tmp_path))
     # WordNet itself works, but the tagger is missing: installing is not a no-op.
     assert app.cmd_dict_install("wordnet") == "Installed 'wordnet' (~1.5 MB (part-of-speech tagger))."
-    assert fetched == list(NLTK_PACKAGES) == ["wordnet", POS_TAGGER]
+    assert fetched == [POS_TAGGER]
     # A download that still leaves tagging broken is not reported as a success.
     fetched.clear()
     tagger["arrives"] = False
@@ -198,6 +198,28 @@ def test_dict_install_asks_before_fetching_a_missing_tagger(tmp_path, downloads)
     assert repl.dispatch(parse("DICT INSTALL wordnet")) == "Cancelled."
     assert asked == ["'wordnet' needs ~1.5 MB (part-of-speech tagger). Download now?"]
     assert fetched == []
+
+
+def test_dict_install_downloads_what_it_asked_about(tmp_path, downloads, monkeypatch):
+    fetched, _ = downloads
+    repl = Repl(App(root=str(tmp_path)))
+    asked = []
+    repl._confirm = lambda text: asked.append(text) or True
+    # WordNet works, perhaps from a read-only NLTK_DATA folder. NLTK would fetch
+    # it again (~10.8 MB) unless it is in NLTK's download folder, so the
+    # download is only the tagger the question named.
+    assert repl.dispatch(parse("DICT INSTALL wordnet")) == \
+        "Installed 'wordnet' (~1.5 MB (part-of-speech tagger))."
+    assert asked == ["'wordnet' needs ~1.5 MB (part-of-speech tagger). Download now?"]
+    assert fetched == [POS_TAGGER]
+    # Without WordNet, both packages, as asked.
+    fetched.clear()
+    asked.clear()
+    monkeypatch.setattr(WordNet, "available", lambda self: "wordnet" in fetched)
+    assert repl.dispatch(parse("DICT INSTALL wordnet")) == \
+        f"Installed 'wordnet' ({WordNet.install_cost})."
+    assert asked == [f"'wordnet' needs {WordNet.install_cost}. Download now?"]
+    assert fetched == list(NLTK_PACKAGES) == ["wordnet", POS_TAGGER]
 
 
 def _build_script(monkeypatch):

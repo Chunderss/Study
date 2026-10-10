@@ -127,3 +127,93 @@ def test_regular_forms_of_one_word_all_match():
 def test_inflection_rules_keep_distinct_words_apart(answer, reference):
     assert judge.score("making", "make").score == 1.0
     assert judge.score(answer, reference).score == 0.0
+
+
+@pytest.mark.parametrize("wrong, right, reference", [
+    ("not permanent", "permanent", "permanent"),
+    ("permanent", "isn't permanent", "not permanent"),
+    ("never ending", "ending", "ending"),
+    ("it doesn't last", "it lasts", "lasting"),
+    ("hope", "without hope", "lacking hope"),
+    ("permanent", "lasting a short time", "not permanent; lasting a short time"),
+    ("not existing", "existing", "existing"),
+    ("any", "not any", "not any"),       # a definition of stopwords only
+])
+def test_a_keyword_negated_differently_earns_no_credit(wrong, right, reference):
+    rejected = judge.score(wrong, reference)
+    assert rejected.score == 0.0 and not rejected.passed
+    assert "Negated differently from the definition" in rejected.feedback
+    accepted = judge.score(right, reference)
+    assert accepted.passed
+    assert "Negated differently" not in accepted.feedback
+
+
+def test_negated_feedback_names_the_word_as_the_definition_writes_it():
+    assert judge.score("Permanent", "not Permanent").feedback == (
+        "Not accepted — at least 50% of the key terms are needed. "
+        "Negated differently from the definition: Permanent.")
+
+
+VEGAN = "a strict vegetarian; someone who eats no animal or dairy products at all"
+
+# A "not" counts for the next content word only, and its place is compared
+# only when the other text has no negative word in that clause. So answers
+# that put the negation elsewhere, or say it with another word, keep the
+# credit they had; answers that reverse it lose it.
+NEGATION_TABLE = [
+    # (answer, reference, passes)
+    ("unable to read or write", "not able to read or write", True),
+    ("can't read or write", "not able to read or write", True),
+    ("able to read", "not able to read or write", False),
+    ("a vegetarian who avoids animal and dairy products", VEGAN, True),
+    ("strict vegetarian who refuses animal or dairy products", VEGAN, True),
+    ("strict vegetarian, eats animal", VEGAN, False),
+    ("a homeless person who lives on the street",
+     "a person without a home who lives on the street", True),
+    ("lasting a short time", "not permanent — lasting a short time", True),
+    ("lasting a short time", "not permanent - lasting a short time", True),
+    ("lasting a short time", "not permanent / lasting a short time", True),
+    ("lasting a short time", "not permanent and lasting a short time", True),
+    ("permanent, lasting", "not permanent — lasting a short time", False),
+    ("doesn't have any money", "having no money", True),
+    ("poor, having no money", "having no money", True),
+    ("lots of money", "having no money", False),
+    ("not in use anymore", "no longer in use", True),
+    ("missing school", "absent from school", True),
+    ("not at school", "absent from school", True),
+    ("at school", "absent from school", False),
+    ("sugar-free", "containing no sugar", True),
+    ("full of sugar", "containing no sugar", False),
+    ("fails to work", "does not work", True),
+    ("it works", "does not work", False),
+    ("insufficient sleep", "lack of sleep", True),
+    ("not enough sleep", "lack of sleep", True),
+    ("plenty of sleep", "lack of sleep", False),
+    ("not hot or cold", "neither hot nor cold", True),
+    ("doesnt last", "not lasting", True),
+    ("lasting", "not lasting", False),
+    ("without waiting", "without delay", True),
+]
+
+
+def test_negation_counts_only_where_one_text_has_none():
+    wrong = [(answer, reference, judge.score(answer, reference).score)
+             for answer, reference, passes in NEGATION_TABLE
+             if judge.score(answer, reference).passed != passes]
+    assert wrong == []
+
+
+def test_a_reversed_keyword_beside_a_matching_one_still_passes():
+    # Known limit: "or settled" is not negated, so half the key terms match.
+    result = judge.score("fixed and settled", "not fixed or settled")
+    assert result.score == 0.5 and result.passed
+    assert "Negated differently from the definition: fixed." in result.feedback
+
+
+def test_contractions_read_as_not():
+    assert judge.score("cannot go", "can't go").score == 1.0
+    assert judge.score("will not stop", "won't stop").score == 1.0
+    assert judge.score("isn\u2019t permanent", "not permanent").score == 1.0
+    for answer in ("go", "ca"):                 # no "ca" or "wo" fragments
+        result = judge.score(answer, "can't go")
+        assert result.score == 0.0 and result.missed == {"cannot"}

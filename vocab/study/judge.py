@@ -20,9 +20,14 @@ Both texts are read as Unicode words after NFKC normalisation and case
 folding. Accents on Latin letters are optional (cafe = café); marks in other
 scripts count (и is not й, е is not ё, か is not が). Chinese and Japanese
 are not split into words, so only whole matching words count there.
+
+A keyword negated differently from the definition earns no credit: "not
+permanent" for "permanent", "permanent" for "not permanent". This is a check
+of wording, word by word; see _negation_matches for how far a "not" reaches.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -37,6 +42,32 @@ _STOP = {
     "this", "it", "its", "from", "which", "who", "whom", "something", "someone",
     "used", "esp", "especially", "etc", "eg", "ie", "not", "no", "any", "some",
 }
+# A negator negates the next content word of its clause. It is a keyword as
+# well unless it is a stopword ("not", "no").
+_NEGATORS = {
+    "not", "no", "never", "without", "cannot", "nor", "neither", "non",
+    "lack", "lacks", "lacked", "lacking", "devoid", "absence", "absent",
+}
+# Words that can carry a clause's "not" without standing right before the word
+# it applies to ("missing school", "sugar-free"). They only keep a keyword
+# from counting as negated differently; they never take credit away.
+_NEGATIVE = _NEGATORS | {
+    "missing", "free", "unable", "insufficient", "nothing", "none", "nobody",
+    "nowhere", "fail", "fails", "failed", "failing", "refuse", "refuses",
+    "refused", "refusing", "avoid", "avoids", "avoided", "avoiding",
+}
+_CONTRACTIONS = [
+    (re.compile(r"\bcan['’]t\b", re.IGNORECASE), "cannot"),
+    (re.compile(r"\bwon['’]t\b", re.IGNORECASE), "will not"),
+    (re.compile(r"\bshan['’]t\b", re.IGNORECASE), "shall not"),
+    (re.compile(r"n['’]t\b", re.IGNORECASE), " not"),
+    # the same typed without the apostrophe ("cant" and "wont" are words)
+    (re.compile(r"\b(do|does|did|is|are|was|were|has|have|had|could|should|would"
+                r"|must|need)nt\b", re.IGNORECASE), r"\1 not"),
+]
+# A "not" reaches no further than its clause, which ends at punctuation,
+# dashes, slashes and "but".
+_CLAUSE = re.compile(r"[,;:.!?()\[\]{}\"“”«»/—–―]|\s-+\s|\bbut\b", re.IGNORECASE)
 
 
 def _scan(text: str) -> List[str]:
@@ -62,21 +93,6 @@ def _plain(word: str) -> str:
             continue
         out.append(ch)
     return unicodedata.normalize("NFC", "".join(out))
-
-
-def _keywords(text: str, tier: int) -> Dict[str, str]:
-    """Keywords in order: compared form -> the word as first written.
-
-    Tier 1 leaves out stopwords and words of 1-2 letters, tier 2 keeps the
-    short words, and tier 3 keeps every word.
-    """
-    out: Dict[str, str] = {}
-    for w in _scan(unicodedata.normalize("NFKC", text or "")):
-        low = _plain(w.casefold())
-        if (tier < 3 and low in _STOP) or (tier < 2 and len(low) <= 2):
-            continue
-        out.setdefault(_stem(low), w)
-    return out
 
 
 # ---- stemming ----------------------------------------------------------------
@@ -171,6 +187,61 @@ def _stem(w: str) -> str:
     return w
 
 
+@dataclass(frozen=True)
+class _Word:
+    key: str               # what is compared
+    surface: str           # as written, for feedback
+    negated: bool          # a negator stands right before it
+    negative_clause: bool  # its clause has a negative word other than itself
+
+
+def _words(text: str, tier: int) -> List[_Word]:
+    """Keywords of text, in order.
+
+    Tier 1 leaves out stopwords and words of 1-2 letters, tier 2 keeps the
+    short words, and tier 3 keeps every word.
+    """
+    text = unicodedata.normalize("NFKC", text or "")
+    for pattern, replacement in _CONTRACTIONS:
+        text = pattern.sub(replacement, text)
+    out: List[_Word] = []
+    for clause in _CLAUSE.split(text):
+        words = [(w, _plain(w.casefold())) for w in _scan(clause)]
+        negative = [i for i, (_, low) in enumerate(words) if low in _NEGATIVE]
+        pending = False
+        for i, (w, low) in enumerate(words):
+            stop = tier < 3 and low in _STOP
+            negated = False
+            if low in _NEGATORS:
+                pending = True
+            elif not stop:   # stopwords pass a negation on ("not a ...")
+                negated, pending = pending, False
+            if stop or (tier < 2 and len(low) <= 2):
+                continue
+            out.append(_Word(_stem(low), w, negated, any(j != i for j in negative)))
+    return out
+
+
+def _negation_matches(ref: _Word, ans: _Word) -> bool:
+    """False if one text negates the word and the other has no negative word
+    anywhere in that clause: "not permanent" for "permanent", or "permanent"
+    for "not permanent".
+
+    A negator applies only to the next content word, so in "not permanent and
+    lasting a short time" only "permanent" is negated. Where both texts say
+    "not" somewhere in the clause, its exact place is not compared: English
+    puts it in different places for the same meaning ("having no money",
+    "doesn't have money"; "no longer in use", "not in use anymore"). Words
+    such as "missing" and "free" count as saying "not" there ("missing
+    school" for "absent from school").
+    """
+    if ref.negated and not ans.negative_clause:
+        return False
+    if ans.negated and not ref.negative_clause:
+        return False
+    return True
+
+
 @dataclass
 class JudgeResult:
     score: float          # 0..1
@@ -195,26 +266,40 @@ class KeywordJudge(Judge):
 
     def score(self, user_answer: str, reference: str) -> JudgeResult:
         for tier in (1, 2, 3):
-            ref = _keywords(reference, tier)
+            ref = _words(reference, tier)
             if ref:
                 break
         else:
             return JudgeResult(0.0, "This card's definition has no words to compare "
                                     "with, so it cannot be graded here.", set(),
                                passed=False, gradable=False)
-        ans = _keywords(user_answer, tier)
-        missed = [word for key, word in ref.items() if key not in ans]
-        hit = len(ref) - len(missed)
-        passed = hit / len(ref) >= PASS_SCORE
-        if not missed:
+        ans = _words(user_answer, tier)
+        wanted: Dict[str, List[_Word]] = {}
+        for word in ref:
+            wanted.setdefault(word.key, []).append(word)
+        hit = 0
+        flipped: List[str] = []
+        missed: List[str] = []
+        for key, uses in wanted.items():
+            said = [a for a in ans if a.key == key]
+            if not said:
+                missed.append(uses[0].surface)
+            elif any(_negation_matches(u, a) for u in uses for a in said):
+                hit += 1
+            else:
+                flipped.append(uses[0].surface)
+        passed = hit / len(wanted) >= PASS_SCORE
+        if hit == len(wanted):
             fb = "Accepted — you recalled every key term."
         elif passed:
             fb = "Accepted — you recalled enough key terms."
         else:
             fb = f"Not accepted — at least {PASS_SCORE:.0%} of the key terms are needed."
+        if flipped:
+            fb += " Negated differently from the definition: " + ", ".join(flipped[:6]) + "."
         if missed:
             fb += " Key terms not mentioned: " + ", ".join(missed[:6]) + "."
-        return JudgeResult(round(hit / len(ref), 3), fb, set(missed), passed=passed)
+        return JudgeResult(round(hit / len(wanted), 3), fb, set(missed), passed=passed)
 
 
 JUDGES: Dict[str, Judge] = {j.id: j for j in [KeywordJudge()]}

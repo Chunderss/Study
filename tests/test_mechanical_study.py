@@ -131,3 +131,18 @@ def test_a_correct_inflected_answer_does_not_reset_the_card(app):
     card = app.storage.load_stats("Book")["obfuscate"]
     assert "score 100% — Accepted — you recalled every key term." in out.getvalue()
     assert card["box"] == 5 and card["lapses"] == 0
+
+
+def test_terminal_study_rejects_a_reversed_negation_only(app):
+    add_due(app, "existent", "existing")
+    add_due(app, "illiterate", "not able to read or write")
+    output = []
+    prompt = answer_by_word(output, {"existent": "not existing",
+                                     "illiterate": "unable to read or write"})
+    summary = app.run_study(["Book"], prompt, output.append)
+    assert ("  score 0% — Not accepted — at least 50% of the key terms are needed. "
+            "Negated differently from the definition: existing.") in output
+    assert "1/2 correct" in summary
+    stats = app.storage.load_stats("Book")
+    assert stats["existent"]["box"] == 1 and stats["existent"]["lapses"] == 1
+    assert stats["illiterate"]["box"] == 5 and stats["illiterate"]["lapses"] == 0

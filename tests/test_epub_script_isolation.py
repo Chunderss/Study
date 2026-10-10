@@ -45,6 +45,7 @@ remote = f"http://127.0.0.1:{server.server_address[1]}"
 app = QApplication([])
 root = Path(sys.argv[1])
 enable_book_scripts = sys.argv[2] == "enabled"
+xhtml = sys.argv[3] == "xhtml"  # well-formed XHTML is shown with the XML parser
 sentinel = root / "outside-the-book.txt"
 sentinel.write_text("CANARY-SECRET", encoding="utf-8")
 data = App(root / "home")
@@ -78,10 +79,13 @@ chapter = f"""<html><head><title>Isolated</title>
 <p id="sentence">The quick brown fox jumps. Another sentence follows here.</p>
 </body></html>"""
 path = data.paths.documents_dir("Book") / "isolated.epub"
+name = "one.xhtml" if xhtml else "one.html"
+if xhtml:
+    chapter = chapter.replace("<html>", '<html xmlns="http://www.w3.org/1999/xhtml">', 1)
 with zipfile.ZipFile(path, "w") as book:
     book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
-                  '<item id="one" href="one.html"/></manifest><spine><itemref idref="one"/></spine></package>')
-    book.writestr("one.html", chapter)
+                  f'<item id="one" href="{name}"/></manifest><spine><itemref idref="one"/></spine></package>')
+    book.writestr(name, chapter)
     book.writestr("style.css", "p.styled { color: rgb(12, 34, 56); }")
     book.writestr("evil.js", "document.title = 'HACKED-FILE';")
     book.writestr("pic.png", bytes(png))
@@ -132,6 +136,7 @@ def select(element_id, start=None, end=None):
 
 try:
     wait_for(lambda: viewer._document_loaded and not viewer._web.page().isLoading(), "chapter load")
+    assert viewer._requested_url.toLocalFile().endswith(".xhtml") == xhtml
     QTest.qWait(400)  # give any book script, handler or frame time to act
     state = json.loads(app_js("""JSON.stringify({
         title: document.title,
@@ -182,25 +187,27 @@ finally:
 '''
 
 
-def run(tmp_path, mode):
+def run(tmp_path, mode, markup):
     env = dict(os.environ)
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
     if sys.platform == "win32":
         env["QT_QPA_PLATFORM"] = "windows"
     env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
-    return subprocess.run([sys.executable, "-c", SCRIPT, str(tmp_path), mode], cwd=ROOT, env=env,
+    return subprocess.run([sys.executable, "-c", SCRIPT, str(tmp_path), mode, markup], cwd=ROOT, env=env,
                           capture_output=True, text=True, timeout=60)
 
 
-def test_book_scripts_do_not_run_and_reader_features_still_work(tmp_path):
-    result = run(tmp_path, "disabled")
+@pytest.mark.parametrize("markup", ["html", "xhtml"])
+def test_book_scripts_do_not_run_and_reader_features_still_work(tmp_path, markup):
+    result = run(tmp_path, "disabled", markup)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ISOLATION-OK" in result.stdout
 
 
-def test_the_same_book_does_run_scripts_when_javascript_is_enabled(tmp_path):
+@pytest.mark.parametrize("markup", ["html", "xhtml"])
+def test_the_same_book_does_run_scripts_when_javascript_is_enabled(tmp_path, markup):
     # Keeps the test above meaningful: with book JavaScript on, this book does
     # change the title and read the file outside the book.
-    result = run(tmp_path, "enabled")
+    result = run(tmp_path, "enabled", markup)
     assert result.returncode != 0
     assert '"leak": "CANARY-SECRET"' in result.stdout, result.stdout + result.stderr

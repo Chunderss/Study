@@ -9,11 +9,13 @@ Both viewers are pane components: TITLE / refresh() / focus_default().
 """
 from __future__ import annotations
 
+import html.entities
 import json
 import os
 import shutil
 import tempfile
 import zipfile
+import xml.parsers.expat
 from urllib.parse import quote as quote_url, unquote, urlsplit
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -37,6 +39,38 @@ _OPF_NS = {
     "cnt": "urn:oasis:names:tc:opendocument:xmlns:container",
     "dc": "http://purl.org/dc/elements/1.1/",
 }
+
+
+_XHTML_NS = "http://www.w3.org/1999/xhtml"
+
+
+def _renders_as_xhtml(source: Path) -> bool:
+    """Whether a chapter is well-formed XHTML that Chromium's XML parser can
+    show. Only that parser keeps self-closing tags such as <title/> and
+    <a id="x"/> closed; the HTML parser ignores the slash and swallows the
+    rest of the chapter. Anything else keeps the HTML parser's tolerance."""
+    parser = xml.parsers.expat.ParserCreate(namespace_separator=" ")
+    found = {"root": None, "doctype": None, "entities": set()}
+
+    def start(name, _attributes):
+        if found["root"] is None:
+            found["root"] = name
+
+    parser.StartElementHandler = start
+    parser.StartDoctypeDeclHandler = lambda _name, _system, public, _internal: found.update(doctype=public or "")
+    # Named entities (&nbsp;) are defined only in the XHTML DTD, which Chromium
+    # knows for XHTML doctypes; expat reports them as skipped.
+    parser.SkippedEntityHandler = lambda name, _is_parameter: found["entities"].add(name)
+    try:
+        with source.open("rb") as stream:
+            parser.ParseFile(stream)
+    except (xml.parsers.expat.ExpatError, OSError, ValueError):
+        return False
+    if found["root"] != f"{_XHTML_NS} html":
+        return False
+    return not found["entities"] or (
+        (found["doctype"] or "").startswith("-//W3C//DTD XHTML")
+        and found["entities"] <= set(html.entities.name2codepoint))
 
 
 class EpubBook:
@@ -686,17 +720,21 @@ class EpubViewer(QWidget):
             raise ValueError("This link does not point to a readable page in this EPUB.")
         target = self._html_paths.get(str(source))
         if target is None:
-            # File-backed HTML avoids setContent's encoded 2 MB limit. XHTML
-            # needs an .html sibling so Chromium renders it instead of XML;
-            # keeping the directory preserves relative images, CSS and fonts.
+            # File-backed pages avoid setContent's encoded 2 MB limit, and a
+            # sibling copy keeps relative images, CSS and fonts working.
+            # Well-formed XHTML is shown as XML, byte for byte (its encoding
+            # comes from its declaration); anything else as HTML.
+            xhtml = _renders_as_xhtml(source)
             with source.open("rb") as reader, tempfile.NamedTemporaryFile(
-                    dir=source.parent, prefix=".vocab-", suffix=".html", delete=False) as writer:
-                prefix = reader.read(3)
-                # EPUB defaults to UTF-8; file URLs otherwise guess legacy
-                # encodings. Keep an existing UTF-8/UTF-16 byte-order mark.
-                if not prefix.startswith((b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")):
-                    writer.write(b"\xef\xbb\xbf")
-                writer.write(prefix)
+                    dir=source.parent, prefix=".vocab-", suffix=".xhtml" if xhtml else ".html",
+                    delete=False) as writer:
+                if not xhtml:
+                    prefix = reader.read(3)
+                    # EPUB defaults to UTF-8; file URLs otherwise guess legacy
+                    # encodings. Keep an existing UTF-8/UTF-16 byte-order mark.
+                    if not prefix.startswith((b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")):
+                        writer.write(b"\xef\xbb\xbf")
+                    writer.write(prefix)
                 shutil.copyfileobj(reader, writer)
                 target = writer.name
             self._html_paths[str(source)] = target

@@ -12,7 +12,8 @@ body = ('<p id="banks">First bank deals money. The river bank supports trees.</p
         '<p id="art">Let us start. The art of reading.</p>'
         '<p id="em">A <em>quick</em> fox jumps. Another sentence.</p>'
         '<h2 id="heading">No full stop here</h2>'
-        '<p id="tiny">Tiny bank.</p>')
+        '<p id="tiny">Tiny bank.</p>'
+        '<p id="ruby">Before it. The <ruby>bank<rt>gloss</rt></ruby> is near the river. Next one.</p>')
 with zipfile.ZipFile(path, "w") as book:
     book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
                   '<item id="a" href="a.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>')
@@ -45,4 +46,5 @@ assert context("art", "art")["sentence"] == "The art of reading."
 assert context("em", "fox")["sentence"] == "A quick fox jumps."
 assert context("em", "quick")["sentence"] == "A quick fox jumps."
 assert context("tiny", "bank")["sentence"] == "Tiny bank."  # not the heading, not the title
+assert context("ruby", "bank")["sentence"] == "The bank is near the river."
 ''')

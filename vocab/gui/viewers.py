@@ -993,7 +993,7 @@ class EpubViewer(QWidget):
       if (!body || !element || !body.contains(element))
         return JSON.stringify({word: word, sentence: word});
       var block = element;
-      while (block !== body && /^(inline|contents)/.test(getComputedStyle(block).display))
+      while (block !== body && /^(inline|contents|ruby)/.test(getComputedStyle(block).display))
         block = block.parentElement;
       var before = document.createRange();
       before.setStart(block, 0);
@@ -1001,7 +1001,13 @@ class EpubViewer(QWidget):
       var after = document.createRange();
       after.setStart(range.endContainer, range.endOffset);
       after.setEnd(block, block.childNodes.length);
-      var head = before.toString(), tail = after.toString();
+      // Ruby glosses (<rt>, <rp>) are not part of the sentence.
+      function text(part) {
+        var fragment = part.cloneContents();
+        fragment.querySelectorAll("rt, rp").forEach(function (gloss) { gloss.remove(); });
+        return fragment.textContent;
+      }
+      var head = text(before), tail = text(after);
       var ends = /[.!?]+["'’”)\]]*\s/g, cut = 0, match;
       while ((match = ends.exec(head)) !== null) cut = ends.lastIndex;
       head = head.slice(cut).slice(-400);

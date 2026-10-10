@@ -311,6 +311,8 @@ class MainWindow(QWidget):
         """Close readers showing a module's documents before it is deleted:
         Windows cannot move a folder while a file inside it is open."""
         try:
+            if self.app.storage.is_linked_module(name):
+                return  # delete() refuses a linked module, so keep its readers
             folder = self.app.paths.module_dir(name).resolve()
         except Exception:
             return

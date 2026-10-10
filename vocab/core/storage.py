@@ -417,6 +417,10 @@ class Storage:
         except OSError:
             pass  # hidden, and purged by purge_leftovers()
 
+    def is_linked_module(self, name: str) -> bool:
+        """Whether a module's folder is a symlink or junction (delete() refuses it)."""
+        return _is_link(self.paths.module_dir(sanitize_module_name(name)))
+
     def purge_leftovers(self) -> None:
         """Remove what interrupted operations left behind: trashed modules and,
         once clearly abandoned, unfinished staging copies."""

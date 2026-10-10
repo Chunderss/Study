@@ -171,6 +171,19 @@ def test_cancelling_a_console_delete_keeps_the_readers_open(window, monkeypatch)
     assert window.app.storage.exists("Book")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_a_refused_delete_keeps_the_readers_open(window, monkeypatch, tmp_path):
+    open_pdf(window)
+    folder = window.app.paths.module_dir("Book")
+    outside = tmp_path / "linked-book"
+    folder.rename(outside)
+    folder.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    window._delete_module()
+    assert "PdfViewer" in [type(pane.component).__name__ for pane in window.workspace._panes]
+    assert window.app.storage.exists("Book")
+
+
 @pytest.mark.parametrize("route", ["sidebar", "console"])
 def test_readers_are_closed_before_the_module_moves(window, monkeypatch, route):
     open_pdf(window)

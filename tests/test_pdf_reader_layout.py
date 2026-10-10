@@ -95,6 +95,11 @@ def test_fit_width_and_custom_zoom_are_remembered(window, qt):
     viewer._fit()
     viewer = reopen(window, viewer)
     assert mode(viewer) == "FitToWidth"
+    viewer._view.setZoomMode(viewer._view.ZoomMode.Custom)  # a deliberate 100%
+    viewer._view.setZoomFactor(1.0)
+    viewer = reopen(window, viewer)
+    assert window.app.storage.load_reading_pos("Book", "book.pdf")["zoom_mode"] == "custom"
+    assert mode(viewer) == "Custom" and viewer._view.zoomFactor() == 1.0
 
 
 def test_an_older_record_of_fit_width_opens_fitted(window):

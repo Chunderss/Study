@@ -271,8 +271,8 @@ class PdfViewer(QWidget):
             saved = self._storage.load_reading_pos(self._module, self._fname)
         except Exception:
             saved = {}
-        # Fit width is saved as a mode; a number is a custom zoom. Older
-        # versions saved Fit width as its stale factor 1.0.
+        # The mode is saved with the zoom. Older versions saved only a number,
+        # and Fit width as its stale factor 1.0.
         legacy_fit = "zoom_mode" not in saved and saved.get("zoom") == 1.0
         if saved.get("zoom_mode") != "fit_width" and not legacy_fit and "zoom" in saved:
             try:
@@ -334,6 +334,7 @@ class PdfViewer(QWidget):
         if self._view.zoomMode() == self._view.ZoomMode.FitToWidth:
             position["zoom_mode"] = "fit_width"  # zoomFactor() is stale in this mode
         else:
+            position["zoom_mode"] = "custom"
             position["zoom"] = float(self._view.zoomFactor())
         # A failure is the caller's to report: the reader stays open to retry.
         self._storage.save_reading_pos(self._module, self._fname, position)

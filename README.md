@@ -137,7 +137,10 @@ other than the main Vocab/reader lookup path run synchronously.
 
 Leitner schedules reviews across five boxes, 1, 3, 7, 16 and 35 calendar days apart.
 Each answer saves progress immediately. Mechanical mode keeps the reference answer and
-score visible until **Continue**. Study All writes each review to its original module.
+score visible until **Continue**. In the terminal, mechanical mode shows the judge's
+score and the reference, then asks `did you get it? [Y/n]`: Enter keeps the judge's
+verdict, `y` or `n` records your own, and `q` stops without recording the card. Nothing
+is saved before you answer. Study All writes each review to its original module.
 Cards changed, deleted, or reviewed in another session are skipped with a notice,
 preserving the newer progress.
 
@@ -176,8 +179,9 @@ split into words, so only whole matching words count there.
 Numbers are key terms only in a definition without other key terms ("1984"), so "a
 hundred years" passes for "a period of 100 years"; 1,760 and 1760 are the same number.
 A definition made only of short or common words ("an ox", "to go") is compared on those
-words. A card whose definition has no words at all is skipped without recording a review;
-study it with `MODE MECH OFF`.
+words. When a card's definition has no words at all, the terminal shows the reference with
+no suggestion and you choose; the desktop app skips the card without recording a review,
+so study it there with `MODE MECH OFF`.
 
 ## Your data
 

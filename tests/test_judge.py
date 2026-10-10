@@ -101,7 +101,7 @@ def test_an_unrelated_answer_does_not_pass_a_short_definition(answer, reference)
 def test_a_definition_without_words_cannot_be_graded(reference):
     result = judge.score("anything", reference)
     assert result.score == 0.0 and not result.passed
-    assert "cannot be graded" in result.feedback
+    assert "cannot grade" in result.feedback
     assert not result.gradable
 
 

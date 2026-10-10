@@ -18,7 +18,7 @@ from ..core.storage import ModuleNotFound, Storage
 
 class StudyCardUnavailable(ValueError):
     """The displayed card was skipped without a review: it changed outside this
-    session, or the judge cannot grade a typed answer to it."""
+    session."""
 
 
 @dataclass
@@ -33,7 +33,8 @@ class SessionResult:
     reviewed: int = 0
     correct: int = 0
     skipped: int = 0        # changed or deleted elsewhere
-    ungraded: int = 0       # the judge could not grade the typed answer
+    overruled: int = 0      # mechanical mode: recorded against the judge's suggestion
+    ungraded: int = 0       # the judge could not grade the typed answer (desktop)
 
     def mark(self, correct: bool) -> None:
         self.reviewed += 1
@@ -98,6 +99,17 @@ class CardView:
 
 
 @dataclass
+class Judgement:
+    """The judge's suggestion for a typed answer. Nothing is recorded until the
+    user confirms or overrules it with StudySession.answer()."""
+    typed: str
+    reference: str               # the definition the answer was compared with
+    feedback: str
+    score: float | None          # 0..1, None when the judge cannot grade the card
+    suggested: bool | None       # the judge's verdict, None when it cannot grade
+
+
+@dataclass
 class AnswerOutcome:
     """Result of grading one card, for the frontend to show feedback."""
     correct: bool
@@ -106,6 +118,11 @@ class AnswerOutcome:
     score: float | None = None   # judge score in mechanical mode (0..1), else None
     feedback: str = ""           # judge feedback text in mechanical mode
     reference: str = ""          # the reference definition
+    suggested: bool | None = None  # mechanical mode: the judge's verdict, if any
+
+    @property
+    def overruled(self) -> bool:
+        return self.suggested is not None and self.suggested != self.correct
 
 
 class StudySession:
@@ -117,9 +134,10 @@ class StudySession:
         while not s.done:
             view = s.current()          # what to show
             # ... show the word, let the user recall ...
-            outcome = s.answer(True)    # reveal mode: correct/incorrect
-            # or in mechanical mode:  outcome = s.answer_text("their typed def")
-        summary = s.finish()            # flushes progress, returns summary text
+            # mechanical mode first: j = s.judge_text("their typed def"), then
+            # show j.reference, j.feedback and j.suggested
+            outcome = s.answer(True)    # the user's verdict; recorded now
+        summary = s.finish()            # returns the summary text
 
     It never calls input()/print(); the caller owns all I/O and timing. This is
     what lets a GUI event loop drive it without a blocking prompt loop.
@@ -136,6 +154,7 @@ class StudySession:
         self.queue: List[StudyCard] = build_session(storage, scheduler, names)
         self.result = SessionResult()
         self._i = 0
+        self._judgement: Judgement | None = None   # for the current card
 
     # ---- introspection --------------------------------------------------
     @property
@@ -171,16 +190,25 @@ class StudySession:
         )
 
     # ---- actions --------------------------------------------------------
+    @property
+    def judgement(self) -> Judgement | None:
+        """The judge's suggestion for the current card, until it is answered."""
+        return self._judgement
+
+    def _advance(self) -> None:
+        self._i += 1
+        self._judgement = None
+
     def _unavailable(self, reason: str, *, ungraded: bool = False) -> NoReturn:
         word = self.queue[self._i].word.word
-        self._i += 1
+        self._advance()
         if ungraded:
             self.result.ungraded += 1
         else:
             self.result.skipped += 1
         raise StudyCardUnavailable(f"Skipped '{word}': {reason}")
 
-    def _apply(self, correct: bool, *, score=None, feedback="", reference="") -> AnswerOutcome:
+    def _apply(self, correct: bool, judgement: Judgement | None = None) -> AnswerOutcome:
         sc = self.queue[self._i]
         key = sc.word.word.strip().lower()
         # Check and record under the write lock, so another process cannot
@@ -204,39 +232,57 @@ class StudySession:
                 sc.card, Review.GOOD if correct else Review.AGAIN, time.time())
             stats[key] = new_card
             self.storage.save_stats(sc.home_list, stats)
-        self.result.mark(correct)
-        self._i += 1
-        return AnswerOutcome(
+        outcome = AnswerOutcome(
             correct=correct, box_before=box_before,
             box_after=int(new_card.get("box", 1)),
-            score=score, feedback=feedback,
-            reference=reference or sc.word.primary_definition(),
-        )
+            reference=sc.word.primary_definition())
+        if judgement is not None:
+            outcome.score, outcome.feedback = judgement.score, judgement.feedback
+            outcome.reference, outcome.suggested = judgement.reference, judgement.suggested
+        self.result.mark(correct)
+        self.result.overruled += int(outcome.overruled)
+        self._advance()
+        return outcome
 
-    def answer(self, correct: bool) -> AnswerOutcome:
-        """Reveal-mode grading: caller says whether the user got it."""
-        if self.done:
-            raise RuntimeError("Session already finished.")
-        return self._apply(bool(correct))
-
-    def answer_text(self, typed: str) -> AnswerOutcome:
-        """Mechanical-mode grading: judge the typed definition."""
+    def judge_text(self, typed: str) -> Judgement:
+        """Mechanical mode: the judge's suggestion for a typed definition.
+        Records nothing; answer() records the verdict the user settles on."""
         if self.done:
             raise RuntimeError("Session already finished.")
         if self.judge is None:
             raise RuntimeError("No judge configured for mechanical mode.")
+        typed = typed.strip()
+        if not typed:
+            raise ValueError("Type a definition first.")
         reference = self.queue[self._i].word.primary_definition()
         jr = self.judge.score(typed, reference)
-        if not jr.gradable:
-            # A data problem, not a wrong answer: record nothing.
+        self._judgement = Judgement(
+            typed=typed, reference=reference, feedback=jr.feedback,
+            score=jr.score if jr.gradable else None,
+            suggested=jr.passed if jr.gradable else None)
+        return self._judgement
+
+    def answer(self, correct: bool) -> AnswerOutcome:
+        """Record the user's verdict on the current card. In mechanical mode the
+        typed answer must have been judged first; the verdict may differ."""
+        if self.done:
+            raise RuntimeError("Session already finished.")
+        if self.mechanical and self._judgement is None:
+            raise RuntimeError("Type a definition first.")
+        return self._apply(bool(correct), self._judgement)
+
+    def answer_text(self, typed: str) -> AnswerOutcome:
+        """The study view's path until it asks for a verdict: record the
+        judge's verdict at once, and skip a card the judge cannot grade."""
+        judgement = self.judge_text(typed)
+        if judgement.suggested is None:
             self._unavailable("its definition has no words to compare a typed answer "
                               "with. Study it with MODE MECH OFF.", ungraded=True)
-        return self._apply(jr.passed, score=jr.score,
-                           feedback=jr.feedback, reference=reference)
+        return self.answer(judgement.suggested)
 
     def skip(self) -> None:
         """Advance without recording a review (used when the user quits early)."""
-        self._i += 1
+        self._advance()
 
     def finish(self) -> str:
         """Return the session summary.
@@ -246,6 +292,8 @@ class StudySession:
         """
         acc = (self.result.correct / self.result.reviewed * 100) if self.result.reviewed else 0.0
         summary = f"Session done: {self.result.correct}/{self.result.reviewed} correct ({acc:.0f}%)."
+        if self.result.overruled:
+            summary += f" You overruled the judge on {self.result.overruled} card(s)."
         if self.result.skipped:
             summary += f" Skipped {self.result.skipped} changed or deleted card(s)."
         if self.result.ungraded:

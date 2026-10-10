@@ -28,6 +28,7 @@ from .parser import BODY_SEPARATOR, CommandSyntaxError, quote_arg
 # Callbacks the REPL supplies so STUDY can be interactive while staying testable.
 Prompt = Callable[[str], str]        # prompt(text) -> user input line
 Echo = Callable[[str], None]         # echo(text) -> None (print)
+_STOP = object()                     # the user stopped the study session at a prompt
 
 
 # A packaged app has no pip or virtualenv to repair, and its bundled data is
@@ -601,13 +602,18 @@ class App:
                     ans = prompt("  your definition (or 'q'): ").strip()
                 if ans.lower() == "q":
                     break
-                try:
-                    outcome = session.answer_text(ans)
-                except StudyCardUnavailable as error:
-                    echo(str(error))
-                    continue
-                echo(f"  score {outcome.score:.0%} — {outcome.feedback}")
-                echo(f"  reference: {outcome.reference}")
+                judgement = session.judge_text(ans)
+                if judgement.suggested is None:
+                    echo(f"  {judgement.feedback}")
+                else:
+                    echo(f"  score {judgement.score:.0%} — {judgement.feedback}")
+                echo(f"  reference: {judgement.reference}")
+                outcome = self._record_verdict(session, prompt, echo, judgement.suggested)
+                if outcome is _STOP:
+                    break
+                if outcome is not None and outcome.overruled:
+                    echo(f"  You overruled the judge: recorded as "
+                         f"{'correct' if outcome.correct else 'missed'}.")
             else:
                 ans = prompt("  press Enter to reveal (or 'q'): ")
                 if ans.strip().lower() == "q":
@@ -622,6 +628,42 @@ class App:
 
         summary = session.finish()
         return f"\n{summary}"
+
+    @classmethod
+    def _record_verdict(cls, session: StudySession, prompt: Prompt, echo: Echo,
+                        suggested: Optional[bool]):
+        """Ask for the verdict on the current card and record it. Returns the
+        AnswerOutcome, None when the card was skipped as changed elsewhere, or
+        _STOP when the user stopped without recording it. A failed save asks
+        again, so the answer is not lost."""
+        while True:
+            verdict = cls._ask_verdict(prompt, suggested)
+            if verdict is None:
+                return _STOP
+            try:
+                return session.answer(verdict)
+            except StudyCardUnavailable as error:
+                echo(str(error))
+                return None
+            except (OSError, ValueError) as error:
+                echo(f"  Could not save review: {error}")
+
+    @staticmethod
+    def _ask_verdict(prompt: Prompt, suggested: Optional[bool]) -> Optional[bool]:
+        """Ask whether an answer was right. Enter keeps the suggestion; with
+        none (a card the judge cannot grade) it asks again. y/yes and n/no
+        choose, q stops (None), and any other reply asks again."""
+        choices = {None: "[y/n]", True: "[Y/n]", False: "[y/N]"}[suggested]
+        while True:
+            reply = prompt(f"  did you get it? {choices} (or 'q'): ").strip().lower()
+            if reply in ("y", "yes"):
+                return True
+            if reply in ("n", "no"):
+                return False
+            if reply == "q":
+                return None
+            if not reply and suggested is not None:
+                return suggested
 
     def study_targets_all(self) -> List[str]:
         return self.storage.list_names()

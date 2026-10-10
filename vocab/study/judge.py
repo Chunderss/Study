@@ -2,9 +2,9 @@
 
 Interface: score(user_answer, reference) -> JudgeResult. The judge gives the
 verdict (passed) and words its feedback from the same rule, so the two cannot
-disagree; the study session records a pass as Review.GOOD and anything else as
-Review.AGAIN. A reference the judge cannot grade (gradable=False) is not
-recorded at all.
+disagree. The verdict is a suggestion: the study session shows it with the
+reference and records the verdict the user keeps or chooses instead. A
+reference the judge cannot grade (gradable=False) comes with no suggestion.
 
 KeywordJudge (MVP): tokenises both texts, drops stopwords, matches regular
 English inflections, and computes the share of the reference's keywords that
@@ -301,8 +301,9 @@ class KeywordJudge(Judge):
             if ref:
                 break
         else:
-            return JudgeResult(0.0, "This card's definition has no words to compare "
-                                    "with, so it cannot be graded here.", set(),
+            return JudgeResult(0.0, "The judge cannot grade this card: its definition "
+                                    "has no words to compare with. Compare it with "
+                                    "your answer yourself.", set(),
                                passed=False, gradable=False)
         ans = _words(user_answer, tier)
         wanted: Dict[str, List[_Word]] = {}

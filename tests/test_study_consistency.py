@@ -104,13 +104,16 @@ def test_terminal_study_continues_after_current_word_is_deleted(app, mechanical)
     app.config.mechanical_repetition = mechanical
     deleted = False
     output = []
+    calls = 0
 
-    def prompt(_text):
-        nonlocal deleted
+    def prompt(text):
+        nonlocal deleted, calls
+        calls += 1
+        assert calls <= 20, f"run_study kept asking: {text!r}"   # fail, never hang
         if not deleted:
             app.cmd_delete_word("alpha")
             deleted = True
-        return "second letter" if mechanical else "y"
+        return "second letter" if mechanical and "definition" in text else "y"
 
     summary = app.run_study(["Book"], prompt, output.append)
     assert "1/1 correct" in summary

@@ -647,6 +647,12 @@ class MainWindow(QWidget):
                          preview=not component.markdown._preview_panel.isHidden())
         elif pane.factory_key == "viewer":
             state.update(module=component._module, filename=component._fname)
+            try:
+                # The pane's own place and zoom: two panes on one document
+                # each reopen where they were.
+                state["position"] = component.reading_position()
+            except Exception:
+                pass  # it reopens at the document's saved place
             if getattr(component, "_learning_return", None) is not None:
                 state["learning_return"] = dict(component._learning_return)
         elif isinstance(component, LearningComponent):
@@ -665,7 +671,10 @@ class MainWindow(QWidget):
                 path = (directory / filename).resolve()
                 if path.parent != directory or not path.is_file():
                     raise ValueError("Source document was moved or deleted.")
-                component = make_viewer(str(path), self.ctx, module=module)
+                # Without a valid position of its own (an older workspace
+                # file), the reader opens at the document's saved place.
+                component = make_viewer(str(path), self.ctx, module=module,
+                                        state=state.get("position"))
                 if component is None:
                     raise ValueError("Unsupported document format.")
                 self._bind_viewer_return(pane, component, state.get("learning_return"))

@@ -104,7 +104,9 @@ limits.
 
 The app reopens the selected module, pane layout, selected notes, preview visibility,
 and document readers after a normal exit. A vocabulary quiz reopens as a Vocab pane;
-its completed reviews are already saved. Reader positions remain saved per document.
+its completed reviews are already saved. Each reader pane reopens at its own page
+or chapter and zoom, also when two panes show the same document. A document you
+open again from Documents starts at the place saved for it.
 
 ## Markdown notes and drafts
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import html.entities
 import json
+import math
 import os
 import re
 import shutil
@@ -293,6 +294,19 @@ class EpubBook:
 # --------------------------------------------------------------------------- #
 #  Viewer components
 # --------------------------------------------------------------------------- #
+def _count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _number(value) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an integer too large for a float
+        return False
+
+
 class PdfViewer(QWidget):
     """Native paged PDF viewer via QtPdf."""
 
@@ -300,7 +314,7 @@ class PdfViewer(QWidget):
     ZOOM_MIN = 0.1
     ZOOM_MAX = 5.0
 
-    def __init__(self, path: str, ctx=None, parent=None, module=None):
+    def __init__(self, path: str, ctx=None, parent=None, module=None, state=None):
         super().__init__(parent)
         from PySide6.QtPdf import QPdfDocument
         from PySide6.QtPdfWidgets import QPdfView
@@ -308,6 +322,9 @@ class PdfViewer(QWidget):
         self.path = path
         self.TITLE = f"PDF · {os.path.basename(path)}"
         self.ctx = ctx
+        # This pane's own place and zoom (reading_position()), which win over
+        # the document's saved ones.
+        self._place, self._zoom_state = self.pane_state(state)
         self._module = module if module is not None else getattr(getattr(ctx, "app", None), "current_module", None)
         self._storage = getattr(getattr(ctx, "app", None), "storage", None)
         self._fname = os.path.basename(path)
@@ -360,28 +377,46 @@ class PdfViewer(QWidget):
         self._update_info()
         self._restore_when_ready(self._doc.status())
 
+    @staticmethod
+    def pane_state(state):
+        """A pane's saved position as (place, zoom). A part with a missing or
+        invalid value is empty, so the document's saved one applies instead."""
+        place, zoom = {}, {}
+        if isinstance(state, dict):
+            if _count(state.get("page")):
+                place = {"page": state["page"]}
+            if state.get("zoom_mode") == "fit_width":
+                zoom = {"zoom_mode": "fit_width"}
+            elif state.get("zoom_mode") == "custom" and _number(state.get("zoom")):
+                zoom = {"zoom_mode": "custom", "zoom": state["zoom"]}
+        return place, zoom
+
     def _restore_when_ready(self, status) -> None:
         from PySide6.QtPdf import QPdfDocument
         if status != QPdfDocument.Status.Ready:
             return
-        if not (self._storage and self._module):
-            return
-        try:
-            saved = self._storage.load_reading_pos(self._module, self._fname)
-        except Exception:
-            saved = {}
+        saved = {}
+        if self._storage and self._module:
+            try:
+                saved = self._storage.load_reading_pos(self._module, self._fname)
+            except Exception:
+                saved = {}
+        # The pane's own place and zoom, each as a whole, else the saved ones.
+        position = dict(self._zoom_state or {key: saved[key] for key in ("zoom", "zoom_mode")
+                                             if key in saved})
+        position.update(self._place or {key: saved[key] for key in ("page",) if key in saved})
         # The mode is saved with the zoom. Older versions saved only a number,
         # and Fit width as its stale factor 1.0.
-        legacy_fit = "zoom_mode" not in saved and saved.get("zoom") == 1.0
-        if saved.get("zoom_mode") != "fit_width" and not legacy_fit and "zoom" in saved:
+        legacy_fit = "zoom_mode" not in position and position.get("zoom") == 1.0
+        if position.get("zoom_mode") != "fit_width" and not legacy_fit and "zoom" in position:
             try:
-                zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, float(saved["zoom"])))
+                zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, float(position["zoom"])))
                 self._view.setZoomMode(self._view.ZoomMode.Custom)
                 self._view.setZoomFactor(zoom)
             except (TypeError, ValueError):
                 pass
         try:
-            page = int(saved.get("page", 0) or 0)
+            page = int(position.get("page", 0) or 0)
         except (TypeError, ValueError):
             page = 0
         if page > 0 and self._pending_page is None:  # a Source target wins
@@ -430,9 +465,8 @@ class PdfViewer(QWidget):
             return self._pending_page
         return max(0, self._view.pageNavigator().currentPage())
 
-    def save_position(self) -> None:
-        if not (self._storage and self._module):
-            return
+    def reading_position(self) -> dict:
+        """This reader's place and zoom, as saved for the document."""
         try:
             page = self._current_page()
         except Exception:
@@ -443,8 +477,13 @@ class PdfViewer(QWidget):
         else:
             position["zoom_mode"] = "custom"
             position["zoom"] = float(self._view.zoomFactor())
+        return position
+
+    def save_position(self) -> None:
+        if not (self._storage and self._module):
+            return
         # A failure is the caller's to report: the reader stays open to retry.
-        self._storage.save_reading_pos(self._module, self._fname, position)
+        self._storage.save_reading_pos(self._module, self._fname, self.reading_position())
 
     def set_back_label(self, text):
         self._back.setText(text)
@@ -525,7 +564,7 @@ class EpubViewer(QWidget):
     ZOOM_MAX = 3.0
     MAX_RESTORE_RETRIES = 20
 
-    def __init__(self, path: str, ctx=None, parent=None, module=None, source=None):
+    def __init__(self, path: str, ctx=None, parent=None, module=None, source=None, state=None):
         super().__init__(parent)
         from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -573,16 +612,20 @@ class EpubViewer(QWidget):
                 saved = self._storage.load_reading_pos(self._module, self._fname)
             except Exception:
                 saved = {}
+        # The pane's own place and zoom (reading_position()), each as a whole,
+        # win over the document's saved ones.
+        place, zoom = self.pane_state(state)
         # A capture supplies the initial location, while saved preferences still
         # provide zoom. Load once so an outgoing navigation cannot reset the target.
-        location = saved if source is None else source
+        location = source if source is not None else (place or saved)
         try:
             start_idx = int(location.get("chapter", 0))
         except (TypeError, ValueError):
             start_idx = 0
-        if "zoom" in saved:
+        zoom = zoom or saved
+        if "zoom" in zoom:
             try:
-                self._zoom = float(saved["zoom"])
+                self._zoom = float(zoom["zoom"])
             except (TypeError, ValueError):
                 pass
         self._zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom))
@@ -653,12 +696,28 @@ class EpubViewer(QWidget):
             self.ctx.learning_changed.connect(self._refresh_highlights)
 
         if self._book.chapters:
-            self._load(max(0, min(start_idx, len(self._book.chapters) - 1)), href=location.get("href"))
+            href = location.get("href")
+            self._load(max(0, min(start_idx, len(self._book.chapters) - 1)),
+                       href=href if isinstance(href, str) else None)
         else:
             self._show_error("Could not read this EPUB's chapters.")
             self._prev.setEnabled(False)
             self._next.setEnabled(False)
         self._apply_zoom()
+
+    @staticmethod
+    def pane_state(state):
+        """A pane's saved position as (place, zoom). A part with a missing or
+        invalid value is empty, so the document's saved one applies instead."""
+        place, zoom = {}, {}
+        if isinstance(state, dict):
+            place = {key: state[key] for key in ("chapter", "scroll", "href") if key in state}
+            if not (_count(place.get("chapter")) and _number(place.get("scroll", 0))
+                    and isinstance(place.get("href", ""), str)):
+                place = {}
+            if _number(state.get("zoom")):
+                zoom = {"zoom": state["zoom"]}
+        return place, zoom
 
     def eventFilter(self, watched, event):
         kind = event.type()
@@ -1156,16 +1215,24 @@ class EpubViewer(QWidget):
         except Exception:
             pass
 
-    def save_position(self) -> None:
-        """Read Qt's cached scroll position synchronously, including on close."""
-        if not (self._storage and self._module) or not self._position_known:
-            return
+    def reading_position(self) -> dict:
+        """This reader's place and zoom, read synchronously from Qt's cached
+        scroll position. Until a chapter was requested successfully the place
+        is unknown, and only the zoom is reported."""
+        if not self._position_known:
+            return {"zoom": self._zoom}
         source = self.source_location()
         pos = {"chapter": self._idx, "scroll": source["scroll"], "zoom": self._zoom}
         if "href" in source:
             pos["href"] = source["href"]
-        self._storage.save_reading_pos(
-            self._module, self._fname, pos)
+        return pos
+
+    def save_position(self) -> None:
+        """Save the place for the document, including on close. A reader whose
+        place is unknown keeps the previously saved one."""
+        if not (self._storage and self._module) or not self._position_known:
+            return
+        self._storage.save_reading_pos(self._module, self._fname, self.reading_position())
 
     def refresh(self) -> None:
         pass
@@ -1198,14 +1265,15 @@ def _save_on_close(viewer):
 
 
 # --------------------------------------------------------------------------- #
-def make_viewer(path: str, ctx=None, module=None, source=None):
-    """Return the right viewer for a file, or None if unsupported."""
+def make_viewer(path: str, ctx=None, module=None, source=None, state=None):
+    """Return the right viewer for a file, or None if unsupported. ``state``
+    is a pane's own reading_position(); ``source`` a capture's location."""
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
-        viewer = PdfViewer(path, ctx, module=module)
+        viewer = PdfViewer(path, ctx, module=module, state=state)
         if source is not None:
             viewer.go_to(source)
         return viewer
     if ext == ".epub":
-        return EpubViewer(path, ctx, module=module, source=source)
+        return EpubViewer(path, ctx, module=module, source=source, state=state)
     return None

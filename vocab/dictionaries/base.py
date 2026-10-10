@@ -6,6 +6,10 @@ from typing import List
 
 from ..core.models import Sense
 
+#: Senses kept for a word. Callers trim to it only after ranking the senses for
+#: the word's context, so a backend returns every sense it has.
+SENSE_LIMIT = 6
+
 
 class DictionaryError(Exception):
     pass

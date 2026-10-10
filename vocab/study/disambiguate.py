@@ -29,6 +29,7 @@ import urllib.request
 from typing import List, Optional
 
 from ..core.models import Sense
+from ..dictionaries.base import SENSE_LIMIT
 
 # WordNet single-letter POS codes we map our human-readable Sense.pos back to.
 _HUMAN_TO_WN = {"noun": "n", "verb": "v", "adjective": "a", "adverb": "r"}
@@ -93,10 +94,14 @@ class NlpDisambiguator(Disambiguator):
             matching = [s for s in senses if (s.pos or "").lower() == target_human]
             others = [s for s in senses if (s.pos or "").lower() != target_human]
         else:
-            matching, others = list(senses), []
+            matching, others = [], []
 
         if not matching:
-            matching, others = list(senses), []
+            # No usable part of speech. Lesk counts the word itself as overlap,
+            # so over every sense a gloss that merely mentions the word ("signal
+            # with a flag") beats the right first sense: rank only among the
+            # dictionary's first senses, as when it returned no more than those.
+            matching, others = list(senses[:SENSE_LIMIT]), list(senses[SENSE_LIMIT:])
         pool = matching
 
         # 2) Lesk among the POS-matching pool: overlap of sentence words with
@@ -139,6 +144,7 @@ class OllamaDisambiguator(Disambiguator):
     ENDPOINT = "http://127.0.0.1:11434/api/generate"
     _up_cache = None          # (timestamp, bool) shared across instances
     _UP_TTL = 5.0             # seconds a server-up result stays fresh
+    PROMPT_SENSES = 12        # a small model chooses badly among dozens of senses
 
     def __init__(self, model: str = "llama3.2:3b", fallback: Optional[Disambiguator] = None):
         self.model = model
@@ -162,7 +168,12 @@ class OllamaDisambiguator(Disambiguator):
     def rank(self, word: str, sentence: str, senses: List[Sense]) -> List[Sense]:
         if not sentence or len(senses) <= 1 or not self._server_up():
             return self.fallback.rank(word, sentence, senses)
-        numbered = "\n".join(f"{i}. ({s.pos}) {s.definition}" for i, s in enumerate(senses))
+        # Offer the model the senses the offline ranking puts first (those of
+        # the word's part of speech), not the dictionary's first few, and only
+        # a handful: a word like "run" has dozens.
+        ranked = self.fallback.rank(word, sentence, senses)
+        candidates = ranked[:self.PROMPT_SENSES]
+        numbered = "\n".join(f"{i}. ({s.pos}) {s.definition}" for i, s in enumerate(candidates))
         prompt = (
             f"Sentence: \"{sentence}\"\n"
             f"Which numbered definition of the word \"{word}\" best fits how it is "
@@ -179,13 +190,13 @@ class OllamaDisambiguator(Disambiguator):
             m = re.search(r"\d+", resp)
             if m:
                 idx = int(m.group())
-                if 0 <= idx < len(senses):
-                    out = list(senses)
+                if 0 <= idx < len(candidates):
+                    out = list(ranked)
                     out.insert(0, out.pop(idx))
                     return out
         except Exception:
             pass
-        return self.fallback.rank(word, sentence, senses)
+        return ranked
 
 
 _BACKENDS = {}

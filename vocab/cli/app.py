@@ -19,6 +19,7 @@ from ..core.locking import write_lock
 from ..core.storage import (ListExists, ListNotFound, ModuleExists, ModuleNotFound, Storage,
                              in_transaction)
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
+from ..dictionaries.base import SENSE_LIMIT
 from ..study.judge import get_judge
 from ..study.session import SessionResult, StudyCardUnavailable, StudySession, build_session
 
@@ -246,7 +247,9 @@ class App:
                 senses = dis.rank(word, sentence, senses)
             except Exception:
                 pass
-        return senses, dic.id, notice
+        # Trim only after ranking: dictionaries list senses grouped by part of
+        # speech, nouns first, so an earlier cut could drop the one that fits.
+        return senses[:SENSE_LIMIT], dic.id, notice
 
     def cmd_add(self, word: str, target: Optional[str] = None,
                 manual_def: Optional[str] = None, sentence: str = "") -> str:

@@ -54,7 +54,7 @@ class WordNet(Dictionary):
         if not synsets:
             raise LookupFailed(f"'{word}' not found in WordNet.", recoverable=False)
         senses: List[Sense] = []
-        for syn in synsets[:6]:
+        for syn in synsets:  # all of them: the caller ranks, then trims
             examples = syn.examples()
             senses.append(Sense(
                 definition=syn.definition().strip(),

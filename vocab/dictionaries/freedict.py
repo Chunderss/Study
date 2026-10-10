@@ -84,4 +84,4 @@ class FreeDictionary(Dictionary):
                         ))
         if not senses:
             raise LookupFailed("No definitions returned.", recoverable=False)
-        return senses[:6]  # cap to keep lists tidy
+        return senses  # all of them: the caller ranks, then trims

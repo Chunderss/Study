@@ -81,7 +81,7 @@ class Repl:
             if not self._confirm(f"Delete module '{name}' and all its contents?"):
                 return "Cancelled."
             return app.cmd_delete(name)
-        if v in ("LISTS", "MODULES"):
+        if v in ("LIST", "LISTS", "MODULES"):
             return app.cmd_lists()
         if v in ("USE", "CD"):
             return app.cmd_use(" ".join(a)) if a else "Usage: USE <module>"

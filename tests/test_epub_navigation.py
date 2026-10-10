@@ -155,6 +155,11 @@ assert viewer.source_location()["chapter"] == 1
 Path(viewer._web.url().toLocalFile()).unlink()
 viewer._web.reload()
 wait_for(lambda: "Could not read chapter" in viewer._error.text())
+# Chromium can report the failure twice (the reload, then its error page);
+# navigating between the two lets the late one land on the next request.
+for _ in range(3):
+    wait_for(lambda: not viewer._web.page().isLoading())
+    QTest.qWait(150)
 assert not viewer._error.isHidden()
 assert viewer._web.isHidden()
 viewer._go(-1)

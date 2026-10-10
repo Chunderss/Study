@@ -27,11 +27,12 @@ class NoteBuffer(QObject):
         super().__init__(parent)
         self.storage, self.module, self.note = storage, module, note
         draft = storage.load_note_draft(module, note)
-        self._set_baseline(draft["baseline"] if draft else storage.load_note(module, note))
+        # ``note`` is a stored name: exact lookups never reach a similarly named note.
+        self._set_baseline(draft["baseline"] if draft else storage.load_note(module, note, exact=True))
         # A crash between saving Markdown and deleting the sidecar must not
         # reopen the already-saved text as an obsolete conflicting draft.
-        if draft and storage._note_path(module, note).exists():
-            saved = storage.load_note(module, note)
+        if draft and storage._note_path(module, note, exact=True).exists():
+            saved = storage.load_note(module, note, exact=True)
             if shown(saved) == draft["content"]:
                 self._set_baseline(saved)
         self.recovery_error = ""
@@ -102,7 +103,7 @@ class NoteBuffer(QObject):
     def reload_if_clean(self):
         if self.dirty:
             return
-        content = self.storage.load_note(self.module, self.note)
+        content = self.storage.load_note(self.module, self.note, exact=True)
         if content != self.baseline:
             self._set_baseline(content)
             self.document.setPlainText(content)
@@ -113,14 +114,14 @@ class NoteBuffer(QObject):
         # A file edited outside this app must not be silently overwritten.
         # Check and write under the write lock so nothing slips in between.
         with self.storage.transaction():
-            path = self.storage._note_path(self.module, self.note)
-            on_disk = self.storage.load_note(self.module, self.note) if path.exists() else None
+            path = self.storage._note_path(self.module, self.note, exact=True)
+            on_disk = self.storage.load_note(self.module, self.note, exact=True) if path.exists() else None
             if on_disk is not None and on_disk != self.baseline:
                 raise ValueError(f"'{self.module}/{self.note}' changed on disk. "
                                  "Copy your draft before resolving the external change.")
             # An untouched note keeps its exact bytes (a BOM, no-break spaces).
             if self.dirty or on_disk is None:
-                self.storage.save_note(self.module, self.note, content)
+                self.storage.save_note(self.module, self.note, content, exact=True)
                 self._set_baseline(content)
         self.document.setModified(False)
         self.recovered = False

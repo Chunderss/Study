@@ -321,8 +321,8 @@ class NotesComponent(BaseComponent):
             return
         storage = self.app.storage
         try:
-            if storage._note_path(module, note).exists():
-                storage.delete_note(module, note)
+            if storage._note_path(module, note, exact=True).exists():
+                storage.delete_note(module, note, exact=True)
             elif not storage.exists(module):
                 raise ModuleNotFound(f"Module '{module}' does not exist.")
             else:

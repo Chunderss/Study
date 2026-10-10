@@ -68,8 +68,8 @@ def test_windows_case_alias_delete_discards_the_open_draft(window, monkeypatch):
     # Simulate Windows: existing names resolve case-insensitively.
     storage = window.app.storage
     def insensitive(original):
-        def resolve(*args):
-            path = original(*args)
+        def resolve(*args, **kwargs):
+            path = original(*args, **kwargs)
             if not path.parent.exists():
                 return path
             return next((p for p in path.parent.iterdir()
@@ -95,3 +95,28 @@ def test_notes_differing_only_in_case_stay_distinct(window):
     assert not storage._note_path("Book", "one").exists()
     assert storage.load_note("Book", "One") == "original"
     assert ("Book", "One") in window.ctx.notes.buffers and buffer._active and buffer.dirty
+
+
+@pytest.mark.parametrize("legacy, listed, plain", [
+    ("Space .md", "Space ", "Space"), ("Double.md.md", "Double.md", "Double")])
+def test_an_orphaned_legacy_note_never_acts_on_its_sibling(window, monkeypatch, legacy, listed, plain):
+    storage = window.app.storage
+    notes_dir = storage.paths.notes_dir("Book")
+    (notes_dir / legacy).write_text("legacy text", encoding="utf-8")
+    (notes_dir / f"{plain}.md").write_text("sibling text", encoding="utf-8")
+    buffer = dirty_draft(window, listed, "legacy draft")
+    os.remove(notes_dir / legacy)  # removed outside the app; the draft remains
+    buffer.save()  # recreates the note's own file
+    assert (notes_dir / legacy).read_text(encoding="utf-8") == "legacy draft"
+    os.remove(notes_dir / legacy)
+    buffer.document.setPlainText("another draft")
+    buffer.flush_recovery()
+    window.workspace.set_focused_component("notes")
+    notes = window.workspace.focused.component
+    window.ctx.changed.emit()
+    select(notes, listed)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    notes._delete()
+    assert (notes_dir / f"{plain}.md").read_text(encoding="utf-8") == "sibling text"
+    assert storage.load_note_draft("Book", listed) is None
+    assert sorted(p.name for p in notes_dir.iterdir()) == sorted(["One.md", f"{plain}.md"])

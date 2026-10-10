@@ -489,9 +489,13 @@ class Storage:
         _atomic_write(self.paths.stats_file(sanitize_module_name(name)), stats)
 
     # ---- notes (notes component) ---------------------------------------
-    def _note_path(self, module: str, note: str) -> Path:
+    def _note_path(self, module: str, note: str, exact: bool = False) -> Path:
         module = sanitize_module_name(module)
         directory = self.paths.notes_dir(module)
+        if exact and _stored_note_stem(note):
+            # A stored name (an open note's identity) means that file and no
+            # other, even once it is gone: never a similarly named note.
+            return directory / f"{note}.md"
         # A file saved under a name that is not canonical ("Double.md.md",
         # "Space .md") stays reachable by the name note_names() lists for it,
         # spaces included ("Double.md", "Space ").
@@ -521,17 +525,17 @@ class Storage:
             return []
         return sorted(p.stem for p in d.glob("*.md"))
 
-    def load_note(self, module: str, note: str) -> str:
-        p = self._note_path(module, note)
+    def load_note(self, module: str, note: str, exact: bool = False) -> str:
+        p = self._note_path(module, note, exact)
         if not p.exists():
             raise ModuleNotFound(f"Note '{note}' does not exist in '{module}'.")
         return p.read_text(encoding="utf-8")
 
-    def save_note(self, module: str, note: str, content: str) -> str:
+    def save_note(self, module: str, note: str, content: str, exact: bool = False) -> str:
         module = sanitize_module_name(module)
         if not self.exists(module):
             raise ModuleNotFound(f"Module '{module}' does not exist.")
-        p = self._note_path(module, note)
+        p = self._note_path(module, note, exact)
         p.parent.mkdir(parents=True, exist_ok=True)
         # atomic text write
         fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
@@ -558,8 +562,8 @@ class Storage:
         return p.stem
 
     @in_transaction
-    def delete_note(self, module: str, note: str) -> None:
-        p = self._note_path(module, note)
+    def delete_note(self, module: str, note: str, exact: bool = False) -> None:
+        p = self._note_path(module, note, exact)
         if not p.exists():
             raise ModuleNotFound(f"Note '{note}' does not exist in '{module}'.")
         draft = self._draft_path(module, p.stem)  # the deleted note's own draft

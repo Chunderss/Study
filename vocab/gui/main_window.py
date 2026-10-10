@@ -60,8 +60,8 @@ class MainWindow(QWidget):
         self.ctx.module_changed.connect(self._refresh_modules)
         self.ctx.log.connect(self._show_message)
         self._refresh_modules()
-        if self.app.migration_note:
-            self.ctx.log.emit(self.app.migration_note)
+        if self.app.migration_note and not self.app.migration_problem:
+            self.ctx.log.emit(self.app.migration_note)  # a problem is reported by the status bar
         if self.app.config.load_error:
             # The status bar keeps a marker while settings run on defaults.
             logging.error(self.app.config.load_error)

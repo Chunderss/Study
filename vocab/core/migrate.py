@@ -69,6 +69,7 @@ def _verified_backup(legacy: Path):
 
     A migration that keeps failing then does not copy everything again at
     every start. An incomplete or outdated backup never matches.
+    Returns (backup, digest of its files) or (None, None).
     """
     listing, digest = _listing(legacy), None
     for candidate in sorted(legacy.parent.glob("lists.backup-*"), reverse=True):
@@ -76,8 +77,8 @@ def _verified_backup(legacy: Path):
             continue
         digest = digest or _tree_digest(legacy)
         if _tree_digest(candidate) == digest:
-            return candidate
-    return None
+            return candidate, digest
+    return None, None
 
 
 def _fingerprint(source: Path) -> dict:
@@ -87,6 +88,15 @@ def _fingerprint(source: Path) -> dict:
     if (source / "sources").is_dir():
         files.extend(p for p in (source / "sources").rglob("*") if p.is_file())
     return {p.relative_to(source).as_posix(): _digest(p) for p in sorted(files)}
+
+
+def _fingerprint_from(digest: dict, name: str) -> dict:
+    """_fingerprint of list ``name``, taken from a digest of the whole tree."""
+    prefix = name + "/"
+    return {relative[len(prefix):]: value for relative, value in digest.items()
+            if relative.startswith(prefix)
+            and (relative[len(prefix):] in ("words.json", "stats.json")
+                 or relative[len(prefix):].startswith("sources/"))}
 
 
 def _provenance(name: str, fingerprint: dict) -> dict:
@@ -142,7 +152,7 @@ def migrate(paths: Paths) -> List[str]:
         return []
 
     # 1. full backup first (or the verified one of this exact lists/)
-    backup = _verified_backup(legacy)
+    backup, digest = _verified_backup(legacy)
     if backup is None:
         backup = _archive_path(legacy, "backup")
         shutil.copytree(legacy, backup)
@@ -151,7 +161,9 @@ def migrate(paths: Paths) -> List[str]:
     conflicts: List[str] = []
     problems: List[str] = []
     paths.modules_dir.mkdir(parents=True, exist_ok=True)
-    snapshot = {src.name: _fingerprint(src) for src in _legacy_lists(backup)}
+    # A reused backup was just hashed in full; don't read it all again.
+    snapshot = {src.name: _fingerprint_from(digest, src.name) if digest else _fingerprint(src)
+                for src in _legacy_lists(backup)}
 
     for name, fingerprint in snapshot.items():
         src = backup / name
@@ -180,7 +192,8 @@ def migrate(paths: Paths) -> List[str]:
     if problems:
         raise MigrationIncomplete(" ".join(problems) + (
             f" Migrated: {', '.join(created)}." if created else "") +
-            " lists/ was kept, so nothing is lost; fix these and restart to retry.")
+            f" The legacy folder {legacy} was kept, so nothing is lost; rename or fix "
+            "these lists there and restart to retry.")
     current = {src.name: _fingerprint(src) for src in _legacy_lists(legacy)}
     if current != snapshot:
         raise RuntimeError("Legacy lists changed during migration; lists/ was kept for recovery.")

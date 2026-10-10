@@ -43,6 +43,9 @@ class App:
                 self.migration_note = (
                     f"Migrated {len(created)} list(s) to the new Module format "
                     f"(a backup was saved alongside): {', '.join(created)}")
+        except _migrate.MigrationIncomplete as e:
+            self.migration_note = f"Legacy lists were not fully migrated: {e}"
+            self.migration_problem = str(e)
         except Exception as e:  # never block startup on migration
             self.migration_note = f"(migration skipped: {e})"
             self.migration_problem = str(e)

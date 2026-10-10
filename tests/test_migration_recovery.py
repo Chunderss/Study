@@ -242,3 +242,29 @@ def test_one_unusable_list_does_not_block_the_others(tmp_path):
     with pytest.raises(migrate.MigrationIncomplete):
         migrate.migrate(paths)  # a retry keeps Zebra and reports the same two
     assert Storage(paths).list_names() == ["Zebra"] and len(backups(tmp_path)) == 1
+
+
+def test_a_reused_backup_is_read_once(tmp_path, monkeypatch):
+    paths = get_paths(tmp_path)
+    conflict(paths)
+    with pytest.raises(migrate.MigrationIncomplete):
+        migrate.migrate(paths)
+    backup = backups(tmp_path)[0]
+    read, digest = [], migrate._digest
+    monkeypatch.setattr(migrate, "_digest", lambda path: read.append(path) or digest(path))
+    with pytest.raises(migrate.MigrationIncomplete):
+        migrate.migrate(paths)
+    from_backup = [p for p in read if backup in p.parents]
+    assert from_backup and len(from_backup) == len(set(from_backup))
+    assert backups(tmp_path) == [backup]
+
+
+def test_a_partial_migration_says_what_to_fix_and_where(tmp_path):
+    from vocab.cli.app import App
+    paths = get_paths(tmp_path)
+    legacy_list(paths, "Notes")  # a reserved name
+    legacy_list(paths, "Zebra")
+    app = App(tmp_path)
+    assert app.migration_note.startswith("Legacy lists were not fully migrated:")
+    assert "Migrated: Zebra" in app.migration_note and str(paths.legacy_lists_dir) in app.migration_note
+    assert "skipped" not in app.migration_note and app.migration_problem

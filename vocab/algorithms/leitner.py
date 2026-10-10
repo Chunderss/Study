@@ -18,7 +18,10 @@ from typing import Dict, List
 from .base import Review, Scheduler, register
 
 _DAY = 86400.0
-# Box -> interval in days. Box 1 is due immediately (same session churn).
+# Box -> interval in days, counted as exact 24-hour periods from the answer
+# (not calendar days). Boxes start at 1, so index 0 is unused. A new card is
+# due at once; a missed card goes back to box 1 and is due again 24 hours
+# after the answer, never straight away.
 _INTERVALS = [0, 1, 3, 7, 16, 35]  # index by box; box>=5 caps at 35d
 _MAX_BOX = len(_INTERVALS) - 1
 

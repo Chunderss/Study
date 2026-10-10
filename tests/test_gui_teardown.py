@@ -137,7 +137,6 @@ def test_failed_lookup_tests_report_failure_instead_of_hanging(tmp_path):
     probe = tmp_path / "test_probe_teardown.py"
     probe.write_text(PROBE, encoding="utf-8")
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT), env.get("PYTHONPATH")]))
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
     # Its own temporary folder: pytest's cleanup of the shared one can add
     # warnings to the summary line checked below.

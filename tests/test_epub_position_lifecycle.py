@@ -81,7 +81,6 @@ def run_reader(tmp_path, scenario):
     if sys.platform == "win32":
         env["QT_QPA_PLATFORM"] = "windows"
     env["QTWEBENGINE_CHROMIUM_FLAGS"] = env.get("QTWEBENGINE_CHROMIUM_FLAGS", "") + " --disable-gpu"
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT), env.get("PYTHONPATH")]))
     result = subprocess.run([sys.executable, "-X", "faulthandler", "-c", script, str(tmp_path)],
                             cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr

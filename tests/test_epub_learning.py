@@ -1,10 +1,13 @@
 """Exercise the real Chromium selection callback in its own Qt process."""
 import os
+from pathlib import Path
 import subprocess
 import sys
 
 import pytest
 pytest.importorskip("PySide6")
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_epub_capture_and_source_navigation(tmp_path):
@@ -92,5 +95,5 @@ app.processEvents()
         env["QT_QPA_PLATFORM"] = "windows"
     env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
-                            env=env, capture_output=True, text=True, timeout=45)
+                            cwd=ROOT, env=env, capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, result.stdout + result.stderr

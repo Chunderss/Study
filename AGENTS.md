@@ -29,7 +29,7 @@ Use four-space indentation, `snake_case` for functions/modules, `PascalCase` for
 
 ## Testing Guidelines
 
-Tests use pytest, `test_*.py` filenames, and `test_*` functions. Add focused regressions for changed behavior, especially persistence, draft recovery, and reader interactions. Use `tmp_path` for data isolation and Qt's offscreen platform for GUI tests. Install PySide6 to avoid skipped GUI coverage; Linux also needs Qt system libraries. CI downloads WordNet and tests the packaged Windows executable. No numeric coverage threshold is configured.
+Tests use pytest, `test_*.py` filenames, and `test_*` functions. Add focused regressions for changed behavior, especially persistence, draft recovery, and reader interactions. Use `tmp_path` for data isolation and Qt's offscreen platform for GUI tests. `tests/conftest.py` puts this checkout first on `PYTHONPATH`, which child processes inherit. Give every child process an explicit `cwd`: the repository root, or a fresh `tmp_path` where a test needs one (`tests/test_child_processes.py` checks this). Install PySide6 to avoid skipped GUI coverage; Linux also needs Qt system libraries. CI downloads WordNet and tests the packaged Windows executable. No numeric coverage threshold is configured.
 
 ## Commit & Pull Request Guidelines
 

@@ -113,6 +113,11 @@ until **Continue**. Study All writes each review to its original module.
 Cards changed, deleted, or reviewed in another session are skipped with a notice,
 preserving the newer progress.
 
+Outside mechanical mode, Space or Enter reveals the answer, J or Y records **Got it**,
+F or N records **Missed it**, and Esc ends the session. Keyboard focus stays on the
+card, so pressing Space again never records an answer; Tab and the mouse still reach
+the buttons.
+
 ## Your data
 
 Data is separate from the executable:

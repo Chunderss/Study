@@ -7,6 +7,9 @@ modes mirror the terminal:
 
 Keyboard-first (matches the command-driven spirit):
   Space / Enter = reveal ;  J / Y = got it ;  F / N = missed it ;  Esc = end
+In reveal mode the view itself keeps keyboard focus after each card change, so
+a second Space or Enter never lands on a grade button. The buttons stay
+reachable with Tab and the mouse.
 """
 from __future__ import annotations
 
@@ -38,7 +41,11 @@ class StudyView(QWidget):
         self._revealed = False
         self._awaiting_next = False
         self._ended = False
+        self._card_description = ""
         self.setFocusPolicy(Qt.StrongFocus)
+        # The view holds focus in reveal mode, so screen readers announce it
+        # instead of a button; its description follows the card (_describe).
+        self.setAccessibleName("Study card")
         self._build()
         self._load_card()
 
@@ -173,7 +180,12 @@ class StudyView(QWidget):
             self.bad_btn.show()
             self.good_btn.setEnabled(False)
             self.bad_btn.setEnabled(False)
-            self.reveal_btn.setFocus()
+            self._describe(f"Card {view.index} of {view.total}: {view.word}. "
+                           "Press Space to reveal the answer.")
+            # QPushButton clicks on Space, so a focused button would turn the
+            # next Space into an action. Keys go to the view (keyPressEvent);
+            # Tab and the mouse still reach the buttons.
+            self.setFocus()
 
     def _reveal(self) -> None:
         if self._revealed or self.session.done:
@@ -188,7 +200,11 @@ class StudyView(QWidget):
         self.reveal_btn.setEnabled(False)
         self.good_btn.setEnabled(True)
         self.bad_btn.setEnabled(True)
-        self.good_btn.setFocus()
+        self._describe(f"{view.word}. {text}\n\n"
+                       "Press J if you got it, or F if you missed it.")
+        # Not on "Got it": a second Space would grade the card. This comes
+        # after disabling reveal_btn, which moves its focus elsewhere first.
+        self.setFocus()
 
     def _grade(self, correct: bool) -> None:
         if not self._revealed or self.session.done:
@@ -227,9 +243,11 @@ class StudyView(QWidget):
         except StudyCardUnavailable as error:
             self._load_card()
             self.feedback.setText(str(error))
+            self._describe(notice=str(error))
         except (OSError, ValueError) as error:
             # Keep this card and the typed answer available for a save retry.
             self.feedback.setText(f"Could not save review: {error}")
+            self._describe(notice=self.feedback.text())
         return None
 
     def _continue(self):
@@ -244,6 +262,21 @@ class StudyView(QWidget):
         self.feedback.setText(
             f"box {outcome.box_before} {arrow} {outcome.box_after}")
         self.feedback.setStyleSheet(f"color: {color};")
+        verdict = "Got it" if outcome.correct else "Missed it"
+        self._describe(notice=f"{verdict}: box {outcome.box_before} to {outcome.box_after}")
+
+    def _describe(self, card: str | None = None, notice: str = "") -> None:
+        """Keep the accessible description of the focused card current: the
+        card text, after a notice about the last answer if there is one.
+        Reveal mode only; mechanical mode keeps focus on its input."""
+        if self.session.mechanical:
+            return
+        if card is not None:
+            self._card_description = card
+        if notice and not notice.endswith((".", "!", "?")):
+            notice += "."      # error texts end without a full stop to pause at
+        self.setAccessibleDescription(
+            f"{notice} {self._card_description}" if notice else self._card_description)
 
     def _end(self) -> None:
         if self._ended:

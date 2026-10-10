@@ -2,8 +2,9 @@
 
 No third-party deps. EPUB is parsed with stdlib zipfile + xml.etree:
   META-INF/container.xml -> OPF path -> <manifest>/<spine> -> ordered XHTML.
-We extract the epub to a temp dir and point QWebEngineView at each chapter file
-so relative CSS/images/fonts resolve exactly as an ebook reader would.
+We extract the epub to a temp dir, within EpubBook's size limits, and point
+QWebEngineView at each chapter file so relative CSS/images/fonts resolve
+exactly as an ebook reader would.
 
 Both viewers are pane components: TITLE / refresh() / focus_default().
 """
@@ -118,8 +119,79 @@ def _renders_as_xhtml(source: Path) -> bool:
             and names <= set(html.entities.name2codepoint))
 
 
+def _size_text(size, *, up=False):
+    """A byte count as people read it: 4.0 GB, 12.5 MB, 900 bytes. A size
+    that broke a limit rounds up and the limit rounds down, so the first
+    always reads larger."""
+    for unit, scale in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if size >= scale:
+            tenths = -(-size * 10 // scale) if up else size * 10 // scale
+            return f"{tenths // 10}.{tenths % 10} {unit}"
+    return f"{size:,} bytes"
+
+
+class _BoundedStream:
+    """An archive entry being extracted. It may not yield more than the size
+    it declared, nor more than is left of its archive's byte budget. CPython's
+    zipfile stops at the declared size as well; EpubBook's limits must not
+    depend on that, or on each entry being extracted only once."""
+
+    def __init__(self, stream, declared, archive):
+        self._stream = stream
+        self._left = declared
+        self._archive = archive
+
+    def read(self, size=-1):
+        budget = self._archive.budget_left
+        limit = min(self._left, budget)
+        if size is None or size < 0 or size > limit:
+            size = limit + 1  # one byte more reveals data past a limit
+        data = self._stream.read(size)
+        if len(data) > self._left:
+            raise ValueError("This EPUB holds a file with more data than the book declares.")
+        if len(data) > budget:
+            raise ValueError(f"This EPUB would extract to more than the "
+                             f"{_size_text(self._archive.budget)} the reader allows per book.")
+        self._left -= len(data)
+        self._archive.budget_left -= len(data)
+        return data
+
+    def close(self):
+        self._stream.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()
+
+
+class _BoundedZipFile(zipfile.ZipFile):
+    """A ZipFile whose extract() and extractall() write each entry through
+    _BoundedStream, so all entries together stop at `budget` bytes."""
+
+    def __init__(self, file, budget):
+        super().__init__(file)
+        self.budget = self.budget_left = budget
+
+    def open(self, name, mode="r", *args, **kwargs):
+        stream = super().open(name, mode, *args, **kwargs)
+        if mode != "r":
+            return stream
+        info = name if isinstance(name, zipfile.ZipInfo) else self.getinfo(name)
+        return _BoundedStream(stream, info.file_size, self)
+
+
 class EpubBook:
     """Extracted EPUB with an ordered list of (title, absolute_file_path)."""
+
+    # A book is an untrusted archive: a few hundred KB can inflate to gigabytes,
+    # or hold enough entries to stall the reader. These limits stay far above
+    # large image-heavy textbooks, whose images take about as much space in
+    # the book as extracted. The README documents them.
+    MAX_ENTRIES = 20_000
+    MAX_ENTRY_BYTES = 1 << 30   # 1 GB for one file
+    MAX_TOTAL_BYTES = 4 << 30   # 4 GB for the whole book
 
     def __init__(self, path: str):
         self.src = path
@@ -146,11 +218,34 @@ class EpubBook:
             raise ValueError("EPUB contains a path outside the book.") from None
         return str(path)
 
+    def _check_entries(self, entries) -> None:
+        """Refuse a book before anything is written if its entries leave the
+        book or their declared sizes exceed the limits. Messages leave out the
+        book's own entry names, which are untrusted text."""
+        if len(entries) > self.MAX_ENTRIES:
+            raise ValueError(f"This EPUB contains {len(entries):,} files; the reader opens "
+                             f"books with up to {self.MAX_ENTRIES:,}.")
+        total = 0
+        for entry in entries:
+            self._inside(self.tmpdir, entry.filename)
+            if entry.file_size > self.MAX_ENTRY_BYTES:
+                raise ValueError(f"This EPUB holds a file that would extract to "
+                                 f"{_size_text(entry.file_size, up=True)}, more than the "
+                                 f"{_size_text(self.MAX_ENTRY_BYTES)} the reader allows per file.")
+            total += entry.file_size
+        if total > self.MAX_TOTAL_BYTES:
+            raise ValueError(f"This EPUB would extract to {_size_text(total, up=True)}, more than the "
+                             f"{_size_text(self.MAX_TOTAL_BYTES)} the reader allows per book.")
+
     def _extract_and_parse(self, path: str) -> None:
-        with zipfile.ZipFile(path) as z:
-            for entry in z.infolist():
-                self._inside(self.tmpdir, entry.filename)
-            z.extractall(self.tmpdir)
+        with _BoundedZipFile(path, self.MAX_TOTAL_BYTES) as z:
+            entries = z.infolist()
+            self._check_entries(entries)
+            # Extract exactly the checked entries. By name, extractall() would
+            # write the last of several same-named entries once per name.
+            # While writing, each entry also stops at its declared size and the
+            # book at its total limit, so the checks hold for a lying archive.
+            z.extractall(self.tmpdir, members=entries)
         # 1) container.xml -> OPF path
         container = os.path.join(self.tmpdir, "META-INF", "container.xml")
         opf_rel = None

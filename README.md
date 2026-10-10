@@ -80,6 +80,13 @@ stylesheets, fonts and frames are not loaded, and frames only show pages from th
 This is not a full sandbox: a book can still point images at other files on your
 computer, or ask the browser to open a connection to a server it names.
 
+The reader unpacks a book into a temporary folder while it is open. It refuses a book
+that would unpack to more than 4 GB, holds a single file larger than 1 GB, or holds
+more than 20,000 files. It checks the sizes the book declares before writing any of
+it, and stops unpacking if a file holds more than it declared. Such archives are
+damaged or built to fill the disk; large image-heavy textbooks stay well within these
+limits.
+
 The app reopens the selected module, pane layout, selected notes, preview visibility,
 and document readers after a normal exit. A vocabulary quiz reopens as a Vocab pane;
 its completed reviews are already saved. Reader positions remain saved per document.

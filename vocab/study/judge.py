@@ -133,25 +133,29 @@ _STEM_EXCEPTIONS = {"sky": "sky", "skies": "sky", "skis": "ski", "dying": "die",
                     "lying": "lie", "tying": "tie", "early": "earli"}
 
 
+def _consonants(s: str) -> List[bool]:
+    """For each letter of s, whether it is a consonant. y is one at the start
+    and after a vowel. One pass, so a long run of y's cannot recurse."""
+    flags: List[bool] = []
+    for ch in s:
+        flags.append(ch not in "aeiou" and (ch != "y" or not flags or not flags[-1]))
+    return flags
+
+
 def _cons(w: str, i: int) -> bool:
-    if w[i] in "aeiou":
-        return False
-    if w[i] == "y":
-        return i == 0 or not _cons(w, i - 1)
-    return True
+    return _consonants(w[:i + 1])[i]
 
 
 def _measure(s: str) -> int:
     m, vowel = 0, False
-    for i in range(len(s)):
-        v = not _cons(s, i)
-        m += vowel and not v
-        vowel = v
+    for cons in _consonants(s):
+        m += vowel and cons
+        vowel = not cons
     return m
 
 
 def _has_vowel(s: str) -> bool:
-    return any(not _cons(s, i) for i in range(len(s)))
+    return not all(_consonants(s))
 
 
 def _cvc(s: str) -> bool:

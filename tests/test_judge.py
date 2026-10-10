@@ -302,3 +302,10 @@ def test_commas_and_points_between_digits_do_not_split_a_number():
     assert legs.score == 1.0 and legs.missed == set()        # no "000"
     mile = judge.score("a unit of length equal to 1760 yards", MILE)
     assert mile.passed and mile.missed == {"feet", "exactly", "meters"}
+
+
+def test_a_long_run_of_y_is_graded_without_error():
+    # the consonant test once recursed for each y before it
+    assert judge.score("y" * 5000, "a yellow thing").score == 0.0
+    assert judge.score("yellow", "a " + "y" * 5000).score == 0.0
+    assert judge.score("y" * 5000 + "s", "y" * 5000).score == 1.0

@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, NamedTuple, Optional
 
 from ..algorithms.base import get_scheduler
 from ..core.config import Config
@@ -101,6 +101,14 @@ def _tagger_fix(problem: nltk_resources.TaggerProblem) -> str:
     if problem.kind == "no-data":
         return "dict install wordnet"
     return ""  # the data is there but unreadable: the reason names the cause
+
+
+class WordAdded(NamedTuple):
+    """What committing a looked-up word did."""
+    message: str
+    added: bool     # the entry was written; False when an existing one was kept
+    module: str     # the module's stored name
+    word: str       # the word's stored spelling
 
 
 class App:
@@ -431,10 +439,29 @@ class App:
         self.storage.load_words(target)  # reports a missing or damaged module
         return (self.storage.module_identity(target), self.storage.raw_word_entry(target, word))
 
-    @in_transaction
+    def peek_word_state(self, target: str, word: str):
+        """word_state() read without the write lock and without writing, for a
+        display to see whether a word changed; None when it cannot be read so
+        (a missing manifest, a damaged file)."""
+        try:
+            name = sanitize_list_name(target)
+            if not self.paths.manifest_file(name).is_file():
+                return None  # module_identity would write one
+            return (self.storage.module_identity(name), self.storage.raw_word_entry(name, word))
+        except Exception:
+            return None
+
     def add_resolved_word(self, word: str, target: str, senses, dict_id: str,
                           notice: str = "", expected=None, command: bool = False,
                           sentence: str = "") -> str:
+        """commit_resolved_word(), returning only its reply."""
+        return self.commit_resolved_word(word, target, senses, dict_id, notice, expected,
+                                         command, sentence).message
+
+    @in_transaction
+    def commit_resolved_word(self, word: str, target: str, senses, dict_id: str,
+                             notice: str = "", expected=None, command: bool = False,
+                             sentence: str = "") -> "WordAdded":
         """Commit a word on the UI thread, reading the latest module state.
 
         A dictionary lookup never replaces an existing entry; only an explicit
@@ -456,8 +483,9 @@ class App:
             kept = wl.words[wl.normalize_key(word_clean)].word
             typed = _typed_word(word_clean, command)
             how = f" ({typed} :: ...)" if typed else ""
-            return (f"'{kept}' is already in '{target}'; kept the existing entry. To replace "
-                    f"it, add it with your own definition{how}.")
+            return WordAdded(f"'{kept}' is already in '{target}'; kept the existing entry. To "
+                             f"replace it, add it with your own definition{how}.",
+                             False, self.storage.canonical_name(target), kept)
         # Only a commit that writes needs the check (a word deleted meanwhile,
         # or a module recreated under the same name, refuses it).
         if expected is not None and self.word_state(target, word_clean) != expected:
@@ -486,7 +514,8 @@ class App:
                      f"  Others:  USE {quote_arg(target)}  then  SENSES {typed}")
         if note:
             msg = f"{msg}\n{note}"
-        return f"{msg}\n{notice}" if notice else msg
+        return WordAdded(f"{msg}\n{notice}" if notice else msg, True,
+                         self.storage.canonical_name(target), word_clean)
 
     @in_transaction
     def cmd_delete_word(self, word: str, target: Optional[str] = None) -> str:
@@ -598,7 +627,7 @@ class App:
         the listing was read (another window or process, a newer lookup, a
         module recreated under the same name) or the word has your own
         definition. Progress (stats.json) is not touched. Returns the reply
-        and the word's listing after the change.
+        (without the new numbering) and the word's listing after the change.
         """
         typed = _typed_word(listing.word, command)
         name, module = listing.word, listing.module
@@ -643,8 +672,7 @@ class App:
             if len(new.senses) > len(word.senses):
                 reply += (f"\n    Saved from {listing.dictionary}; '{name}' now has "
                           f"{len(new.senses)} senses.")
-        rows = "\n".join(self._sense_rows(new.senses, studied=1))
-        return f"{reply}\n{rows}", self.sense_listing(module, name)
+        return reply, self.sense_listing(module, name)
 
     def cmd_sense(self, numbers: str, word: str) -> str:
         """SENSE <n> <word>: study sense n of the latest SENSES list of word,
@@ -659,6 +687,7 @@ class App:
             listing = self.sense_listing(module, word)
         reply, after = self.choose_senses(listing, [n - 1 for n in chosen], command=True)
         self._sense_listings[(module, after.key)] = after
+        reply = "\n".join([reply] + self._sense_rows(after.senses, studied=1))
         if not listed:
             reply += "\n(No SENSES list was shown here, so the number followed the saved order.)"
         return reply

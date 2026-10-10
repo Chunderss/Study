@@ -1,4 +1,9 @@
 """Add word sends the sentence around the selected occurrence."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 pytest.importorskip("PySide6")
 
@@ -91,3 +96,101 @@ entry = json.loads(data.paths.words_file("Book").read_text("utf-8"))["words"]["f
 assert entry["context"] == "His energy began to flag.", entry
 assert any('Guessed from "His energy began to flag."' in line for line in logged), logged
 ''')
+
+
+def test_add_word_in_a_reader_offers_its_senses_without_leaving_the_page(tmp_path):
+    script = r'''
+import json
+import sys
+import zipfile
+from pathlib import Path
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+from vocab.cli.app import App
+from vocab.core.models import Sense
+from vocab.gui.main_window import MainWindow
+
+app = QApplication([])
+app.setQuitOnLastWindowClosed(False)
+root = Path(sys.argv[1])
+data = App(root)
+data.cmd_create("Book")
+path = data.paths.documents_dir("Book") / "book.epub"
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="a" href="a.html"/></manifest><spine><itemref idref="a"/></spine></package>')
+    book.writestr("a.html", '<html><head><title>Main</title></head><body><p id="p">They raised the flag. His energy began to flag. It was late.</p></body></html>')
+
+window = MainWindow(root)
+window.app.cmd_use("Book")
+window.ctx.module_changed.emit("Book")
+window.app._lookup_senses = lambda word, sentence="": ([
+    Sense("communicate or signal with a flag", "verb"), Sense("provide with a flag", "verb"),
+    Sense("become less intense", "verb")], "wordnet", "")
+window.show()
+viewer = window._open_viewer(str(path))
+native = window.windowHandle()
+picker = window.sense_picker
+
+def wait_for(check, what=""):
+    for _ in range(500):
+        if check():
+            return
+        QTest.qWait(20)
+    raise AssertionError(f"Timed out {what}: focus={app.focusWidget()}, message={window.message.text()}")
+
+def js(code):
+    result = []
+    viewer._run_js(code, result.append)
+    wait_for(lambda: bool(result), "for a script")
+    return result[0]
+
+def in_page():
+    widget = app.focusWidget()
+    return widget is not None and viewer.isAncestorOf(widget)
+
+def raw():
+    return json.loads(data.paths.words_file("Book").read_text("utf-8"))["words"].get("flag")
+
+try:
+    wait_for(lambda: viewer._web.title() == "Main" and not viewer._web.page().isLoading(), "for the page")
+    window.activateWindow()
+    viewer.focus_default()
+    wait_for(in_page, "for the page to take focus")
+    js("""(() => {
+        const node = document.getElementById("p").firstChild, at = node.data.lastIndexOf("flag");
+        getSelection().setBaseAndExtent(node, at, node, at + 4);
+        return true;
+    })()""")
+    viewer._add_selection()
+    wait_for(lambda: picker.isVisible(), "for the picker")
+    assert raw()["context"] == "His energy began to flag.", raw()
+    assert picker.context.text() == "“His energy began to flag.”"
+    assert in_page(), app.focusWidget()  # reading goes on
+    QTest.keyClick(native, Qt.Key_Escape)  # closes it without moving into it
+    assert not picker.isVisible() and in_page()
+    QTest.keyClick(native, Qt.Key_B, Qt.ControlModifier)
+    QTest.keyClick(native, Qt.Key_W)
+    assert picker.isVisible() and app.focusWidget() is picker.list
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Return)
+    assert raw()["senses"][0]["definition"] == "become less intense", raw()
+    QTest.keyClick(native, Qt.Key_Escape)
+    assert not picker.isVisible()
+    wait_for(in_page, "for focus to return to the page")
+finally:
+    window.close()
+    window.deleteLater()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+'''
+    env = dict(os.environ)
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if sys.platform == "win32":
+        env["QT_QPA_PLATFORM"] = "windows"
+    env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
+    result = subprocess.run([sys.executable, "-X", "faulthandler", "-c", script, str(tmp_path)],
+                            cwd=Path(__file__).resolve().parents[1], env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr

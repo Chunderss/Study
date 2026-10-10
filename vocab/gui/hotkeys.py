@@ -59,6 +59,8 @@ class HotkeyFilter(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._direct: Dict[Tuple[int, int], Callable[[], None]] = {}
+        # chord -> predicate: the chord is bound only while it returns true
+        self._direct_when: Dict[Tuple[int, int], Callable[[], bool]] = {}
         self._leader: Dict[int, Callable[[], None]] = {}   # plain key -> action
         self._leader_chord: Optional[Tuple[int, int]] = None
         self._armed = False
@@ -128,12 +130,25 @@ class HotkeyFilter(QObject):
             self._consumed_keys.clear()
 
     # ---- registration ---------------------------------------------------
-    def bind_direct(self, modifiers, key, action) -> None:
+    def bind_direct(self, modifiers, key, action, when=None) -> None:
+        """Bind a chord. With ``when``, the chord is bound only while when()
+        is true; otherwise the key reaches the focused widget untouched."""
         mods = _norm_mods(modifiers)
-        self._direct[(mods, int(key))] = action
+        chords = [(mods, int(key))]
         alias = _SHIFT_ALIASES.get(key)
         if alias is not None:
-            self._direct[(mods, int(alias))] = action
+            chords.append((mods, int(alias)))
+        for chord in chords:
+            self._direct[chord] = action
+            if when is None:
+                self._direct_when.pop(chord, None)
+            else:
+                self._direct_when[chord] = when
+
+    def _direct_action(self, chord):
+        action = self._direct.get(chord)
+        when = self._direct_when.get(chord)
+        return action if action is not None and (when is None or when()) else None
 
     def bind_leader_key(self, key, action) -> None:
         self._leader[int(key)] = action
@@ -195,7 +210,8 @@ class HotkeyFilter(QObject):
             if not ev.isAutoRepeat():
                 self._consumed_keys.discard(key)
             return False
-        bound = self._armed or chord == self._leader_chord or chord in self._direct
+        bound = (self._armed or chord == self._leader_chord
+                 or self._direct_action(chord) is not None)
         if ev.type() == QEvent.ShortcutOverride:
             if bound or key in self._consumed_keys:
                 ev.accept()
@@ -232,7 +248,7 @@ class HotkeyFilter(QObject):
             return True
 
         # 3) direct chord?
-        action = self._direct.get((mods, key))
+        action = self._direct_action(chord)
         if action is not None:
             self._consumed_keys.add(key)
             action()

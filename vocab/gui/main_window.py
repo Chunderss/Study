@@ -23,6 +23,7 @@ from .components import (ConsoleComponent, DocumentsComponent, NotesComponent,
                          VocabComponent)
 from .context import WorkspaceContext
 from .help_overlay import HelpOverlay
+from .sense_picker import SensePicker
 from .hotkeys import HotkeyFilter
 from .study_view import StudyView
 from .workspace import Workspace
@@ -50,6 +51,10 @@ class MainWindow(QWidget):
         self.setWindowTitle("Vocab Study")
         self.resize(1040, 700)
         self._build()
+        # Over the workspace like the help panel; shown after lookups.
+        self.sense_picker = SensePicker(self.ctx, self)
+        self._last_word = None  # (module, word) of the latest desktop lookup
+        self.ctx.senses_available.connect(self._offer_senses)
         self._session_warning = ""
         self._restore_session()
         # Keep a reference: Qt event filters must remain alive for key delivery.
@@ -213,6 +218,8 @@ class MainWindow(QWidget):
             ("z", None, "Zoom / un-zoom focused pane", "Panes", ws.toggle_zoom),
             ("x", None, "Close focused pane", "Panes", ws.close_focused),
             ("1…9", None, "Focus pane by number", "Move between panes", None),
+            ("w", None, "Senses of the last added word (again: close)", "Vocab",
+             self._focus_senses),
             # Listed only: each Learning pane handles Find for itself.
             (None, [(Qt.ControlModifier, Qt.Key_F, "Ctrl+F")], "Search captures", "Learning", None),
         ]
@@ -236,6 +243,10 @@ class MainWindow(QWidget):
         for n in range(1, 10):
             self.hotkeys.bind_leader_key(getattr(Qt, f"Key_{n}"),
                                          lambda n=n: self.workspace.focus_index(n))
+        # Esc closes the sense picker first, wherever focus is; while it is
+        # hidden, Esc reaches the focused pane as before.
+        self.hotkeys.bind_direct(Qt.NoModifier, Qt.Key_Escape, self.sense_picker.hide_and_return,
+                                 when=self.sense_picker.isVisible)
 
     @staticmethod
     def _key_for_leader_char(ch: str):
@@ -247,9 +258,33 @@ class MainWindow(QWidget):
     def _on_leader_arm(self, armed: bool) -> None:
         if armed:
             self.status.setText("LEADER: press a key  (b sidebar · v/- split · z zoom · "
-                                "x close · h/j/k/l move · n/p cycle · r preview · / help · Esc cancel)")
+                                "x close · h/j/k/l move · n/p cycle · r preview · w senses · "
+                                "/ help · Esc cancel)")
         else:
             self._refresh_status()
+
+    # ---- senses ------------------------------------------------------------
+    def _offer_senses(self, module: str, word: str, added: bool) -> None:
+        """A desktop lookup finished: Ctrl+B w now opens this word, and a word
+        just added with senses to choose from is shown without taking focus."""
+        self._last_word = (module, word)
+        if added:
+            self.sense_picker.offer(module, word)
+        elif not self.sense_picker.has_focus():
+            self.sense_picker.hide()  # an untouched list of an earlier word
+
+    def _focus_senses(self) -> None:
+        """Ctrl+B w: move to the sense picker's list, opening it for the last
+        word a desktop lookup added or kept; pressed in the list, close it."""
+        picker = self.sense_picker
+        if picker.isVisible() and self.focusWidget() is picker.list:
+            picker.hide_and_return()
+        elif picker.isVisible():
+            picker.focus_list()
+        elif self._last_word is None:
+            self.ctx.log.emit("! Add a word first, then press Ctrl+B w to see its senses.")
+        else:
+            picker.show_word(*self._last_word, focus=True)
 
     # ---- sidebar / modules ---------------------------------------------
     def _toggle_sidebar(self) -> None:
@@ -446,12 +481,16 @@ class MainWindow(QWidget):
         existing = getattr(self, "_help", None)
         if existing is not None and existing.isVisible():
             existing.hide()
+            if self.sense_picker.isVisible():
+                self.sense_picker.place()
             return
         if existing is None:
             self._help = HelpOverlay(self._keymap(), parent=self)
         self._help.place(self.rect())
         self._help.show()
         self._help.raise_()
+        if self.sense_picker.isVisible():
+            self.sense_picker.place()  # left of the help panel
         # deliberately do NOT setFocus() — the panel must not steal keyboard
         # focus, so global hotkeys keep firing while it stays open
 
@@ -885,3 +924,6 @@ class MainWindow(QWidget):
         if h is not None and h.isVisible():
             h.place(self.rect())
         super().resizeEvent(e)
+        picker = getattr(self, "sense_picker", None)
+        if picker is not None and picker.isVisible():
+            picker.place()

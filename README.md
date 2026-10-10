@@ -28,13 +28,17 @@ an already built Windows executable. The portable app is unsigned.
 1. Click **+ New module**, then select the module.
 2. Use **View → Notes**, **Vocab**, **Documents**, **Learning**, or **Console** to choose a pane.
 3. Add a word in Vocab. `word :: your definition` supplies your own definition and
-   replaces an existing entry; a dictionary lookup never replaces one.
+   replaces an existing entry; a dictionary lookup never replaces one. When the
+   dictionary has several senses, a small panel lists them with the one studied in
+   bold; press Ctrl+B, then `w`, to move into it, the arrow keys and Enter to study
+   another sense, and Esc to close it.
 4. Click **Study** for this module, or **Study All** for all modules.
 5. Use **View → Split side by side** to keep notes open alongside your book or vocabulary.
 
 **F1** shows keyboard shortcuts. Existing Ctrl+B sequences still work: press
 Ctrl+B, release it, then `v` to split, `n` to cycle components, `z` to zoom,
-`s` to save a note, or `r` to toggle its preview. **Ctrl+S** also saves the focused note.
+`s` to save a note, `r` to toggle its preview, or `w` for the senses of the last
+added word. **Ctrl+S** also saves the focused note.
 
 The bottom line shows the module, its due count and the dictionary. The line above it
 shows the latest message on one line, such as a recovered draft, a workspace that
@@ -177,6 +181,18 @@ list instead: it moves to the front, a sense from `--all` is saved, no sense is
 removed, and the word keeps its progress. If the word changed in another window or
 program since it was listed, nothing is changed and SENSE asks you to list it again.
 A word with your own definition (`word :: definition`) has no senses to choose.
+
+In the desktop app, adding a word with several senses from Vocab or with **Add word**
+in an EPUB shows the sense picker in a corner of the workspace, away from the pane you
+are typing or reading in. It does not take keyboard focus or resize anything: Esc closes
+it from anywhere (before Esc does anything else), and Ctrl+B `w` moves into it, or
+reopens it for the last word looked up. It shows the module and dictionary, whether the
+first sense was chosen automatically or by you, and the sentence. Enter (or a double
+click) studies the highlighted sense at once, keeping the word's progress; choosing again
+undoes it. **All senses** looks up the dictionary's other senses in the background; one
+is saved only if you choose it. A list that changed in another window or program is
+reloaded with nothing highlighted, and a choice made from an outdated list is refused,
+so Enter never acts on a sense you did not pick. The Console uses `SENSES` and `SENSE`.
 Vocabulary lookups from Vocab and the EPUB reader run in the background. Failed additions
 keep the input for retrying; lookups stay attached to the module where they started.
 The optional Ollama sense selector requires a separately installed local server.

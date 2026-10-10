@@ -35,6 +35,11 @@ class WorkspaceContext(QObject):
     source_requested = Signal(str, object)
     # a module is about to be deleted: close anything holding its files open
     module_deleting = Signal(str)
+    # a lookup finished for (module, word); added is False when an existing
+    # entry was kept. The sense picker offers the senses of an added word.
+    senses_available = Signal(str, str, bool)
+    # find_more_senses(listing) finished: (token, listing with its extra senses)
+    more_senses_done = Signal(int, object)
 
     def __init__(self, app):
         super().__init__()
@@ -79,19 +84,41 @@ class WorkspaceContext(QObject):
     @Slot(int, object, str)
     def _lookup_done(self, token, result, error):
         worker, module, word, expected = self._jobs.pop(token)
-        ok = False
+        ok, committed = False, None
         try:
             if error:
                 raise ValueError(error)
             senses, dictionary, notice = result
-            message = self.app.add_resolved_word(word, module, senses, dictionary, notice,
-                                                 expected=expected, sentence=worker.sentence)
+            committed = self.app.commit_resolved_word(word, module, senses, dictionary, notice,
+                                                      expected=expected, sentence=worker.sentence)
+            message = committed.message
+            if committed.added and len(senses) > 1:
+                message += "\n    Ctrl+B w lists them all."
             ok = True
             self.changed.emit()
         except Exception as exc:
             message = f"! Could not add '{word}': {exc}"
         self.log.emit(message)
         self.word_added.emit(token, ok)
+        if committed is not None:
+            self.senses_available.emit(committed.module, committed.word, committed.added)
+
+    def find_more_senses(self, listing):
+        """Look up the senses of a listed word's dictionary that are not saved,
+        on the lookup thread (so closing waits for it). more_senses_done
+        reports the result with the returned token."""
+        self._next_job += 1
+        token = self._next_job
+        worker = MoreSensesWorker(token, self.app, listing)
+        worker.signals.done.connect(self._more_senses_done)
+        self._jobs[token] = worker
+        self._pool.start(worker)
+        return token
+
+    @Slot(int, object)
+    def _more_senses_done(self, token, listing):
+        self._jobs.pop(token, None)
+        self.more_senses_done.emit(token, listing)
 
 
 class LookupSignals(QObject):
@@ -111,3 +138,21 @@ class LookupWorker(QRunnable):
             self.signals.done.emit(self.token, None, str(exc))
         else:
             self.signals.done.emit(self.token, result, "")
+
+
+class MoreSensesSignals(QObject):
+    done = Signal(int, object)
+
+
+class MoreSensesWorker(QRunnable):
+    def __init__(self, token, app, listing):
+        super().__init__()
+        self.token, self.app, self.listing = token, app, listing
+        self.signals = MoreSensesSignals()
+
+    def run(self):
+        try:
+            listing = self.app.more_senses(self.listing)
+        except Exception as exc:  # more_senses reports failures itself
+            listing = self.listing.with_extra(note=str(exc))
+        self.signals.done.emit(self.token, listing)

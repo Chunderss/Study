@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.mark.parametrize("tool, verdict", [
     ("gui_viewers", "VIEWERS PASSED"),
+    ("gui_disambig", "DISAMBIGUATION + HIGHLIGHT-ADD PASSED"),
 ])
 def test_gui_check_passes(tmp_path, tool, verdict):
     # Temporary folders the tool makes land in this test's folder.
@@ -25,3 +26,5 @@ def test_gui_check_passes(tmp_path, tool, verdict):
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
     assert verdict in result.stdout, output
+    if os.environ.get("VOCAB_REQUIRE_NLTK_DATA") == "1":
+        assert "[skip]" not in result.stdout, output  # CI has WordNet and the tagger

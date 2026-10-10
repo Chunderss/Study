@@ -2,11 +2,13 @@
 import os
 import sys
 import tempfile
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # Import this checkout even when another copy of vocab is installed.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from vocab import nltk_resources
 from vocab.core.models import Sense
 from vocab.study.disambiguate import get_disambiguator, NlpDisambiguator, OllamaDisambiguator
 
@@ -15,16 +17,21 @@ def main() -> int:
     # --- NLP disambiguator: POS filter fixes the 'ephemeral' mayfly wart ---
     dis = get_disambiguator("nlp")
     assert isinstance(dis, NlpDisambiguator)
+    # The part-of-speech checks need NLTK's tagger; the others run without it.
+    tagger_problem = nltk_resources.pos_tagger_problem()
+    if tagger_problem:
+        print(f"[skip] part-of-speech checks: {tagger_problem.reason}")
 
     # senses as WordNet returns them (mayfly noun first, adjective second)
     ephemeral = [
         Sense(definition="anything short-lived, as an insect that lives only a day", pos="noun"),
         Sense(definition="lasting a very short time", pos="adjective"),
     ]
-    ranked = dis.rank("ephemeral", "the ephemeral joys of childhood", ephemeral)
-    assert ranked[0].pos == "adjective", f"POS filter failed: {ranked[0].pos}"
-    assert "short time" in ranked[0].definition
-    print("[ok] NLP: 'ephemeral' in context -> adjective 'lasting a very short time' (mayfly demoted)")
+    if not tagger_problem:
+        ranked = dis.rank("ephemeral", "the ephemeral joys of childhood", ephemeral)
+        assert ranked[0].pos == "adjective", f"POS filter failed: {ranked[0].pos}"
+        assert "short time" in ranked[0].definition
+        print("[ok] NLP: 'ephemeral' in context -> adjective 'lasting a very short time' (mayfly demoted)")
 
     # --- Lesk picks among same-POS senses (bank: money vs river) ---
     bank = [
@@ -47,44 +54,74 @@ def main() -> int:
     print("[ok] NLP: no-op when no sentence or single sense")
 
     # --- Ollama backend degrades to NLP when server is down (no cost) ---
-    oll = OllamaDisambiguator(fallback=NlpDisambiguator())
-    ranked = oll.rank("ephemeral", "the ephemeral joys of childhood", ephemeral)
-    assert ranked[0].pos == "adjective", "Ollama fallback to NLP failed"
-    print("[ok] Ollama backend falls back to NLP when server down (zero cost)")
+    if not tagger_problem:
+        oll = OllamaDisambiguator(fallback=NlpDisambiguator())
+        # Report the server as down, so a local Ollama cannot answer instead.
+        oll._server_up = lambda use_cache=True: False
+        ranked = oll.rank("ephemeral", "the ephemeral joys of childhood", ephemeral)
+        assert ranked[0].pos == "adjective", "Ollama fallback to NLP failed"
+        print("[ok] Ollama backend falls back to NLP when server down (zero cost)")
 
     # --- cmd_add threads the sentence through to disambiguation ---
     from vocab.cli.app import App
     app = App(root=tempfile.mkdtemp(prefix="vocab_dis_"))
-    if not app.effective_dictionary()[0].available():
-        print("[skip] WordNet corpus not installed; cmd_add context test skipped")
+    # Without WordNet the app falls back to an online dictionary: skip, don't go online.
+    wordnet = app.effective_dictionary()[0].id == "wordnet"
+    if not wordnet:
+        print("[skip] WordNet is not installed; cmd_add and highlight-to-add checks skipped")
+    elif tagger_problem:
+        print("[skip] cmd_add context check: needs the part-of-speech tagger")
     else:
         app.cmd_create("Reading"); app.cmd_use("Reading")
         msg = app.cmd_add("ephemeral", sentence="the ephemeral joys of childhood")
         wl = app.storage.load_words("Reading")
         w = wl.words[wl.normalize_key("ephemeral")]
-        assert "short" in w.senses[0].definition.lower(), \
+        # Both WordNet senses mention "short"; only the adjective fits the sentence.
+        assert w.senses[0].pos == "adjective", \
             f"cmd_add did not use context; primary sense = {w.senses[0].definition!r}"
         print(f"[ok] cmd_add(sentence=...) stored context sense: {w.senses[0].definition!r}")
 
     # --- highlight-to-add signal path (MainWindow handler) ---
     from PySide6.QtWidgets import QApplication
+    from PySide6.QtTest import QTest
     from vocab.gui.main_window import MainWindow
     app_qt = QApplication.instance() or QApplication(sys.argv)
+
+    def wait_until(check, what, seconds=30):
+        deadline = time.monotonic() + seconds
+        while not check():
+            assert time.monotonic() < deadline, f"timed out waiting for {what}"
+            QTest.qWait(10)
+
     win = MainWindow(root=tempfile.mkdtemp(prefix="vocab_hl_"))
-    win.app.cmd_create("Book"); win.app.cmd_use("Book")
-    n0 = len(win.app.storage.load_words("Book").words)
-    win.ctx.add_word_requested.emit("ephemeral", "the ephemeral joys of childhood")
-    app_qt.processEvents()
-    n1 = len(win.app.storage.load_words("Book").words)
-    if win.app.effective_dictionary()[0].available():
-        assert n1 == n0 + 1, "highlight-to-add did not add the word"
-        print("[ok] add_word_requested -> word added to current module")
-    else:
-        print("[skip] WordNet not installed; highlight-add count check skipped")
+    win.app.cmd_create("Book"); win.app.cmd_create("Other"); win.app.cmd_use("Other")
+    if wordnet:
+        def counts():
+            return {m: len(win.app.storage.load_words(m).words) for m in ("Book", "Other")}
+        before = counts()
+        finished = []
+        win.ctx.word_added.connect(lambda token, ok: finished.append(ok))
+        # word, sentence, and the module of the reader it was highlighted in,
+        # which is not the current module here
+        win.ctx.add_word_requested.emit("ephemeral", "the ephemeral joys of childhood", "Book")
+        # The lookup runs on a worker thread; the result is saved on this one.
+        wait_until(lambda: finished, "the highlight-to-add lookup")
+        assert finished == [True], "highlight-to-add lookup failed"
+        assert counts() == {"Book": before["Book"] + 1, "Other": before["Other"]}, \
+            "highlight-to-add did not add the word to the reader's module"
+        print("[ok] add_word_requested -> word added to the reader's module after the lookup")
+        if tagger_problem:
+            print("[skip] highlight-to-add sense order: needs the part-of-speech tagger")
+        else:
+            words = win.app.storage.load_words("Book")
+            w = words.words[words.normalize_key("ephemeral")]
+            assert w.senses[0].pos == "adjective", \
+                f"highlight-to-add ignored the sentence: {w.senses[0].definition!r}"
+            print(f"[ok] add_word_requested stored the in-context sense: {w.senses[0].definition!r}")
 
     # --- EPUB selection JS extracts word + containing sentence (live page) ---
     import zipfile
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QEvent
     from vocab.gui.viewers import EpubViewer
     tmpd = tempfile.mkdtemp(prefix="vocab_sel_")
     epath = os.path.join(tmpd, "s.epub")
@@ -105,37 +142,39 @@ def main() -> int:
                    "that morning. Then it faded.</p></body></html>")
 
     ev = EpubViewer(epath); ev.resize(600, 400); ev.show()
-    got = {}
-    def run_sel():
-        # select the word "ephemeral" programmatically, then run the extractor JS
-        js_select = """
-        (function(){
-          var p=document.querySelector('p'); var t=p.firstChild;
-          var i=p.textContent.indexOf('ephemeral');
-          var r=document.createRange(); r.setStart(t,i); r.setEnd(t,i+9);
-          var s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
-        })();
-        """
-        def after_select(_):
-            ev._run_js(ev._SEL_JS, capture)
-        def capture(payload):
-            got["payload"] = payload
-            app_qt.quit()
-        ev._run_js(js_select, after_select)
-    for _ in range(10):
-        app_qt.processEvents()
-    QTimer.singleShot(1500, run_sel)
-    QTimer.singleShot(4000, app_qt.quit)
-    app_qt.exec()
+    wait_until(lambda: ev._document_loaded and not ev._web.page().isLoading(),
+               "the EPUB chapter to load")
+    # select the word "ephemeral" programmatically, then run the extractor JS
+    js_select = """
+    (function(){
+      var p=document.querySelector('p'); var t=p.firstChild;
+      var i=p.textContent.indexOf('ephemeral');
+      var r=document.createRange(); r.setStart(t,i); r.setEnd(t,i+9);
+      var s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
+    })();
+    """
+    selected, got = [], []
+    ev._run_js(js_select, selected.append)
+    wait_until(lambda: selected, "the selection script")
+    ev._run_js(ev._SEL_JS, got.append)
+    wait_until(lambda: got, "the selection payload")
 
     import json as _json
-    payload = got.get("payload")
+    payload = got[0]
     assert payload, "selection JS returned nothing"
     data = _json.loads(payload)
     assert data["word"] == "ephemeral", f"wrong word: {data}"
     assert "ephemeral joy" in data["sentence"], f"sentence not extracted: {data}"
     assert "dog barked" not in data["sentence"], f"grabbed wrong sentence: {data}"
     print(f"[ok] EPUB selection JS extracted word+sentence: {data}")
+
+    # Close the reader before QApplication goes: a WebEngine page that
+    # outlives its profile crashes the interpreter at exit.
+    for widget in (ev, win):
+        widget.close()
+        widget.deleteLater()
+    app_qt.sendPostedEvents(None, QEvent.DeferredDelete)
+    app_qt.processEvents()
 
     print("\nDISAMBIGUATION + HIGHLIGHT-ADD PASSED")
     return 0

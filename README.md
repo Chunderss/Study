@@ -125,8 +125,8 @@ preserving the newer progress.
 
 Outside mechanical mode, Space or Enter reveals the answer, J or Y records **Got it**,
 F or N records **Missed it**, and Esc ends the session. Keyboard focus stays on the
-card, so pressing Space again never records an answer; Tab and the mouse still reach
-the buttons.
+card, so pressing Space or Enter again never records an answer. To use a button from
+the keyboard, Tab to it and press Space or Enter; the mouse works too.
 
 Mechanical mode grades a typed definition by its wording, not its meaning: it passes
 when it contains at least half of the key terms of the card's definition. The feedback

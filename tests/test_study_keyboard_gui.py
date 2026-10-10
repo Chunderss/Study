@@ -2,7 +2,8 @@
 native window as platform keyboard input arrives.
 
 A second Space must never turn into "Got it": the keys a user presses go to
-the card, while the buttons stay reachable with Tab and the mouse.
+the card, while the buttons stay reachable with Tab and the mouse, and a
+Tab-focused button takes Space or Enter.
 """
 import pytest
 
@@ -18,15 +19,16 @@ DEFINITIONS = {"alpha": "first letter", "beta": "second letter",
                "gamma": "third letter", "delta": "fourth letter"}
 
 
-def _open_study(window, qt):
+def _open_study(window, qt, mechanical=False):
     for word, definition in DEFINITIONS.items():
         window.app.cmd_add(word, manual_def=definition)
+    window.app.config.mechanical_repetition = mechanical
     window._open_study(["Book"])        # the Study button's path
     window.activateWindow()
     qt.processEvents()
     view = window.workspace.focused.component
     assert isinstance(view, StudyView)
-    assert qt.focusWidget() is view
+    assert qt.focusWidget() is (view.input if mechanical else view)
     return view
 
 
@@ -141,6 +143,54 @@ def test_study_buttons_still_work_by_tab_and_mouse(window, qt, delivery):
     keys.click(view.bad_btn)
     assert (view.session.reviewed, view.session.result.correct) == (4, 2)
     assert view._ended
+
+
+@DELIVERY
+def test_enter_activates_the_study_button_tab_reached(window, qt, delivery):
+    keys = Keys(window, qt, delivery)
+    view = _open_study(window, qt)
+    keys.tab_to(view.reveal_btn)
+    keys.press(Qt.Key_Enter)
+    assert view._revealed and qt.focusWidget() is view
+
+    keys.tab_to(view.good_btn)
+    keys.press(Qt.Key_Return)
+    assert (view.session.reviewed, view.session.result.correct) == (1, 1)
+    assert not view._revealed and qt.focusWidget() is view
+
+    keys.press(Qt.Key_Space)
+    keys.tab_to(view.bad_btn)
+    keys.hold(Qt.Key_Enter)             # grades once; repeats do not reach the next card
+    assert (view.session.reviewed, view.session.result.correct) == (2, 1)
+    assert not view._revealed and qt.focusWidget() is view
+
+    keys.press(Qt.Key_Return)           # on the card, Enter still only reveals
+    keys.press(Qt.Key_Return)
+    assert view._revealed and view.session.reviewed == 2
+    keys.press(Qt.Key_J)
+    keys.tab_to(view.end_btn)
+    keys.press(Qt.Key_Return)           # ends the session instead of revealing
+    assert view._ended and not view._revealed and view.session.reviewed == 3
+
+
+@DELIVERY
+def test_enter_activates_the_tab_reached_end_and_continue_in_mechanical_mode(window, qt, delivery):
+    keys = Keys(window, qt, delivery)
+    view = _open_study(window, qt, mechanical=True)
+    view.input.setText(DEFINITIONS[view.word.text()])
+    keys.press(Qt.Key_Return)           # submits; Continue takes focus
+    assert view._awaiting_next and qt.focusWidget() is view.next_btn
+    keys.tab_to(view.end_btn)
+    keys.tab_to(view.next_btn)
+    keys.press(Qt.Key_Enter)
+    assert not view._awaiting_next and qt.focusWidget() is view.input
+    assert view.session.reviewed == 1
+
+    view.input.setText(DEFINITIONS[view.word.text()])
+    keys.press(Qt.Key_Return)
+    keys.tab_to(view.end_btn)
+    keys.press(Qt.Key_Return)           # ends the session instead of continuing
+    assert view._ended and view.session.reviewed == 2
 
 
 def test_focused_study_card_describes_its_state(window, qt):

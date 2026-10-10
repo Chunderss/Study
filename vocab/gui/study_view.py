@@ -9,7 +9,7 @@ Keyboard-first (matches the command-driven spirit):
   Space / Enter = reveal ;  J / Y = got it ;  F / N = missed it ;  Esc = end
 In reveal mode the view itself keeps keyboard focus after each card change, so
 a second Space or Enter never lands on a grade button. The buttons stay
-reachable with Tab and the mouse.
+reachable with Tab and the mouse; Space or Enter activates the focused one.
 """
 from __future__ import annotations
 
@@ -27,6 +27,20 @@ class AnswerInput(QLineEdit):
             event.accept()
             if not event.isAutoRepeat():
                 self.returnPressed.emit()
+            return
+        super().keyPressEvent(event)
+
+
+class StudyButton(QPushButton):
+    """Return or Enter activates a focused button, as Space does. Outside a
+    dialog QPushButton takes them only as the default button; any other button
+    would pass them on to the card, where Enter reveals. A held key acts once."""
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            event.accept()
+            if not event.isAutoRepeat():
+                self.click()
             return
         super().keyPressEvent(event)
 
@@ -115,22 +129,22 @@ class StudyView(QWidget):
 
         # bottom: action buttons
         btns = QHBoxLayout()
-        self.reveal_btn = QPushButton("Reveal  (Space)")
+        self.reveal_btn = StudyButton("Reveal  (Space)")
         self.reveal_btn.setDefault(True)
         self.reveal_btn.clicked.connect(self._reveal)
 
-        self.good_btn = QPushButton("Got it  (J)")
+        self.good_btn = StudyButton("Got it  (J)")
         self.good_btn.setObjectName("Good")
         self.good_btn.clicked.connect(lambda: self._grade(True))
 
-        self.bad_btn = QPushButton("Missed it  (F)")
+        self.bad_btn = StudyButton("Missed it  (F)")
         self.bad_btn.setObjectName("Bad")
         self.bad_btn.clicked.connect(lambda: self._grade(False))
 
-        self.next_btn = QPushButton("Continue  (Enter)")
+        self.next_btn = StudyButton("Continue  (Enter)")
         self.next_btn.clicked.connect(self._continue)
         self.next_btn.hide()
-        self.end_btn = QPushButton("End  (Esc)")
+        self.end_btn = StudyButton("End  (Esc)")
         self.end_btn.clicked.connect(self._end)
 
         btns.addWidget(self.end_btn)
@@ -183,8 +197,8 @@ class StudyView(QWidget):
             self.bad_btn.setEnabled(False)
             self._describe(f"Card {view.index} of {view.total}: {view.word}. "
                            "Press Space to reveal the answer.")
-            # QPushButton clicks on Space, so a focused button would turn the
-            # next Space into an action. Keys go to the view (keyPressEvent);
+            # A focused button clicks on Space or Enter, so it would turn the
+            # next key into an action. Keys go to the view (keyPressEvent);
             # Tab and the mouse still reach the buttons.
             self.setFocus()
 
@@ -203,8 +217,8 @@ class StudyView(QWidget):
         self.bad_btn.setEnabled(True)
         self._describe(f"{view.word}. {text}\n\n"
                        "Press J if you got it, or F if you missed it.")
-        # Not on "Got it": a second Space would grade the card. This comes
-        # after disabling reveal_btn, which moves its focus elsewhere first.
+        # Not on "Got it": a second Space or Enter would grade the card. This
+        # comes after disabling reveal_btn, which moves its focus elsewhere first.
         self.setFocus()
 
     def _grade(self, correct: bool) -> None:

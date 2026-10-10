@@ -13,7 +13,9 @@ body = ('<p id="banks">First bank deals money. The river bank supports trees.</p
         '<p id="em">A <em>quick</em> fox jumps. Another sentence.</p>'
         '<h2 id="heading">No full stop here</h2>'
         '<p id="tiny">Tiny bank.</p>'
-        '<p id="ruby">Before it. The <ruby>bank<rt>gloss</rt></ruby> is near the river. Next one.</p>')
+        '<p id="ruby">Before it. The <ruby>bank<rt>gloss</rt></ruby> is near the river. Next one.</p>'
+        '<p id="mono">\u6628\u65e5\u3001<ruby>\u9280<rt>\u304e\u3093</rt></ruby>'
+        '<ruby>\u884c<rt>\u3053\u3046</rt></ruby>\u306b\u884c\u3063\u305f\u3002 Next.</p>')
 with zipfile.ZipFile(path, "w") as book:
     book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
                   '<item id="a" href="a.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>')
@@ -47,4 +49,13 @@ assert context("em", "fox")["sentence"] == "A quick fox jumps."
 assert context("em", "quick")["sentence"] == "A quick fox jumps."
 assert context("tiny", "bank")["sentence"] == "Tiny bank."  # not the heading, not the title
 assert context("ruby", "bank")["sentence"] == "The bank is near the river."
+# A selection across mono ruby (two bases with their glosses) keeps neither gloss.
+js(viewer, """(() => {
+    const bases = document.querySelectorAll("#mono ruby");
+    getSelection().setBaseAndExtent(bases[0].firstChild, 0, bases[1].firstChild, 1);
+    return true;
+})()""")
+mono = json.loads(js(viewer, viewer._SEL_JS))
+assert mono["word"] == "\u9280\u884c", mono
+assert "\u304e" not in mono["sentence"] and mono["sentence"].startswith("\u6628\u65e5\u3001\u9280\u884c"), mono
 ''')

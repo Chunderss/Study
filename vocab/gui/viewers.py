@@ -1001,7 +1001,13 @@ class EpubViewer(QWidget):
       var sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) return "";
       var range = sel.getRangeAt(0);
-      var word = range.toString().trim();
+      // Ruby glosses (<rt>, <rp>) are not part of the word or the sentence.
+      function text(part) {
+        var fragment = part.cloneContents();
+        fragment.querySelectorAll("rt, rp").forEach(function (gloss) { gloss.remove(); });
+        return fragment.textContent;
+      }
+      var middle = text(range), word = middle.trim();
       if (!word) return "";
       var body = document.body;
       var start = range.startContainer;
@@ -1017,19 +1023,13 @@ class EpubViewer(QWidget):
       var after = document.createRange();
       after.setStart(range.endContainer, range.endOffset);
       after.setEnd(block, block.childNodes.length);
-      // Ruby glosses (<rt>, <rp>) are not part of the sentence.
-      function text(part) {
-        var fragment = part.cloneContents();
-        fragment.querySelectorAll("rt, rp").forEach(function (gloss) { gloss.remove(); });
-        return fragment.textContent;
-      }
       var head = text(before), tail = text(after);
       var ends = /[.!?]+["'’”)\]]*\s/g, cut = 0, match;
       while ((match = ends.exec(head)) !== null) cut = ends.lastIndex;
       head = head.slice(cut).slice(-400);
       match = /^[\s\S]*?[.!?]+["'’”)\]]*(?=\s|$)/.exec(tail);
       tail = (match ? match[0] : tail).slice(0, 400);
-      var sentence = (head + range.toString() + tail).replace(/\s+/g, " ").trim();
+      var sentence = (head + middle + tail).replace(/\s+/g, " ").trim();
       return JSON.stringify({word: word, sentence: sentence});
     })();
     """

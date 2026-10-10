@@ -257,6 +257,7 @@ class PdfViewer(QWidget):
     def on_replaced(self) -> None:
         """Called by Pane.set_component when this viewer is swapped out."""
         self.save_position()
+        self._doc.close()  # release the file now, not only when deleted
 
     def _update_info(self, *_):
         n = self._doc.pageCount()

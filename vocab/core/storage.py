@@ -18,7 +18,10 @@ import json
 import os
 import re
 import shutil
+import stat
+import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Dict, List
@@ -54,6 +57,19 @@ class DataFileError(ValueError):
 
 # Application-owned temporary names; never listed as modules or documents.
 STAGING_PREFIX = ".vocab-staging-"
+TRASH_PREFIX = ".vocab-trash-"
+_STALE_STAGING = 24 * 3600  # an unfinished copy this old is abandoned
+
+
+def _remove_tree(folder: Path) -> None:
+    """Remove an app-owned folder, clearing read-only flags inside it."""
+    def make_writable(function, path, _error):
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        function(path)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(folder, onexc=make_writable)
+    else:
+        shutil.rmtree(folder, onerror=make_writable)
 
 
 def _publish_file(staging: Path, dest: Path, exists_message: str) -> None:
@@ -222,6 +238,8 @@ class Storage:
             return []
         names = []
         for p in d.iterdir():
+            if p.name.startswith((STAGING_PREFIX, TRASH_PREFIX)):
+                continue  # application-owned leftovers, never modules
             try:
                 if not p.is_dir():
                     continue
@@ -328,10 +346,39 @@ class Storage:
 
     @in_transaction
     def delete(self, name: str) -> None:
+        """Delete a module: first move its whole folder to a hidden trash name
+        in one step, then remove it. If the move fails (on Windows, while a
+        file inside is open) nothing was deleted; if the removal fails, the
+        module is already gone and the leftover is purged at a later start."""
         name = sanitize_module_name(name)
         if not self.exists(name):
             raise ModuleNotFound(f"Module '{name}' does not exist.")
-        shutil.rmtree(self.paths.module_dir(name))
+        trash = self.paths.modules_dir / f"{TRASH_PREFIX}{uuid.uuid4().hex}"
+        try:
+            self.paths.module_dir(name).rename(trash)
+        except OSError as error:
+            raise OSError(f"Could not delete '{name}': {error.strerror or error}. Close any "
+                          "document from this module and try again; nothing was deleted.") from error
+        try:
+            _remove_tree(trash)
+        except OSError:
+            pass  # hidden, and purged by purge_leftovers()
+
+    def purge_leftovers(self) -> None:
+        """Remove what interrupted operations left behind: trashed modules and,
+        once clearly abandoned, unfinished staging copies."""
+        stale = time.time() - _STALE_STAGING
+        candidates = list(self.paths.modules_dir.glob(TRASH_PREFIX + "*")) if self.paths.modules_dir.exists() else []
+        candidates += [p for p in self.paths.root.glob(STAGING_PREFIX + "*") if p.stat().st_mtime < stale]
+        for name in self.list_names():
+            documents = self.paths.documents_dir(name)
+            if documents.is_dir():
+                candidates += [p for p in documents.glob(STAGING_PREFIX + "*") if p.stat().st_mtime < stale]
+        for path in candidates:
+            try:
+                _remove_tree(path) if path.is_dir() else path.unlink()
+            except OSError:
+                pass
 
     delete_module = delete
 

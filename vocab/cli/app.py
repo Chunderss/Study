@@ -45,6 +45,10 @@ class App:
         except Exception as e:  # never block startup on migration
             self.migration_note = f"(migration skipped: {e})"
         self.storage = Storage(self.paths)
+        try:
+            self.storage.purge_leftovers()
+        except OSError:
+            pass  # never block startup on cleanup
         self.config = Config.load(self.paths)
         # current_module is the active module; current_list kept as an alias.
         self.current_module: Optional[str] = None

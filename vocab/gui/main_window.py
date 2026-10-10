@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QInputDialog, QLabel,
                                QListWidget, QListWidgetItem, QMessageBox,
                                QPushButton, QVBoxLayout, QWidget, QMenuBar)
@@ -42,6 +43,7 @@ class MainWindow(QWidget):
         self.ctx.add_word_requested.connect(self._add_highlighted_word)
         self.ctx.capture_requested.connect(self._capture)
         self.ctx.source_requested.connect(self._open_source)
+        self.ctx.module_deleting.connect(self._release_module_readers)
         self._status_problem = ""
         self._clearing_module = False
         self._missing_module = ""
@@ -296,6 +298,7 @@ class MainWindow(QWidget):
         if QMessageBox.question(self, "Delete module",
                                 f"Delete '{name}' and ALL its contents?") != QMessageBox.Yes:
             return
+        self._release_module_readers(name)
         try:
             self.ctx.log.emit(self.app.cmd_delete(name))
             self.ctx.notes.discard(name)
@@ -303,6 +306,25 @@ class MainWindow(QWidget):
             self.ctx.log.emit(f"! {e}")
         self._refresh_modules()
         self.ctx.module_changed.emit(self.app.current_module or "")
+
+    def _release_module_readers(self, name: str) -> None:
+        """Close readers showing a module's documents before it is deleted:
+        Windows cannot move a folder while a file inside it is open."""
+        try:
+            folder = self.app.paths.module_dir(name).resolve()
+        except Exception:
+            return
+        released = False
+        for pane in list(self.workspace._panes):
+            path = getattr(pane.component, "path", None)
+            if isinstance(path, str) and folder in Path(path).resolve().parents:
+                pane.set_component(self._make_component("documents"), "documents")
+                pane.title.setText("Documents")
+                released = True
+        if released:
+            # Destroy the replaced readers now, so their file handles are gone.
+            QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+            QApplication.processEvents()
 
     def _refresh_status(self) -> None:
         # Runs on every focus change, so it must never raise: an error dialog

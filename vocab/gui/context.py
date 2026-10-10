@@ -27,6 +27,8 @@ class WorkspaceContext(QObject):
     learning_changed = Signal()
     capture_requested = Signal(str, str, object)  # module, excerpt, source location
     source_requested = Signal(str, object)
+    # a module is about to be deleted: close anything holding its files open
+    module_deleting = Signal(str)
 
     def __init__(self, app):
         super().__init__()

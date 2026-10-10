@@ -144,6 +144,7 @@ class StudyView(QWidget):
         # feedback line (box movement / judge score)
         self.feedback = QLabel("")
         self.feedback.setAlignment(Qt.AlignCenter)
+        self.feedback.setWordWrap(True)   # long judge feedback must not widen the view
         self.feedback.setObjectName("Muted")
         self.feedback.setMinimumHeight(20)
         root.addWidget(self.feedback)
@@ -226,11 +227,11 @@ class StudyView(QWidget):
         if outcome is None:
             return
         view_def = outcome.reference
-        verdict = "correct" if outcome.correct else "not quite"
         self.answer.setText(f"reference:  {view_def}")
+        # The judge's feedback already states the verdict.
         self.feedback.setText(
             f"score {outcome.score:.0%} — {outcome.feedback}   ·   "
-            f"box {outcome.box_before} → {outcome.box_after} ({verdict})")
+            f"box {outcome.box_before} → {outcome.box_after}")
         self._awaiting_next = True
         self.input.setEnabled(False)
         self.progress.setValue(self.session.reviewed)

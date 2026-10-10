@@ -118,6 +118,10 @@ F or N records **Missed it**, and Esc ends the session. Keyboard focus stays on 
 card, so pressing Space again never records an answer; Tab and the mouse still reach
 the buttons.
 
+Mechanical mode grades a typed definition by its wording, not its meaning: it passes
+when it contains at least half of the key terms of the card's definition. The feedback
+states the verdict and names the key terms left out, as the definition writes them.
+
 ## Your data
 
 Data is separate from the executable:

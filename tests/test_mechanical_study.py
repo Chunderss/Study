@@ -5,6 +5,8 @@ import pytest
 
 from vocab.cli.app import App
 from vocab.cli.repl import Repl
+from vocab.study.judge import KeywordJudge
+from vocab.study.session import StudySession
 
 PROMPT = "  your definition (or 'q'): "
 
@@ -53,3 +55,29 @@ def test_repl_blank_lines_during_study_do_not_grade(app):
     assert "Unknown command" not in out.getvalue()
     assert after["lapses"] == 0 and after["reps"] == before["reps"] + 1
     assert after["box"] == 5
+
+
+def test_terminal_feedback_states_the_verdict_the_session_records(app):
+    add_due(app, "tally", "large amount")
+    answers = iter(["large"])
+    output = []
+    summary = app.run_study(["Book"], lambda _text: next(answers), output.append)
+    assert ("  score 50% — Accepted — you recalled enough key terms. "
+            "Key terms not mentioned: amount.") in output
+    assert "1/1 correct" in summary
+    assert app.storage.load_stats("Book")["tally"]["box"] == 5
+
+
+def test_session_records_the_judges_verdict(app):
+    class StrictJudge(KeywordJudge):
+        def score(self, user_answer, reference):
+            result = super().score(user_answer, reference)
+            result.passed = False
+            return result
+
+    add_due(app, "alpha", "first letter")
+    session = StudySession(app.storage, app.scheduler, ["Book"],
+                           mechanical=True, judge=StrictJudge())
+    outcome = session.answer_text("first letter")
+    assert outcome.score == 1.0 and not outcome.correct
+    assert app.storage.load_stats("Book")["alpha"]["box"] == 1

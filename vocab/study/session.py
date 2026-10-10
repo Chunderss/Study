@@ -225,7 +225,7 @@ class StudySession:
             raise RuntimeError("No judge configured for mechanical mode.")
         reference = self.queue[self._i].word.primary_definition()
         jr = self.judge.score(typed, reference)
-        return self._apply(jr.score >= 0.5, score=jr.score,
+        return self._apply(jr.passed, score=jr.score,
                            feedback=jr.feedback, reference=reference)
 
     def skip(self) -> None:

@@ -61,7 +61,7 @@ STUDYING
 MODES & ALGORITHM
   MODE                       show study mode (reveal vs. write-the-definition)
   MODE MECH ON|OFF           toggle mechanical repetition (type the definition;
-                             a local judge scores how well it matches)
+                             it passes with half of the definition's key terms)
   ALGO                       show the active spaced-repetition algorithm
   DISAMBIG                   show how the right definition is picked from context
   DISAMBIG nlp|ollama|base   switch sense-selection engine (ollama = local LLM)

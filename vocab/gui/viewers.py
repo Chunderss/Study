@@ -882,29 +882,39 @@ class EpubViewer(QWidget):
         self._load(max(0, min(int(source.get("chapter", 0)), len(self._book.chapters) - 1)),
                    href=source.get("href"))
 
-    # JS: get the selected word + the sentence it sits in (from the selection's
-    # surrounding text). Splits on sentence punctuation, keeps the piece
-    # containing the selection.
+    # JS: the selected word and the sentence around that occurrence (not the
+    # first match of the word), taken from the text before and after the
+    # selection inside its block, so inline markup does not split it and the
+    # page title never joins it.
     _SEL_JS = r"""
     (function () {
       var sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) return "";
-      var word = (sel.toString() || "").trim();
+      var range = sel.getRangeAt(0);
+      var word = range.toString().trim();
       if (!word) return "";
-      var node = sel.anchorNode;
-      var container = node && node.nodeType === 3 ? node.parentElement : node;
-      var block = container;
-      while (block && block.textContent && block.textContent.length < 400 &&
-             block.parentElement) block = block.parentElement;
-      var text = (block ? block.textContent : (container ? container.textContent : word)) || word;
-      text = text.replace(/\s+/g, " ").trim();
-      // find the sentence containing the (first occurrence of the) word
-      var parts = text.split(/(?<=[.!?])\s+/);
-      var sentence = text;
-      for (var i = 0; i < parts.length; i++) {
-        if (parts[i].toLowerCase().indexOf(word.toLowerCase()) !== -1) { sentence = parts[i]; break; }
-      }
-      return JSON.stringify({word: word, sentence: sentence.trim()});
+      var body = document.body;
+      var start = range.startContainer;
+      var element = start.nodeType === 1 ? start : start.parentElement;
+      if (!body || !element || !body.contains(element))
+        return JSON.stringify({word: word, sentence: word});
+      var block = element;
+      while (block !== body && /^(inline|contents)/.test(getComputedStyle(block).display))
+        block = block.parentElement;
+      var before = document.createRange();
+      before.setStart(block, 0);
+      before.setEnd(range.startContainer, range.startOffset);
+      var after = document.createRange();
+      after.setStart(range.endContainer, range.endOffset);
+      after.setEnd(block, block.childNodes.length);
+      var head = before.toString(), tail = after.toString();
+      var ends = /[.!?]+["'’”)\]]*\s/g, cut = 0, match;
+      while ((match = ends.exec(head)) !== null) cut = ends.lastIndex;
+      head = head.slice(cut).slice(-400);
+      match = /^[\s\S]*?[.!?]+["'’”)\]]*(?=\s|$)/.exec(tail);
+      tail = (match ? match[0] : tail).slice(0, 400);
+      var sentence = (head + range.toString() + tail).replace(/\s+/g, " ").trim();
+      return JSON.stringify({word: word, sentence: sentence});
     })();
     """
 

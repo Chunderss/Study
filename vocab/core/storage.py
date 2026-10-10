@@ -83,11 +83,12 @@ def _is_link(path) -> bool:
             or getattr(st, "st_reparse_tag", None) == _JUNCTION)
 
 
-def _remove_tree(folder: Path) -> None:
+def _remove_tree(folder: Path, _retried=None) -> None:
     """Remove an app-owned folder. A read-only entry inside it is made writable
     and retried; links are removed, never followed, and nothing outside the
     folder has its permissions changed."""
     root = os.path.abspath(folder)
+    retried = set() if _retried is None else _retried
 
     def inside(path):
         path = os.path.abspath(path)
@@ -95,15 +96,33 @@ def _remove_tree(folder: Path) -> None:
 
     def make_writable(function, path, error):
         error = error if isinstance(error, BaseException) else error[1]
+        if isinstance(error, FileNotFoundError):
+            return  # already gone
         if not isinstance(error, PermissionError):
             raise error
-        # POSIX refuses to remove from a read-only folder; Windows refuses a read-only file.
+        # POSIX refuses to remove from a read-only folder or to open an
+        # unreadable one; Windows refuses a read-only file.
         parent = os.path.dirname(path)
         if inside(parent) and not _is_link(parent):
             os.chmod(parent, stat.S_IRWXU)
         if inside(path) and not _is_link(path):
-            os.chmod(path, stat.S_IRWXU if os.path.isdir(path) else stat.S_IREAD | stat.S_IWRITE)
-        function(path)
+            if os.path.isdir(path):
+                os.chmod(path, stat.S_IRWXU)
+            elif os.name == "nt":
+                # Only Windows needs this; on POSIX a file's mode may be shared
+                # with a hard link outside the folder.
+                os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        if function in (os.unlink, os.remove, os.rmdir):
+            function(path)
+        elif function in (os.open, os.scandir, os.lstat) and os.path.abspath(path) not in retried:
+            # rmtree skips an entry it could not open or stat; remove it whole.
+            retried.add(os.path.abspath(path))
+            if os.path.isdir(path) and not _is_link(path):
+                _remove_tree(Path(path), retried)
+            else:
+                os.unlink(path)
+        else:
+            raise error
     if sys.version_info >= (3, 12):
         shutil.rmtree(folder, onexc=make_writable)
     else:

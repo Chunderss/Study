@@ -1,5 +1,6 @@
 """Deleting a module either fully succeeds or leaves the module intact."""
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,22 @@ def app(tmp_path):
     app.storage.add_document("Book", source)
     app.cmd_use("Book")
     return app
+
+
+@pytest.fixture(autouse=True)
+def restore_permissions(tmp_path):
+    """Leave nothing pytest cannot remove, even when a test fails part way."""
+    yield
+    def unlock(path):
+        try:
+            os.chmod(path, 0o700)
+            entries = list(os.scandir(path))
+        except OSError:
+            return
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                unlock(entry.path)
+    unlock(tmp_path)
 
 
 def files(app):
@@ -66,6 +83,9 @@ def test_read_only_files_do_not_stop_deletion(app):
     assert not app.storage.exists("Book") and hidden(app) == []
 
 
+POSIX_PERMISSIONS = pytest.mark.skipif(
+    os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="needs POSIX permissions enforced for this user")
 TRASH = ".vocab-trash-" + "a" * 32
 STAGING = ".vocab-staging-" + "b" * 32
 
@@ -101,8 +121,7 @@ def test_only_abandoned_staging_is_purged(app):
     assert hidden(app) == [fresh.name]
 
 
-@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
-                    reason="needs POSIX permissions enforced for this user")
+@POSIX_PERMISSIONS
 def test_one_unreadable_module_does_not_stop_the_purge(app):
     app.cmd_create("Locked")
     (app.paths.modules_dir / TRASH).mkdir()
@@ -129,14 +148,46 @@ def test_a_linked_module_is_not_deleted_through_its_link(app, tmp_path):
     assert (outside / "documents" / "doc.pdf").read_bytes() == b"%PDF-1.4 content"
 
 
-@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
-                    reason="needs POSIX permissions enforced for this user")
+@POSIX_PERMISSIONS
 def test_read_only_folders_do_not_stop_deletion(app, tmp_path):
     documents = app.paths.documents_dir("Book")
+    outside = tmp_path / "linked.pdf"
+    os.link(documents / "doc.pdf", outside)  # the same file, also outside the module
     (documents / "doc.pdf").chmod(0o444)
     documents.chmod(0o555)
     app.cmd_delete("Book")
     assert not app.storage.exists("Book") and hidden(app) == []
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o444  # its permissions are not changed
+
+
+@POSIX_PERMISSIONS
+@pytest.mark.parametrize("mode", [0o000, 0o100, 0o300, 0o600])
+def test_folders_that_cannot_be_read_do_not_stop_deletion(app, mode):
+    documents = app.paths.documents_dir("Book")
+    for name in ("one", "two"):
+        (documents / name).mkdir()
+        (documents / name / "page.txt").write_text("x")
+        (documents / name).chmod(mode)
+    app.cmd_delete("Book")
+    assert not app.storage.exists("Book") and hidden(app) == [] and app.current_module is None
+
+
+@POSIX_PERMISSIONS
+def test_an_unreadable_trash_folder_is_purged(app):
+    trash = app.paths.modules_dir / TRASH
+    (trash / "documents").mkdir(parents=True)
+    (trash / "documents" / "page.txt").write_text("x")
+    (trash / "documents").chmod(0)
+    trash.chmod(0o300)
+    App(app.paths.root)
+    assert hidden(app) == []
+
+
+def test_a_failing_cleanup_never_blocks_startup(app, monkeypatch):
+    def broken(self):
+        raise TypeError("unexpected")
+    monkeypatch.setattr(storage_module.Storage, "purge_leftovers", broken)
+    assert App(app.paths.root).storage.list_names() == ["Book"]
 
 
 pytest.importorskip("PySide6")

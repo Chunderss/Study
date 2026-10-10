@@ -52,7 +52,7 @@ class App:
         self.storage = Storage(self.paths)
         try:
             self.storage.purge_leftovers()
-        except OSError:
+        except Exception:
             pass  # never block startup on cleanup
         self.config = Config.load(self.paths)
         # current_module is the active module; current_list kept as an alias.

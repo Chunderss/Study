@@ -24,6 +24,7 @@ from ..dictionaries.base import SENSE_LIMIT
 from .. import nltk_resources
 from ..study.judge import get_judge
 from ..study.session import SessionResult, StudyCardUnavailable, StudySession, build_session
+from .parser import BODY_SEPARATOR, CommandSyntaxError, quote_arg
 
 # Callbacks the REPL supplies so STUDY can be interactive while staying testable.
 Prompt = Callable[[str], str]        # prompt(text) -> user input line
@@ -39,6 +40,21 @@ PACKAGED_REPAIR = ("Extract a fresh copy of the Vocab Study ZIP and keep its _in
 def _packaged() -> bool:
     """True in the desktop app built by PyInstaller."""
     return bool(getattr(sys, "frozen", False))
+
+
+def _typed_word(word: str, command: bool = True) -> str:
+    """``word`` as the user would type it again, or "" when it cannot be typed.
+
+    Commands (the terminal and the desktop Console) use the shared grammar, so
+    the word is double-quoted when it needs it. The Vocab pane takes its text
+    as typed, up to the first '::', so there a word with '::' has no form.
+    """
+    if not command:
+        return "" if BODY_SEPARATOR in word else word
+    try:
+        return quote_arg(word)
+    except CommandSyntaxError:
+        return ""
 
 
 def _tagger_fix(problem: nltk_resources.TaggerProblem) -> str:
@@ -326,9 +342,11 @@ class App:
             try:
                 senses, dict_id, notice = self._lookup_senses(word_clean, sentence)
             except LookupFailed as e:
-                hint = "  (add manually:  ADD {} :: <your definition>)".format(word_clean)
+                typed = _typed_word(word_clean)
+                hint = f"  (add manually:  ADD {typed} :: <your definition>)" if typed else ""
                 raise ValueError(f"{e}{hint if e.recoverable else ''}") from e
-        return self.add_resolved_word(word_clean, target, senses, dict_id, notice, expected=expected)
+        return self.add_resolved_word(word_clean, target, senses, dict_id, notice,
+                                      expected=expected, command=True)
 
     @in_transaction
     def word_state(self, target: str, word: str):
@@ -342,12 +360,14 @@ class App:
 
     @in_transaction
     def add_resolved_word(self, word: str, target: str, senses, dict_id: str,
-                          notice: str = "", expected=None) -> str:
+                          notice: str = "", expected=None, command: bool = False) -> str:
         """Commit a word on the UI thread, reading the latest module state.
 
         A dictionary lookup never replaces an existing entry; only an explicit
         ``ADD word :: definition`` (dict_id "manual") does. ``expected`` comes
-        from word_state() taken before the lookup.
+        from word_state() taken before the lookup. ``command`` says the word was
+        typed in a command, so the hint for replacing an entry uses the command
+        grammar rather than the Vocab pane's ``word :: definition``.
         """
         word_clean = word.strip()
         if not word_clean or not senses or not senses[0].definition.strip():
@@ -358,8 +378,10 @@ class App:
         existed = wl.has(word_clean)
         if existed and dict_id != "manual":
             kept = wl.words[wl.normalize_key(word_clean)].word
+            typed = _typed_word(word_clean, command)
+            how = f" ({typed} :: ...)" if typed else ""
             return (f"'{kept}' is already in '{target}'; kept the existing entry. To replace "
-                    f"it, add it with your own definition ({word_clean} :: ...).")
+                    f"it, add it with your own definition{how}.")
         # Only a commit that writes needs the check (a word deleted meanwhile,
         # or a module recreated under the same name, refuses it).
         if expected is not None and self.word_state(target, word_clean) != expected:

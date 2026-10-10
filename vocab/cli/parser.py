@@ -78,6 +78,24 @@ def split_command(line: str) -> Tuple[List[str], Optional[str]]:
     return args, None
 
 
+def quote_arg(text: str) -> str:
+    """``text`` written as one argument that split_command() reads back unchanged.
+
+    For hints that show a command to type. Double quotes are added only when
+    the grammar needs them: the text is empty, contains whitespace or '::', or
+    starts with a double quote. Raises CommandSyntaxError when no form exists:
+    inside double quotes, a double quote followed by whitespace or '::' would
+    end the argument early, and there is no escape character.
+    """
+    if text and not (text.startswith('"') or BODY_SEPARATOR in text
+                     or any(ch.isspace() for ch in text)):
+        return text
+    quoted = f'"{text}"'
+    if _closing_quote(quoted, 0) != len(quoted) - 1:
+        raise CommandSyntaxError(f"{text} cannot be written as one argument")
+    return quoted
+
+
 def parse(line: str) -> Optional[Command]:
     """Parse one input line; None for a blank line.
 

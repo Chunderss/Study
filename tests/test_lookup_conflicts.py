@@ -35,6 +35,22 @@ def test_lookup_keeps_a_manual_definition_and_its_progress(tmp_path):
     assert app.storage.load_stats("Book")["ephemeral"]["box"] == 4
 
 
+def test_vocab_pane_lookup_hint_uses_the_panes_own_form(tmp_path):
+    # The Vocab pane takes "word :: definition" as typed, without quotes, and
+    # cannot take a word that contains '::', so its hint offers no form for one.
+    app = App(tmp_path)
+    app.cmd_create("Book")
+    for word in ("ice cream", "std::vector"):
+        app.cmd_add(word, target="Book", manual_def="mine")
+    senses = [Sense("dictionary sense", pos="noun")]
+    message = app.add_resolved_word("ice cream", "Book", senses, "wordnet")
+    assert message.endswith("add it with your own definition (ice cream :: ...).")
+    message = app.add_resolved_word("std::vector", "Book", senses, "wordnet")
+    assert message.endswith("To replace it, add it with your own definition.")
+    assert {word.primary_definition() for word in app.storage.load_words("Book").words.values()} \
+        == {"mine"}
+
+
 def test_explicit_manual_definition_still_replaces(tmp_path):
     app = App(tmp_path)
     app.cmd_create("Book")

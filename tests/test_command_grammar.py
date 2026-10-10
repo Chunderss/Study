@@ -7,6 +7,7 @@ at the start of an argument groups it.
 """
 import io
 import json
+import re
 import sys
 
 import pytest
@@ -173,6 +174,78 @@ def test_separator_is_rejected_where_no_body_is_taken(app):
     assert "std::vector" in app.storage.load_words("Book").words
     run(app, 'DEL "std::vector"')
     assert "std::vector" not in app.storage.load_words("Book").words
+
+
+# ---- hints that show a command ---------------------------------------------
+PLAIN = ["ephemeral", "don't", r"C:\Users\Pat", 'say"hi', "hi\""]
+NEEDS_QUOTES = ["", "ice cream", "tab\there", "std::vector", "::", '"quoted"', '"', 'say "hi"']
+
+
+def test_quote_arg_reads_back_as_one_argument():
+    from vocab.cli.parser import quote_arg, split_command
+    for text in PLAIN + NEEDS_QUOTES:
+        typed = quote_arg(text)
+        assert typed == (f'"{text}"' if text in NEEDS_QUOTES else text)
+        assert split_command(f"ADD {typed} :: a body") == (["ADD", text], "a body"), text
+
+
+def test_quote_arg_refuses_text_that_no_form_reads_back():
+    from vocab.cli.parser import CommandSyntaxError, quote_arg
+    for text in ['say" hi', 'a"::b', 'a"\tb']:  # the quote would end the argument
+        with pytest.raises(CommandSyntaxError):
+            quote_arg(text)
+
+
+def entries(app, module="Book"):
+    return {key: (word.word, word.dictionary, word.primary_definition())
+            for key, word in app.storage.load_words(module).words.items()}
+
+
+TYPED_TERMS = [  # (typed after ADD, the term it adds)
+    ('"std::vector"', "std::vector"),
+    ('""quoted""', '"quoted"'),
+    ('"say "hi""', 'say "hi"'),
+    ("ice cream", "ice cream"),
+]
+
+
+def test_add_manually_hint_typed_as_shown_adds_that_term(app, monkeypatch):
+    from vocab.dictionaries import LookupFailed
+    for word in ("std", "quoted", "say", "ice"):  # what an unquoted hint would replace
+        app.cmd_add(word, manual_def=f"my {word}")
+
+    def timed_out(word, sentence=""):
+        raise LookupFailed("The online dictionary timed out.", recoverable=True)
+    monkeypatch.setattr(app, "_lookup_senses", timed_out)
+    for typed, term in TYPED_TERMS:
+        before = entries(app)
+        with pytest.raises(ValueError) as failed:
+            run(app, f"ADD {typed}")
+        hinted = re.search(r"\(add manually:  (.+) :: <your definition>\)$", str(failed.value))
+        assert f"Added '{term}'" in run(app, f"{hinted.group(1)} :: my own definition"), typed
+        after = entries(app)
+        assert after.pop(term.lower()) == (term, "manual", "my own definition")
+        assert after == before  # no other entry changed
+
+
+def test_replace_hint_typed_after_add_replaces_that_term(app, monkeypatch):
+    from vocab.core.models import Sense
+    for _typed, term in TYPED_TERMS:
+        app.cmd_add(term, manual_def="mine")
+    for word in ("std", "quoted", "say", "ice"):
+        app.cmd_add(word, manual_def=f"my {word}")
+    monkeypatch.setattr(app, "_lookup_senses", lambda word, sentence="": (
+        [Sense("a looked-up sense")], "wordnet", ""))
+    for typed, term in TYPED_TERMS:
+        before = entries(app)
+        reply = run(app, f"ADD {typed}")
+        assert "kept the existing entry" in reply and entries(app) == before
+        hinted = re.search(r"own definition \((.+) :: \.\.\.\)\.$", reply)
+        assert f"Updated '{term}'" in run(app, f"ADD {hinted.group(1)} :: replaced"), typed
+        after = entries(app)
+        assert after.pop(term.lower()) == (term, "manual", "replaced")
+        before.pop(term.lower())
+        assert after == before  # no other entry changed
 
 
 # ---- multi-word terms ------------------------------------------------------

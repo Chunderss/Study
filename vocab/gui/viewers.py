@@ -765,7 +765,9 @@ class EpubViewer(QWidget):
                     anchor = source.get("anchor")
                     records.append({"id": item["id"], "anchor": anchor if isinstance(anchor, dict)
                                     else {"exact": item["quote"]}})
-            except (OSError, ValueError, ModuleNotFound) as error:
+            except ModuleNotFound:
+                pass  # removed outside the app, and its highlights with it
+            except (OSError, ValueError) as error:
                 if self.ctx:
                     self.ctx.log.emit(f"Could not load EPUB highlights: {error}")
         if self._source_highlight:

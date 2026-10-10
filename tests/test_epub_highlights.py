@@ -224,6 +224,35 @@ expect_marks(viewer, [("second", quote), ("legacy", "Unique legacy sentence.")])
 ''')
 
 
+def test_reader_of_a_removed_module_stays_quiet_on_unrelated_learning_changes(tmp_path):
+    run_browser(tmp_path, '''
+import shutil
+from pathlib import Path
+viewer = open_viewer()
+source = capture_source(viewer)
+save_capture("Book", quote, source)
+expect_marks(viewer, [("second", quote)])
+messages = []
+ctx.log.connect(messages.append)
+book = data.paths.module_dir("Book")
+away = Path(sys.argv[1]) / "away"
+shutil.move(str(book), str(away))  # removed outside the app
+# Captures saved and reviewed elsewhere refresh every open reader.
+save_capture("Other", "Unique legacy sentence.", source)
+save_capture("Other", "Unique footnote.", source)
+expect_marks(viewer, [])
+assert messages == [], messages
+# Back in place, its highlights return, and a damaged file is still reported.
+shutil.move(str(away), str(book))
+ctx.learning_changed.emit()
+expect_marks(viewer, [("second", quote)])
+(book / "learning.json").write_text("{", encoding="utf-8")
+ctx.learning_changed.emit()
+assert len(messages) == 1 and messages[0].startswith("Could not load EPUB highlights: "), messages
+assert "learning.json" in messages[0], messages
+''')
+
+
 @pytest.mark.parametrize("hidden", [False, True])
 def test_source_jump_focuses_exact_passage_over_saved_scroll(tmp_path, hidden):
     run_browser(tmp_path, f"hidden = {hidden!r}\n" + '''

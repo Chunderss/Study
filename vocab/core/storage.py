@@ -29,7 +29,7 @@ from typing import Dict, List
 from .locking import DRAFT_TIMEOUT, WRITE_TIMEOUT, write_lock
 from .models import SCHEMA_VERSION, Word, WordList
 from .module import Module
-from .paths import Paths, sanitize_module_name, validate_windows_filename
+from .paths import InvalidListName, Paths, sanitize_module_name, validate_windows_filename
 
 
 def _atomic_write(path: Path, data: dict) -> None:
@@ -55,10 +55,19 @@ class DataFileError(ValueError):
         self.reason = str(reason)
 
 
-# Application-owned temporary names; never listed as modules or documents.
+# Application-owned temporary names (prefix + 32 hex digits); never listed as
+# modules or documents. Only that exact form is hidden or purged, so a user's
+# file or module that merely starts the same way stays visible and safe.
 STAGING_PREFIX = ".vocab-staging-"
 TRASH_PREFIX = ".vocab-trash-"
+_LEFTOVER = re.compile(r"^\.vocab-(staging|trash)-[0-9a-f]{32}$")
 _STALE_STAGING = 24 * 3600  # an unfinished copy this old is abandoned
+
+
+def _leftover_kind(name: str):
+    """'staging' or 'trash' for an app-owned temporary name, else None."""
+    match = _LEFTOVER.match(name)
+    return match.group(1) if match else None
 
 
 _JUNCTION = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
@@ -99,6 +108,13 @@ def _remove_tree(folder: Path) -> None:
         shutil.rmtree(folder, onexc=make_writable)
     else:
         shutil.rmtree(folder, onerror=make_writable)
+
+
+def _remove_link(path) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        os.rmdir(path)  # a Windows junction or directory symlink
 
 
 def _publish_file(staging: Path, dest: Path, exists_message: str) -> None:
@@ -270,7 +286,7 @@ class Storage:
             return []
         names = []
         for p in d.iterdir():
-            if p.name.startswith((STAGING_PREFIX, TRASH_PREFIX)):
+            if _leftover_kind(p.name):
                 continue  # application-owned leftovers, never modules
             try:
                 if not p.is_dir():
@@ -405,17 +421,29 @@ class Storage:
         """Remove what interrupted operations left behind: trashed modules and,
         once clearly abandoned, unfinished staging copies."""
         stale = time.time() - _STALE_STAGING
-        candidates = list(self.paths.modules_dir.glob(TRASH_PREFIX + "*")) if self.paths.modules_dir.exists() else []
-        candidates += [p for p in self.paths.root.glob(STAGING_PREFIX + "*") if p.stat().st_mtime < stale]
-        for name in self.list_names():
-            documents = self.paths.documents_dir(name)
-            if documents.is_dir():
-                candidates += [p for p in documents.glob(STAGING_PREFIX + "*") if p.stat().st_mtime < stale]
-        for path in candidates:
+        folders = [self.paths.modules_dir]
+        try:
+            folders += [self.paths.documents_dir(name) for name in self.list_names()]
+        except OSError:
+            pass
+        for folder in folders:
             try:
-                _remove_tree(path) if path.is_dir() else path.unlink()
+                entries = list(folder.iterdir())
             except OSError:
-                pass
+                continue  # one unreadable folder must not stop the rest
+            for path in entries:
+                kind = _leftover_kind(path.name)
+                try:
+                    if kind is None or (kind == "staging" and path.lstat().st_mtime >= stale):
+                        continue  # not ours, or possibly a copy still in progress
+                    if _is_link(path):
+                        _remove_link(path)
+                    elif path.is_dir():
+                        _remove_tree(path)
+                    else:
+                        path.unlink()
+                except OSError:
+                    pass
 
     delete_module = delete
 
@@ -575,7 +603,7 @@ class Storage:
         if not d.exists():
             return []
         return sorted(p.name for p in d.iterdir()
-                      if p.is_file() and not p.name.startswith(STAGING_PREFIX))
+                      if p.is_file() and not _leftover_kind(p.name))
 
     def add_document(self, module: str, src: Path) -> str:
         """Copy a document into a module.
@@ -591,8 +619,11 @@ class Storage:
         src = Path(src)
         if not src.is_file():
             raise ModuleNotFound(f"File not found: {src}")
+        if _leftover_kind(src.name):
+            raise ValueError(f"'{src.name}' is a name Vocab Study reserves for its temporary "
+                             "files; rename the file and add it again.")
         dest_dir = self.paths.documents_dir(module)
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_dir.mkdir(exist_ok=True)  # never recreates a module deleted meanwhile
         dest = dest_dir / src.name
         exists = f"Document '{src.name}' already exists in '{module}'."
         if dest.exists():
@@ -670,6 +701,8 @@ class Storage:
     def _publish_new_module(self, wl: WordList, stats: Dict[str, dict]) -> None:
         """Build a module in a hidden staging folder, then move it into place in
         one step: a failure part way leaves no half-made module to block a retry."""
+        if _leftover_kind(wl.name):
+            raise InvalidListName(f"'{wl.name}' is reserved for Vocab Study's temporary folders.")
         self.paths.modules_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".vocab-staging-", dir=self.paths.root) as temporary:
             staged = Storage(Paths(Path(temporary)))

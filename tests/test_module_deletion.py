@@ -66,13 +66,53 @@ def test_read_only_files_do_not_stop_deletion(app):
     assert not app.storage.exists("Book") and hidden(app) == []
 
 
+TRASH = ".vocab-trash-" + "a" * 32
+STAGING = ".vocab-staging-" + "b" * 32
+
+
 def test_leftover_names_are_never_listed(app):
-    (app.paths.modules_dir / ".vocab-trash-abc" / "vocab").mkdir(parents=True)
-    (app.paths.modules_dir / ".vocab-trash-abc" / "module.json").write_text("{}")
-    (app.paths.modules_dir / ".vocab-staging-def").mkdir()
+    (app.paths.modules_dir / TRASH / "vocab").mkdir(parents=True)
+    (app.paths.modules_dir / TRASH / "module.json").write_text("{}")
+    (app.paths.modules_dir / STAGING).mkdir()
     assert app.storage.list_names() == ["Book"]
     assert app.storage.unsupported_module_dirs() == []
 
+
+def test_user_modules_that_only_look_like_leftovers_are_kept(app):
+    app.cmd_create(".vocab-trash-notes")
+    App(app.paths.root)  # a start purges leftovers
+    assert app.storage.list_names() == [".vocab-trash-notes", "Book"]
+    with pytest.raises(ValueError, match="reserved"):
+        app.cmd_create(TRASH)
+
+
+def age(path, seconds=2 * 24 * 3600):
+    old = path.stat().st_mtime - seconds
+    os.utime(path, (old, old))
+
+
+def test_only_abandoned_staging_is_purged(app):
+    modules = app.paths.modules_dir
+    (modules / STAGING).mkdir()
+    fresh = modules / (".vocab-staging-" + "c" * 32)
+    fresh.mkdir()  # possibly another process still building it
+    age(modules / STAGING)
+    App(app.paths.root)
+    assert hidden(app) == [fresh.name]
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs POSIX permissions enforced for this user")
+def test_one_unreadable_module_does_not_stop_the_purge(app):
+    app.cmd_create("Locked")
+    (app.paths.modules_dir / TRASH).mkdir()
+    locked = app.paths.module_dir("Locked")
+    locked.chmod(0)
+    try:
+        App(app.paths.root)
+        assert TRASH not in hidden(app)
+    finally:
+        locked.chmod(0o755)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")

@@ -87,12 +87,35 @@ def test_a_read_only_source_gives_a_writable_copy(setup):
     assert os.access(app.paths.documents_dir("Book") / "book.epub", os.W_OK)
 
 
-def test_dot_named_documents_are_still_listed(setup, tmp_path):
+@pytest.mark.parametrize("name", [".notes.pdf", ".vocab-staging-notes.pdf"])
+def test_dot_named_documents_are_still_listed_and_kept(setup, tmp_path, name):
     app, _ = setup
-    hidden = tmp_path / ".notes.pdf"
+    hidden = tmp_path / name
     hidden.write_bytes(b"%PDF")
     app.storage.add_document("Book", hidden)
-    assert app.storage.document_names("Book") == [".notes.pdf"]
+    added = app.paths.documents_dir("Book") / name
+    old = added.stat().st_mtime - 2 * 24 * 3600
+    os.utime(added, (old, old))
+    App(app.paths.root)  # a start purges abandoned staging copies
+    assert app.storage.document_names("Book") == [name]
+
+
+def test_the_staging_name_itself_is_refused(setup, tmp_path):
+    app, _ = setup
+    reserved = tmp_path / (".vocab-staging-" + "0" * 32)
+    reserved.write_bytes(b"%PDF")
+    with pytest.raises(ValueError, match="reserves"):
+        app.storage.add_document("Book", reserved)
+    assert documents(app) == []
+
+
+def test_a_module_deleted_meanwhile_is_not_recreated(setup, monkeypatch):
+    app, source = setup
+    app.storage.delete("Book")
+    monkeypatch.setattr(app.storage, "exists", lambda name: True)  # checked just before the delete
+    with pytest.raises(OSError):
+        app.storage.add_document("Book", source)
+    assert not app.paths.module_dir("Book").exists()
 
 
 def test_the_write_lock_is_free_while_copying(setup, monkeypatch):

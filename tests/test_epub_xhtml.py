@@ -79,6 +79,16 @@ def test_only_well_formed_xhtml_is_read_as_xml(tmp_path):
         '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "x.dtd">'
         f'<html {NS}><body>&nbsp;&eacute;</body></html>': True,
         f'<html {NS}><body>&nbsp;</body></html>': False,         # no DTD defines it
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML Basic 1.1//EN" "x.dtd">'
+        f'<html {NS}><body>&nbsp;</body></html>': False,         # not a doctype Chromium knows
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "x.dtd">'
+        f'<html {NS}><body title="a&custom;b"/></html>': False,  # unknown, in an attribute
+        '<!DOCTYPE html SYSTEM "about:legacy-compat">'
+        f'<html {NS}><body><img alt="&copy; 2010"/></body></html>': False,
+        '<?xml version="1.0" encoding="ISO-8859-2"?>'
+        f'<html {NS}><body>plain</body></html>': False,          # a legacy charset
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<html {NS}><body>plain</body></html>': True,
         '<!DOCTYPE html SYSTEM "custom.dtd">'
         f'<html {NS}><body>&custom;</body></html>': False,       # unknown to Chromium
         '<html><body><p/></body></html>': False,                 # no XHTML namespace
@@ -89,3 +99,49 @@ def test_only_well_formed_xhtml_is_read_as_xml(tmp_path):
         page = tmp_path / f"page{index}.xhtml"
         page.write_text(text, encoding="utf-8")
         assert _renders_as_xhtml(page) is expected, text
+
+
+# ISO-8859-2 crashes QtWebEngine 6.11's renderer; Chromium does not know
+# MacRoman and shows an encoding error for its accented letters.
+@pytest.mark.parametrize("encoding, word, codec", [("ISO-8859-2", "plain", "latin-1"),
+                                                   ("MacRoman", "caf\u00e9", "mac_roman")])
+def test_a_legacy_charset_chapter_still_renders(tmp_path, encoding, word, codec):
+    run_reader(tmp_path, r'''
+text = ('<?xml version="1.0" encoding="%s"?><html xmlns="http://www.w3.org/1999/xhtml">'
+        '<head><title>legacy</title></head><body><p id="text">%s text</p></body></html>')
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                  '<item id="a" href="a.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>')
+    book.writestr("a.xhtml", text.encode("%s"))
+viewer = open_viewer()
+wait_for(lambda: viewer._document_loaded and viewer._web.title() == "legacy", viewer)
+assert js(viewer, 'document.getElementById("text").textContent').endswith(" text")  # shown as before
+assert js(viewer, 'document.getElementsByTagName("parsererror").length') == 0
+''' % (encoding, word, codec))
+
+
+def test_a_large_chapter_shown_as_html_still_loads_from_a_file(tmp_path):
+    run_reader(tmp_path, r'''
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                  '<item id="one" href="one.html"/><item id="big" href="big.html"/></manifest>'
+                  '<spine><itemref idref="one"/><itemref idref="big"/></spine></package>')
+    book.writestr("style.css", "#target { color: rgb(12, 34, 56); }")
+    book.writestr("image.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="13"/>')
+    book.writestr("one.html", '<html><head><title>one</title></head><body>'
+                  '<a id="next" href="big.html#target">Big chapter</a></body></html>')
+    # Not XHTML (no namespace, an unclosed tag), and over setContent's limit.
+    book.writestr("big.html", '<html><head><title>big</title><link rel="stylesheet" href="style.css"></head>'
+                  '<body><!--' + "x" * 3000000 + '--><p>Unclosed' + "<p>Text for scrolling</p>" * 200
+                  + '<p id="target">Target</p><img id="image" src="image.svg"></body></html>')
+viewer = open_viewer()
+wait_for(lambda: viewer._document_loaded and viewer._web.title() == "one", viewer)
+js(viewer, 'document.getElementById("next").click(); true;')
+wait_for(lambda: viewer._document_loaded and viewer._web.title() == "big", viewer)
+assert viewer._requested_url.toLocalFile().endswith(".html")
+assert js(viewer, 'getComputedStyle(document.getElementById("target")).color') == "rgb(12, 34, 56)"
+wait_for(lambda: js(viewer, 'document.getElementById("image").naturalWidth') == 12)
+wait_for(lambda: viewer._web.page().scrollPosition().y() > 0)  # it went to the fragment
+assert js(viewer, '(() => { const y = document.getElementById("target").getBoundingClientRect().top; '
+                  'return y >= 0 && y < innerHeight; })()')
+''')

@@ -12,6 +12,7 @@ from __future__ import annotations
 import html.entities
 import json
 import os
+import re
 import shutil
 import tempfile
 import zipfile
@@ -42,6 +43,16 @@ _OPF_NS = {
 
 
 _XHTML_NS = "http://www.w3.org/1999/xhtml"
+# Blink resolves the XHTML DTD's named entities (&nbsp;) only for these.
+_XHTML_PUBLIC_IDS = {
+    "-//W3C//DTD XHTML 1.0 Transitional//EN", "-//W3C//DTD XHTML 1.0 Strict//EN",
+    "-//W3C//DTD XHTML 1.0 Frameset//EN", "-//W3C//DTD XHTML 1.1//EN",
+    "-//W3C//DTD XHTML Basic 1.0//EN", "-//W3C//DTD XHTML 1.1 plus MathML 2.0//EN",
+    "-//W3C//DTD XHTML 1.1 plus MathML 2.0 plus SVG 1.1//EN",
+    "-//WAPFORUM//DTD XHTML Mobile 1.0//EN",
+}
+_ENTITY_REFERENCE = re.compile(r"&([A-Za-z_:][\w.:-]*);")
+_XML_ENTITIES = {"lt", "gt", "amp", "quot", "apos"}
 
 
 def _renders_as_xhtml(source: Path) -> bool:
@@ -49,28 +60,47 @@ def _renders_as_xhtml(source: Path) -> bool:
     show. Only that parser keeps self-closing tags such as <title/> and
     <a id="x"/> closed; the HTML parser ignores the slash and swallows the
     rest of the chapter. Anything else keeps the HTML parser's tolerance."""
+    try:
+        data = source.read_bytes()
+    except OSError:
+        return False
     parser = xml.parsers.expat.ParserCreate(namespace_separator=" ")
-    found = {"root": None, "doctype": None, "entities": set()}
+    found = {"root": None, "doctype": None, "encoding": None}
 
     def start(name, _attributes):
         if found["root"] is None:
             found["root"] = name
 
     parser.StartElementHandler = start
-    parser.StartDoctypeDeclHandler = lambda _name, _system, public, _internal: found.update(doctype=public or "")
-    # Named entities (&nbsp;) are defined only in the XHTML DTD, which Chromium
-    # knows for XHTML doctypes; expat reports them as skipped.
-    parser.SkippedEntityHandler = lambda name, _is_parameter: found["entities"].add(name)
+    parser.StartDoctypeDeclHandler = lambda _name, _system, public, _internal: found.update(doctype=public)
+    parser.XmlDeclHandler = lambda _version, encoding, _standalone: found.update(encoding=encoding)
     try:
-        with source.open("rb") as stream:
-            parser.ParseFile(stream)
-    except (xml.parsers.expat.ExpatError, OSError, ValueError):
+        parser.Parse(data, True)
+    except (xml.parsers.expat.ExpatError, ValueError):
         return False
     if found["root"] != f"{_XHTML_NS} html":
         return False
-    return not found["entities"] or (
-        (found["doctype"] or "").startswith("-//W3C//DTD XHTML")
-        and found["entities"] <= set(html.entities.name2codepoint))
+    # Only UTF-8 and UTF-16. QtWebEngine 6.11's renderer crashes on some
+    # legacy charsets, and Chromium does not know every label Python does;
+    # those chapters stay on the HTML path, decoded as UTF-8 as before.
+    declared = (found["encoding"] or "utf-8").lower().replace("_", "-")
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        if declared not in ("utf-8", "utf-16"):
+            return False
+        encoding = "utf-16"
+    elif declared in ("utf-8", "utf8"):
+        encoding = "utf-8-sig"
+    else:
+        return False
+    try:
+        text = data.decode(encoding)
+    except UnicodeDecodeError:
+        return False
+    # Named entities anywhere, attribute values included (expat does not
+    # report those), must be ones Chromium resolves for the doctype.
+    names = set(_ENTITY_REFERENCE.findall(text)) - _XML_ENTITIES
+    return not names or (found["doctype"] in _XHTML_PUBLIC_IDS
+                         and names <= set(html.entities.name2codepoint))
 
 
 class EpubBook:

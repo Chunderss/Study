@@ -40,6 +40,9 @@ VOCAB
                              replaces an existing entry)
   ADDL <module> <word>       add <word> to a specific module; quote a module
                              name with spaces:  ADDL "Moby Dick" sperm whale
+  SENSES <word> [--all]      list the senses saved for <word> (* = studied) and
+                             the sentence it was added from; --all also lists
+                             its dictionary's senses that were not saved
   DEL <word>                 remove <word> from the current module
   DELL <module> <word>       remove <word> from a specific module
 

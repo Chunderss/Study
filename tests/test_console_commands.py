@@ -162,3 +162,13 @@ def test_console_relative_paths_use_the_files_folder(window, tmp_path, monkeypat
     console(window, "EXPORT Book book.json")
     assert (documents_folder / "book.json").is_file()
     assert list(started.iterdir()) == []
+
+
+def test_console_lists_a_words_senses(window, monkeypatch):
+    from vocab.core.models import Sense
+    monkeypatch.setattr(window.app, "_lookup_senses", lambda word, sentence="": (
+        [Sense("an emblem", "noun"), Sense("become less intense", "verb")], "wordnet", ""))
+    log = console(window, "ADD flag")
+    assert "Others:  SENSES flag" in log
+    log = console(window, "SENSES flag")
+    assert "   2   verb: become less intense" in log.splitlines()

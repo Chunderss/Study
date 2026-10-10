@@ -19,7 +19,7 @@ from ..core import migrate as _migrate
 from ..core.models import Sense, Word
 from ..core import paths as _paths
 from ..core.paths import expand_home, get_paths, resolve_user_path, sanitize_list_name
-from ..core.senses import LookedUp, quoted_sentence, saved_context
+from ..core.senses import LookedUp, SenseListing, quoted_sentence, saved_context
 from ..core.locking import write_lock
 from ..core.storage import ListNotFound, Storage, full_path, in_transaction, size_text
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
@@ -132,6 +132,8 @@ class App:
         self.config = Config.load(self.paths)
         # current_module is the active module; current_list kept as an alias.
         self.current_module: Optional[str] = None
+        # The latest SENSES list per (module, word key), which SENSE numbers name.
+        self._sense_listings = {}
 
     # ---- helpers --------------------------------------------------------
     @property
@@ -475,6 +477,12 @@ class App:
         msg = (f"{verb} '{word_clean}' -> {target}  [{dict_id}]\n"
                f"    {senses[0].pos + ': ' if senses[0].pos else ''}{senses[0].definition[:100]}")
         note = "" if dict_id == "manual" else self._sense_note(senses, sentence)
+        typed = _typed_word(word_clean)
+        if note and command and typed:
+            # SENSES works on the current module, like ADD and DEL.
+            here = self.storage.canonical_name(target) == self.current_module
+            note += (f"  Others:  SENSES {typed}" if here else
+                     f"  Others:  USE {quote_arg(target)}  then  SENSES {typed}")
         if note:
             msg = f"{msg}\n{note}"
         return f"{msg}\n{notice}" if notice else msg
@@ -489,6 +497,100 @@ class App:
         stats.pop(wl.normalize_key(word), None)
         self.storage.save_words_and_stats(wl, stats)
         return f"Removed '{word.strip()}' from '{target}'."
+
+    # ---- a word's senses (SENSES, and the desktop sense picker) ---------
+    @in_transaction
+    def sense_listing(self, module: str, word: str) -> SenseListing:
+        """A word's saved senses, read together with the snapshot that a
+        choice made from them is checked against."""
+        module = self.storage.canonical_name(module)
+        expected = self.word_state(module, word)
+        wl = self.storage.load_words(module)
+        saved = wl.words.get(wl.normalize_key(word))
+        if saved is None:
+            raise ValueError(f"'{word.strip()}' is not in '{module}'.")
+        return SenseListing(module=module, word=saved.word, dictionary=saved.dictionary,
+                            senses=tuple(saved.senses), context=saved.context,
+                            expected=expected)
+
+    def more_senses(self, listing: SenseListing) -> SenseListing:
+        """The listing with its dictionary's senses that are not saved, in the
+        dictionary's order, or a note saying why there are none.
+
+        Only the dictionary the word came from is asked, so a word never mixes
+        sources. Reads no stored data, so it may run on a worker thread.
+        """
+        name = listing.dictionary
+        if listing.manual:
+            return listing.with_extra(note="It has your own definition, so no dictionary "
+                                           "senses are listed.")
+        if not name:
+            return listing.with_extra(note="Its entry does not say which dictionary it came "
+                                           "from, so no other senses can be listed.")
+        try:
+            dic = get_dictionary(name)
+        except KeyError:
+            return listing.with_extra(note=f"Its dictionary '{name}' is not one this version "
+                                           "knows, so no other senses can be listed.")
+        if not dic.available():
+            return listing.with_extra(note=f"'{name}' is not available here, so its other senses "
+                                           "cannot be listed (DOCTOR explains).")
+        try:
+            senses = dic.lookup(listing.word)
+        except Exception as error:  # LookupFailed, or a backend's own failure
+            return listing.with_extra(note=f"Could not list the other senses from '{name}': "
+                                           f"{error}")
+        listing = listing.with_extra(senses)
+        if not listing.extra:
+            listing = listing.with_extra(note=f"'{name}' has no other senses of "
+                                              f"'{listing.word}'.")
+        return listing
+
+    @staticmethod
+    def _sense_rows(senses, start: int = 1, studied: int = 0) -> List[str]:
+        rows = []
+        for number, sense in enumerate(senses, start):
+            mark = "*" if number - start < studied else " "
+            pos = f"{sense.pos}: " if sense.pos else ""
+            rows.append(f"{number:>4} {mark} {pos}{sense.definition}")
+            if sense.example:
+                rows.append(f"         \"{sense.example}\"")
+        return rows
+
+    def _describe_senses(self, listing: SenseListing, show_all: bool) -> str:
+        typed = _typed_word(listing.word)
+        head = f"'{listing.word}' in '{listing.module}'"
+        sentence = (f"Sentence: \"{listing.context}\"" if listing.context
+                    else "Added without a sentence.")
+        if listing.manual:
+            lines = [f"{head}: your own definition", sentence]
+            lines += self._sense_rows(listing.senses, studied=1)
+            if typed:
+                lines.append(f"To use dictionary senses instead:  DEL {typed}  then  ADD {typed}"
+                             "   (its progress starts over)")
+            return "\n".join(lines)
+        lines = [f"{head} [{listing.dictionary or 'dictionary not recorded'}]",
+                 f"First sense chosen automatically.  {sentence}"]
+        lines += self._sense_rows(listing.senses, studied=1)
+        if listing.extra:
+            lines.append(f"More from {listing.dictionary} (saved only if you choose one):")
+            lines += self._sense_rows(listing.extra, start=len(listing.senses) + 1)
+        if listing.note:
+            lines.append(f"({listing.note})")
+        lines.append("* = studied.")
+        if typed and not show_all:
+            lines.append(f"SENSES {typed} --all  also lists the dictionary's other senses.")
+        return "\n".join(lines)
+
+    def cmd_senses(self, word: str, show_all: bool = False) -> str:
+        """List a word's saved senses (SENSES); with show_all, also the senses
+        of its dictionary that were not saved. SENSE numbers refer to the
+        latest list shown."""
+        listing = self.sense_listing(self._resolve_target(None), word)
+        if show_all:
+            listing = self.more_senses(listing)
+        self._sense_listings[(listing.module, listing.key)] = listing
+        return self._describe_senses(listing, show_all)
 
     # ---- disambiguation (in-context sense selection) -------------------
     def disambig_status(self) -> dict:

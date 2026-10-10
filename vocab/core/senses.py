@@ -5,7 +5,9 @@ Standard library only; the terminal and the desktop app share it.
 """
 from __future__ import annotations
 
-from typing import Iterable
+from collections import Counter
+from dataclasses import dataclass, replace
+from typing import Iterable, List, Tuple
 
 #: The longest sentence kept with a word ("context" in words.json). A reader
 #: selection can span a paragraph, so only the text around the word is kept.
@@ -68,3 +70,60 @@ def quoted_sentence(sentence: str, limit: int = 80) -> str:
     if len(text) > limit:
         text = text[:limit - 1].rstrip() + "…"
     return f'"{text}"'
+
+
+def sense_key(sense) -> tuple:
+    """What makes two senses the same: part of speech, definition and example,
+    ignoring case and spacing."""
+    def norm(text):
+        return " ".join(text.split()).casefold()
+    return norm(sense.pos), norm(sense.definition), norm(sense.example)
+
+
+def unsaved(senses: Iterable, saved: Iterable) -> List:
+    """The senses, in their order, that are not among ``saved``. Each saved
+    sense accounts for one equal sense, so a dictionary that lists the same
+    sense twice keeps the second when only one was saved."""
+    pending = Counter(sense_key(s) for s in saved)
+    out = []
+    for sense in senses:
+        key = sense_key(sense)
+        if pending[key]:
+            pending[key] -= 1
+        else:
+            out.append(sense)
+    return out
+
+
+@dataclass(frozen=True)
+class SenseListing:
+    """A word's senses as listed to the user, numbered from 1 over ``offered``.
+
+    ``expected`` is App.word_state() read with the senses, so a choice made
+    from this listing is refused once the word or its module has changed.
+    ``extra`` holds dictionary senses that are not saved (SENSES --all), and
+    ``note`` says why there are none when they were asked for.
+    """
+    module: str
+    word: str                 # the stored spelling
+    dictionary: str
+    senses: Tuple             # saved senses, in saved order
+    context: str
+    expected: object
+    extra: Tuple = ()
+    note: str = ""
+
+    @property
+    def key(self) -> str:
+        return self.word.strip().lower()
+
+    @property
+    def manual(self) -> bool:
+        return self.dictionary == "manual"
+
+    @property
+    def offered(self) -> Tuple:
+        return tuple(self.senses) + tuple(self.extra)
+
+    def with_extra(self, extra=(), note: str = "") -> "SenseListing":
+        return replace(self, extra=tuple(unsaved(extra, self.senses)), note=note)

@@ -170,12 +170,15 @@ speech is usually right; the chosen sense is a best guess, so check it. The mess
 after adding a word with several senses says whether its first sense was guessed from
 the sentence or is simply the dictionary's first, and how many more senses were saved.
 The word keeps the sentence it was added from (at most 500 characters around the word).
+In the terminal and the Console, `SENSES word` lists the senses saved for a word, marks
+the one studied with `*` and shows that sentence; `SENSES word --all` also lists the
+senses of its dictionary that were not saved.
 Vocabulary lookups from Vocab and the EPUB reader run in the background. Failed additions
 keep the input for retrying; lookups stay attached to the module where they started.
 The optional Ollama sense selector requires a separately installed local server.
 
 The Console supports `DICT`, `DICT USE wordnet`, `DICT USE freedict`, `MODE MECH ON`,
-`DISAMBIG nlp|ollama|base`, `STATS`, `DOCTOR`, and `HELP`. Source installations can use
+`DISAMBIG nlp|ollama|base`, `SENSES word [--all]`, `STATS`, `DOCTOR`, and `HELP`. Source installations can use
 `DICT INSTALL wordnet` (about 13 MB: WordNet and the tagger; about 1.5 MB if only the
 tagger is missing). Downloads are explicit and may take a while; the terminal
 interface's first run downloads both when WordNet is the configured dictionary but is

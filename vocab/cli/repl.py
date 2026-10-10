@@ -126,6 +126,11 @@ class Repl:
             if len(a) < 2:
                 return "Usage: ADDL <list> <word>   or   ADDL <list> <word> :: <definition>"
             return app.cmd_add(" ".join(a[1:]), target=a[0], manual_def=cmd.body)
+        if v == "SENSES":
+            rest, show_all = _without_flag(a, "--all")
+            if not rest:
+                return "Usage: SENSES <word> [--all]"
+            return app.cmd_senses(" ".join(rest), show_all=show_all)
         if v == "DEL":
             return app.cmd_delete_word(" ".join(a)) if a else "Usage: DEL <word>"
         if v == "DELL":

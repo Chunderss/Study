@@ -88,7 +88,7 @@ def test_the_reply_says_how_the_first_sense_was_chosen(app, monkeypatch):
     tag_as(monkeypatch, "v")
     reply = app.cmd_add("flag", sentence=VERB_USE)
     assert reply.splitlines()[1] == "    verb: become less intense"
-    assert reply.splitlines()[2] == f'    Guessed from "{VERB_USE}"; 2 more senses saved.'
+    assert reply.splitlines()[2].startswith(f'    Guessed from "{VERB_USE}"; 2 more senses saved.')
     tag_as(monkeypatch, None, tagger=False)
     reply = app.cmd_add("flagged", sentence=VERB_USE)
     assert "without part-of-speech tagging (DOCTOR explains)" in reply
@@ -177,7 +177,108 @@ def test_real_wordnet_lookup_from_a_sentence_names_its_guess(app, monkeypatch):
     tag_as(monkeypatch, "v")
     reply = app.cmd_add("flag", sentence=VERB_USE)
     # The guess is wrong here ("become less intense" fits), so say it is one.
-    assert reply.splitlines()[1:] == [
-        "    verb: communicate or signal with a flag",
-        f'    Guessed from "{VERB_USE}"; 5 more senses saved.']
+    assert reply.splitlines()[1] == "    verb: communicate or signal with a flag"
+    assert reply.splitlines()[2].startswith(f'    Guessed from "{VERB_USE}"; 5 more senses saved.')
     assert raw(app, "flag")["context"] == VERB_USE
+
+
+# ---- SENSES lists them -----------------------------------------------------
+def numbered(out):
+    """{number: row} for the numbered rows of a SENSES list."""
+    rows = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if parts and parts[0].isdigit():
+            rows[int(parts[0])] = line
+    return rows
+
+
+def test_senses_lists_the_saved_senses_and_the_sentence(app, monkeypatch):
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag", sentence=VERB_USE)
+    out = say(app, "SENSES flag")
+    assert out.splitlines()[:2] == [
+        "'flag' in 'Book' [wordnet]",
+        f'First sense chosen automatically.  Sentence: "{VERB_USE}"']
+    rows = numbered(out)
+    assert rows == {1: "   1 * noun: a rectangular emblem of cloth",
+                    2: "   2   verb: become less intense",
+                    3: "   3   verb: decorate with flags"}
+    assert '         "his energy flagged"' in out.splitlines()  # the example, under its sense
+    assert "SENSES flag --all  also lists the dictionary's other senses." in out
+    assert say(app, "SENSES").startswith("Usage: SENSES <word>")
+    assert say(app, "SENSES bank") == "! 'bank' is not in 'Book'."
+
+
+def test_senses_of_a_manual_definition_says_so(app, monkeypatch):
+    looked_up(app, monkeypatch)
+    app.cmd_add("ephemeral", manual_def="my careful definition")
+    out = say(app, "SENSES ephemeral --all")
+    assert out.splitlines()[0] == "'ephemeral' in 'Book': your own definition"
+    assert numbered(out) == {1: "   1 * my careful definition"}
+    assert "DEL ephemeral  then  ADD ephemeral   (its progress starts over)" in out
+
+
+def test_senses_all_adds_the_dictionarys_other_real_wordnet_senses(app):
+    real_nltk.require("corpora/wordnet.zip")
+    app.config.active_dictionary = "wordnet"
+    app.cmd_add("flag")  # typed, no sentence: WordNet's first six senses, all nouns
+    assert "become less intense" not in say(app, "SENSES flag")
+    out = say(app, "SENSES flag --all")
+    rows = numbered(out)
+    assert sorted(rows) == list(range(1, 13))  # WordNet's 12 senses of 'flag'
+    assert rows[12] == "  12   verb: become less intense"
+    assert "More from wordnet (saved only if you choose one):" in out
+    assert len(app.storage.load_words("Book").words["flag"].senses) == 6  # nothing saved
+
+
+def test_senses_all_keeps_every_sense_the_dictionary_lists_twice(app):
+    real_nltk.require("corpora/wordnet.zip")
+    app.config.active_dictionary = "wordnet"
+    # WordNet lists 'hinder' (the adjective) twice, word for word.
+    app.cmd_add("hinder")
+    out = say(app, "SENSES hinder --all")
+    assert sorted(numbered(out)) == [1, 2, 3, 4, 5]
+    assert "('wordnet' has no other senses of 'hinder'.)" in out
+
+
+def test_senses_all_offers_a_repeated_sense_that_was_not_saved(app, monkeypatch):
+    import vocab.cli.app as app_module
+    repeated = THREE + [Sense("decorate with flags", "verb")]
+    looked_up(app, monkeypatch)
+    app.cmd_add("flag")
+    monkeypatch.setattr(app_module, "get_dictionary", lambda name: Dictionary(repeated))
+    rows = numbered(say(app, "SENSES flag --all"))
+    assert rows[4] == "   4   verb: decorate with flags"
+
+
+@pytest.mark.parametrize("problem, note", [
+    ("unknown", "Its dictionary 'test' is not one this version knows"),
+    ("unavailable", "'wordnet' is not available here, so its other senses cannot be listed"),
+    ("failing", "Could not list the other senses from 'wordnet': offline right now")])
+def test_senses_all_without_its_dictionary_still_lists_the_saved_senses(
+        app, monkeypatch, problem, note):
+    from vocab.dictionaries import LookupFailed
+    from vocab.dictionaries.wordnet import WordNet
+    looked_up(app, monkeypatch, dictionary="test" if problem == "unknown" else "wordnet")
+    app.cmd_add("flag")
+    monkeypatch.setattr(WordNet, "available", lambda self: problem != "unavailable")
+
+    def failing(self, word):
+        raise LookupFailed("offline right now", recoverable=True)
+    monkeypatch.setattr(WordNet, "lookup", failing)
+    out = say(app, "SENSES flag --all")
+    assert sorted(numbered(out)) == [1, 2, 3]
+    assert f"({note}" in out
+
+
+def test_the_add_reply_points_to_senses(app, monkeypatch):
+    looked_up(app, monkeypatch)
+    app.cmd_create("Moby Dick")
+    assert say(app, "ADD flag").splitlines()[-1].endswith(
+        "2 more senses saved.  Others:  SENSES flag")
+    assert say(app, "ADD ice cream").splitlines()[-1].endswith('Others:  SENSES "ice cream"')
+    assert say(app, 'ADDL "Moby Dick" whale').splitlines()[-1].endswith(
+        'Others:  USE "Moby Dick"  then  SENSES whale')
+    from vocab.cli.help_text import HELP
+    assert "SENSES <word> [--all]" in HELP

@@ -70,8 +70,9 @@ SHARING
   EXPORT <module> <file.json> [--stats]   write a portable vocab file
   IMPORT <file.json> [as <name>] [--stats]   import vocab as a new module
       Without --stats you get the words but start your OWN fresh progress.
+      --stats may go anywhere; the name after AS may be several words.
       Windows paths work as typed; quote a path that contains spaces:
-        IMPORT "C:\Users\Pat Smith\book.json" as Gatsby
+        IMPORT "C:\Users\Pat Smith\book.json" as The Great Gatsby
 
 OTHER
   DOCTOR                     diagnose setup (runtime, dictionaries, POS tagger)

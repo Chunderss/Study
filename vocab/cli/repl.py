@@ -21,6 +21,12 @@ def _takes_body(cmd: Command) -> bool:
         cmd.verb == "NOTE" and bool(cmd.args) and cmd.args[0].upper() == "ADD")
 
 
+def _without_flag(args: List[str], flag: str) -> tuple[List[str], bool]:
+    """Remove ``flag`` (any case, any position); report whether it was there."""
+    kept = [arg for arg in args if arg.lower() != flag]
+    return kept, len(kept) != len(args)
+
+
 def _path_problem(path: str) -> Optional[str]:
     """A message when a file path starts or ends with a quote character, else None."""
     if path and (path[0] in "\"'" or path[-1] in "\"'"):
@@ -127,9 +133,11 @@ class Repl:
             return app.run_study(names, self.prompt, self.echo, session_label="ALL lists")
 
         if v == "EXPORT":
-            if len(a) < 2:
-                return "Usage: EXPORT <list> <file.json> [--stats]"
-            return _path_problem(a[1]) or app.cmd_export(a[0], a[1], include_stats="--stats" in a)
+            rest, stats = _without_flag(a, "--stats")
+            if len(rest) != 2:
+                return ("Usage: EXPORT <module> <file.json> [--stats]   "
+                        "(quote a name or path that contains spaces)")
+            return _path_problem(rest[1]) or app.cmd_export(rest[0], rest[1], include_stats=stats)
         if v == "IMPORT":
             return self._import(a)
 
@@ -197,18 +205,18 @@ class Repl:
         return "Usage: MODE [MECH ON|OFF]"
 
     def _import(self, a: List[str]) -> str:
-        if not a:
-            return "Usage: IMPORT <file.json> [as <name>] [--stats]"
-        src = a[0]
-        problem = _path_problem(src)
-        if problem:
-            return problem
-        new_name = None
-        if "as" in a:
-            i = a.index("as")
-            if i + 1 < len(a):
-                new_name = a[i + 1]
-        return self.app.cmd_import(src, new_name, with_stats="--stats" in a)
+        usage = ("Usage: IMPORT <file.json> [as <name>] [--stats]   "
+                 "(quote a path that contains spaces)")
+        rest, stats = _without_flag(a, "--stats")
+        if not rest:
+            return usage
+        src, new_name = rest[0], None
+        if len(rest) > 1:
+            # Anything after the path must be AS <name>; the name may be several words.
+            if rest[1].lower() != "as" or len(rest) < 3:
+                return usage
+            new_name = " ".join(rest[2:])
+        return _path_problem(src) or self.app.cmd_import(src, new_name, with_stats=stats)
 
     # ---- loop -----------------------------------------------------------
     def _startup_checks(self) -> None:

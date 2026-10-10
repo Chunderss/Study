@@ -103,6 +103,35 @@ def test_a_path_with_quote_characters_is_rejected(app, tmp_path, monkeypatch):
     assert set(tmp_path.iterdir()) == before
 
 
+def test_stats_flag_anywhere_and_as_in_any_case(app, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app.cmd_add("ephemeral", manual_def="lasting a short time")
+    assert "(with progress)" in run(app, "EXPORT Book --stats book.json")
+    assert not (tmp_path / "--stats").exists()  # never a file name
+    assert "stats" in json.loads((tmp_path / "book.json").read_text(encoding="utf-8"))
+    assert "imported progress" in run(app, 'IMPORT --STATS book.json AS "My Copy"')
+    assert "ephemeral" in app.storage.load_words("My Copy").words
+    assert "fresh progress" in run(app, "IMPORT book.json as Second Copy")
+    assert {"My Copy", "Second Copy"} <= set(app.storage.list_names())
+
+
+def test_extra_words_and_missing_names_are_rejected(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "cmd_export", lambda *args, **kw: calls.append(args) or "ran")
+    monkeypatch.setattr(app, "cmd_import", lambda *args, **kw: calls.append(args) or "ran")
+    for line in (r"EXPORT Book C:\Users\Pat Smith\book.json",  # unquoted spaces
+                 "EXPORT Book book.json extra",
+                 "EXPORT book.json"):
+        assert run(app, line).startswith("Usage: EXPORT"), line
+    for line in (r"IMPORT C:\Users\Pat Smith\book.json",
+                 r"IMPORT /tmp/My\ Files/book.json",  # no escaped spaces either
+                 "IMPORT book.json as",
+                 "IMPORT book.json to Copy",
+                 "IMPORT --stats"):
+        assert run(app, line).startswith("Usage: IMPORT"), line
+    assert calls == []
+
+
 def test_single_quotes_are_ordinary_characters(app):
     run(app, "CREATE Bob's Book")
     run(app, """ADDL "Bob's Book" don't :: do not""")

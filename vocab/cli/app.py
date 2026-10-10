@@ -178,6 +178,22 @@ class App:
         lines.append("=" * 40)
         if not dic.requires_network:
             lines.append("OK: using the offline dictionary. No network needed.")
+        elif dic.id == self.config.active_dictionary:
+            # Chosen on purpose (DICT USE freedict), not a fallback.
+            lines.append(f"OK: using the online dictionary you chose ('{dic.id}'). Lookups need")
+            lines.append("the network and can time out.")
+            offline = next((d for d in REGISTRY.values()
+                            if not d.requires_network and d.available()), None)
+            if offline is not None:
+                lines.append(f"For offline lookups:  dict use {offline.id}")
+            elif packaged:
+                lines.append("This copy of the app is missing its built-in WordNet.")
+                lines.append(PACKAGED_REPAIR)
+            elif not nltk_ok:
+                lines.append('For offline lookups:  pip install "vocab-study[wordnet]"'
+                             "  then  dict use wordnet")
+            else:
+                lines.append("For offline lookups:  dict install wordnet  then  dict use wordnet")
         else:
             lines.append("PROBLEM: lookups are using an ONLINE dictionary that can time out,")
             lines.append(f"because the offline default ('{self.config.active_dictionary}') is unavailable here.")

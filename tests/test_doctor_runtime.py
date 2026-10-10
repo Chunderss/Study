@@ -6,6 +6,7 @@ import pytest
 
 from vocab import nltk_resources
 from vocab.cli.app import App
+from vocab.dictionaries import REGISTRY
 from vocab.dictionaries.base import LookupFailed
 from vocab.dictionaries.wordnet import WordNet
 
@@ -115,3 +116,24 @@ def test_packaged_install_failures_do_not_prescribe_pip(tmp_path, monkeypatch):
     _runtime(monkeypatch, "venv")
     with pytest.raises(LookupFailed, match='pip install "vocab-study'):
         WordNet().install()
+
+
+@pytest.mark.parametrize("kind, corpus, advice", [
+    ("venv", True, "For offline lookups:  dict use wordnet"),
+    ("venv", False, "For offline lookups:  dict install wordnet  then  dict use wordnet"),
+    ("frozen", False, "missing its built-in WordNet.\nExtract a fresh copy"),
+], ids=["wordnet-ready", "wordnet-missing", "packaged-without-wordnet"])
+def test_choosing_the_online_dictionary_is_not_a_problem(tmp_path, monkeypatch, kind, corpus,
+                                                         advice):
+    for other in set(REGISTRY) - {"freedict", "wordnet"}:  # e.g. test_vocab's mock
+        monkeypatch.delitem(REGISTRY, other)
+    _nltk(monkeypatch, corpus=corpus)
+    _runtime(monkeypatch, kind)
+    app = App(tmp_path)
+    app.config.active_dictionary = "freedict"  # DICT USE freedict
+    out = app.cmd_doctor()
+    assert "PROBLEM" not in out and "unavailable here" not in out
+    assert "OK: using the online dictionary you chose ('freedict')" in out
+    assert advice in out
+    if kind == "frozen":
+        assert not any(word in out.lower() for word in SOURCE_ADVICE)

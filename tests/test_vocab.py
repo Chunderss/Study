@@ -365,7 +365,9 @@ class TestStudySession(unittest.TestCase):
         app = self._app_with_two_lists()
         s = StudySession(app.storage, app.scheduler, ["A"],
                          mechanical=True, judge=KeywordJudge())
-        out = s.answer_text("something that lasts a very short time")
+        judged = s.judge_text("something that lasts a very short time")
+        self.assertTrue(judged.suggested)     # good overlap
+        out = s.answer(judged.suggested)
         self.assertIsNotNone(out.score)
         self.assertTrue(out.correct)          # good overlap
         s.finish()

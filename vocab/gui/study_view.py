@@ -3,16 +3,19 @@
 Drives a StudySession step by step from the Qt event loop (no blocking). Two
 modes mirror the terminal:
   * reveal   — show word, click Reveal, self-grade Got it / Missed it
-  * mechanical — type the definition, judge scores it, then continue
+  * mechanical — type the definition; the judge suggests a verdict next to the
+    reference, and Got it / Missed it records the final one
 
 Keyboard-first (matches the command-driven spirit):
   Space / Enter = reveal ;  J / Y = got it ;  F / N = missed it ;  Esc = end
+  mechanical, once judged: Enter = the judge's verdict ; J / Y, F / N as above
 These keys count alone or with Shift; with Ctrl, Alt or Meta they are left to
 shortcuts, so a reflex Ctrl+F or Ctrl+Y never records an answer, and neither
 does Ctrl+Enter or Ctrl+Space on a Tab-focused button.
-In reveal mode the view itself keeps keyboard focus after each card change, so
-a second Space or Enter never lands on a grade button. The buttons stay
-reachable with Tab and the mouse; Space or Enter activates the focused one.
+After a card change, a reveal or a judgement the view itself keeps keyboard
+focus (a new mechanical card gives it to the answer box), so a second Space
+never lands on a grade button. The buttons stay reachable with Tab and the
+mouse; Space or Enter activates the focused one. Held keys act once.
 """
 from __future__ import annotations
 
@@ -25,7 +28,20 @@ from ..study.session import StudyCardUnavailable
 
 
 class AnswerInput(QLineEdit):
+    """Enter submits once. A key still held from the previous card (J to
+    record a verdict) does not type into the next answer as it repeats."""
+
+    _fresh_press = True      # False from focus-in until a key is newly pressed
+
+    def focusInEvent(self, event):
+        self._fresh_press = False
+        super().focusInEvent(event)
+
     def keyPressEvent(self, event):
+        if event.isAutoRepeat() and not self._fresh_press:
+            event.accept()
+            return
+        self._fresh_press = True
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             event.accept()
             if not event.isAutoRepeat():
@@ -60,13 +76,13 @@ class StudyButton(QPushButton):
 
 class StudyView(QWidget):
     TITLE = "Study"
+    GOOD_LABEL, BAD_LABEL = "Got it  (J)", "Missed it  (F)"
     finished = Signal(str)   # emits the session summary text when done
 
     def __init__(self, session, parent=None):
         super().__init__(parent)
         self.session = session
         self._revealed = False
-        self._awaiting_next = False
         self._ended = False
         self._card_description = ""
         self.setFocusPolicy(Qt.StrongFocus)
@@ -80,8 +96,19 @@ class StudyView(QWidget):
         # study is a live session; nothing external to reload
         pass
 
+    def focusInEvent(self, event) -> None:
+        # A click on the card, or on a verdict button before there is a
+        # judgement, must not take the keys away from the answer box. Shift+Tab
+        # from the answer box stops here on its way out of the pane: sending
+        # it back would trap the keyboard.
+        if (self.session.mechanical and self.session.judgement is None
+                and self.input.isEnabled() and event.reason() != Qt.BacktabFocusReason):
+            self.input.setFocus()
+            return
+        super().focusInEvent(event)
+
     def focus_default(self) -> None:
-        if self.session.mechanical and not self._awaiting_next:
+        if self.session.mechanical and self.session.judgement is None:
             self.input.setFocus()
         else:
             self.setFocus()
@@ -146,23 +173,19 @@ class StudyView(QWidget):
         self.reveal_btn.setDefault(True)
         self.reveal_btn.clicked.connect(self._reveal)
 
-        self.good_btn = StudyButton("Got it  (J)")
+        self.good_btn = StudyButton(self.GOOD_LABEL)
         self.good_btn.setObjectName("Good")
         self.good_btn.clicked.connect(lambda: self._grade(True))
 
-        self.bad_btn = StudyButton("Missed it  (F)")
+        self.bad_btn = StudyButton(self.BAD_LABEL)
         self.bad_btn.setObjectName("Bad")
         self.bad_btn.clicked.connect(lambda: self._grade(False))
 
-        self.next_btn = StudyButton("Continue  (Enter)")
-        self.next_btn.clicked.connect(self._continue)
-        self.next_btn.hide()
         self.end_btn = StudyButton("End  (Esc)")
         self.end_btn.clicked.connect(self._end)
 
         btns.addWidget(self.end_btn)
         btns.addStretch(1)
-        btns.addWidget(self.next_btn)
         btns.addWidget(self.reveal_btn)
         btns.addWidget(self.bad_btn)
         btns.addWidget(self.good_btn)
@@ -183,9 +206,9 @@ class StudyView(QWidget):
             return
         view = self.session.current()
         self._revealed = False
-        self._awaiting_next = False
-        self.next_btn.hide()
         self.input.setEnabled(True)
+        self.good_btn.setText(self.GOOD_LABEL)
+        self.bad_btn.setText(self.BAD_LABEL)
         self.counter.setText(f"{view.index} / {view.total}")
         self.progress.setValue(view.index - 1)
         self.list_tag.setText(view.home_list)
@@ -193,21 +216,19 @@ class StudyView(QWidget):
         self.answer.setText("")
         self.feedback.setText("")
 
+        self.good_btn.setEnabled(False)
+        self.bad_btn.setEnabled(False)
         if self.session.mechanical:
             self.input.show()
             self.input.clear()
             self.input.setFocus()
             self.reveal_btn.hide()
-            self.good_btn.hide()
-            self.bad_btn.hide()
+            self._describe(f"Card {view.index} of {view.total}: {view.word}. "
+                           "Type the definition, then press Enter.")
         else:
             self.input.hide()
             self.reveal_btn.show()
             self.reveal_btn.setEnabled(True)
-            self.good_btn.show()
-            self.bad_btn.show()
-            self.good_btn.setEnabled(False)
-            self.bad_btn.setEnabled(False)
             self._describe(f"Card {view.index} of {view.total}: {view.word}. "
                            "Press Space to reveal the answer.")
             # A focused button clicks on Space or Enter, so it would turn the
@@ -234,8 +255,15 @@ class StudyView(QWidget):
         # comes after disabling reveal_btn, which moves its focus elsewhere first.
         self.setFocus()
 
+    def _can_grade(self) -> bool:
+        if self.session.done:
+            return False
+        if self.session.mechanical:
+            return self.session.judgement is not None
+        return self._revealed
+
     def _grade(self, correct: bool) -> None:
-        if not self._revealed or self.session.done:
+        if not self._can_grade():
             return
         outcome = self._record_answer(self.session.answer, correct)
         if outcome is None:
@@ -244,26 +272,41 @@ class StudyView(QWidget):
         self._load_card()
         self._show_box_feedback(outcome)
 
+    def _accept_suggestion(self) -> None:
+        judgement = self.session.judgement
+        if judgement is not None and judgement.suggested is not None:
+            self._grade(judgement.suggested)
+
     def _submit_typed(self) -> None:
-        if self.session.done or not self.session.mechanical or self._awaiting_next:
+        if (self.session.done or not self.session.mechanical
+                or self.session.judgement is not None):
             return
         typed = self.input.text().strip()
         if not typed:
             return
-        outcome = self._record_answer(self.session.answer_text, typed)
-        if outcome is None:
-            return
-        view_def = outcome.reference
-        self.answer.setText(f"reference:  {view_def}")
-        # The judge's feedback already states the verdict.
-        self.feedback.setText(
-            f"score {outcome.score:.0%} — {outcome.feedback}   ·   "
-            f"box {outcome.box_before} → {outcome.box_after}")
-        self._awaiting_next = True
+        j = self.session.judge_text(typed)
+        view = self.session.current()
+        self.answer.setText(f"reference:  {j.reference}")
+        self.feedback.setStyleSheet("")
+        if j.suggested is None:
+            self.feedback.setText(j.feedback)
+            keys = "Press J if you got it, or F if you missed it."
+        else:
+            self.feedback.setText(f"score {j.score:.0%} — {j.feedback}")
+            if j.suggested:
+                self.good_btn.setText("Got it  (J / Enter)")
+            else:
+                self.bad_btn.setText("Missed it  (F / Enter)")
+            keys = (f"Press Enter to keep the judge's verdict, "
+                    f"{'Got it' if j.suggested else 'Missed it'}; "
+                    "J if you got it, or F if you missed it.")
         self.input.setEnabled(False)
-        self.progress.setValue(self.session.reviewed)
-        self.next_btn.show()
-        self.next_btn.setFocus()
+        self.good_btn.setEnabled(True)
+        self.bad_btn.setEnabled(True)
+        self._describe(f"{view.word}. You wrote: {j.typed}. Reference: {j.reference}. "
+                       f"{self.feedback.text()}\n\n{keys}")
+        # Not on a button: Space there would record a verdict.
+        self.setFocus()
 
     def _record_answer(self, answer, value):
         try:
@@ -278,33 +321,33 @@ class StudyView(QWidget):
             self._describe(notice=self.feedback.text())
         return None
 
-    def _continue(self):
-        if self._awaiting_next:
-            self._awaiting_next = False
-            self._load_card()
-
     def _show_box_feedback(self, outcome) -> None:
         arrow = "↑" if outcome.box_after > outcome.box_before else (
             "↓" if outcome.box_after < outcome.box_before else "→")
         color = theme.GOOD if outcome.correct else theme.BAD
+        overruled = "   ·   you overruled the judge" if outcome.overruled else ""
         self.feedback.setText(
-            f"box {outcome.box_before} {arrow} {outcome.box_after}")
+            f"box {outcome.box_before} {arrow} {outcome.box_after}{overruled}")
         self.feedback.setStyleSheet(f"color: {color};")
         verdict = "Got it" if outcome.correct else "Missed it"
-        self._describe(notice=f"{verdict}: box {outcome.box_before} to {outcome.box_after}")
+        notice = f"{verdict}: box {outcome.box_before} to {outcome.box_after}"
+        if outcome.overruled:
+            notice += ". You overruled the judge"
+        self._describe(notice=notice)
 
     def _describe(self, card: str | None = None, notice: str = "") -> None:
         """Keep the accessible description of the focused card current: the
-        card text, after a notice about the last answer if there is one.
-        Reveal mode only; mechanical mode keeps focus on its input."""
-        if self.session.mechanical:
-            return
+        card text, after a notice about the last answer if there is one. A
+        mechanical card waiting for its answer also describes itself on the
+        answer box, which has the focus then."""
         if card is not None:
             self._card_description = card
         if notice and not notice.endswith((".", "!", "?")):
             notice += "."      # error texts end without a full stop to pause at
-        self.setAccessibleDescription(
-            f"{notice} {self._card_description}" if notice else self._card_description)
+        text = f"{notice} {self._card_description}" if notice else self._card_description
+        self.setAccessibleDescription(text)
+        if self.session.mechanical and self.session.judgement is None:
+            self.input.setAccessibleDescription(text)
 
     def _end(self) -> None:
         if self._ended:
@@ -327,10 +370,15 @@ class StudyView(QWidget):
             self._end()
             return
         if self.session.mechanical:
-            if self._awaiting_next and key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
-                self._continue()
-                return
-            super().keyPressEvent(e)
+            judged = self.session.judgement is not None
+            if judged and key in (Qt.Key_Return, Qt.Key_Enter):
+                self._accept_suggestion()
+            elif judged and key in (Qt.Key_J, Qt.Key_Y):
+                self._grade(True)
+            elif judged and key in (Qt.Key_F, Qt.Key_N):
+                self._grade(False)
+            else:
+                super().keyPressEvent(e)
             return
         if key in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter) and not self._revealed:
             self._reveal()

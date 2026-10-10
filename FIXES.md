@@ -37,8 +37,8 @@ The original archive is preserved beside the updated source folder.
 - Fixed duplicate senses when the inferred part of speech matches none of the senses.
 - Study grades persist immediately, surviving pane closure or early application exit.
   Finishing a session no longer replays old stats over newer/deleted cards.
-- Mechanical study keeps feedback visible until Continue. Its Enter event is consumed
-  so the same press cannot submit and immediately advance again.
+- Mechanical study keeps feedback visible until you record a verdict. Its Enter event is
+  consumed so the same press cannot submit the answer and also record the verdict.
 - Completion locates the originating study pane instead of replacing the focused pane.
 - Study without a selected module no longer silently starts Study All.
 - The desktop Console uses Qt confirmation dialogs instead of terminal input and renders

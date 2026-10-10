@@ -136,13 +136,9 @@ missing. `DOCTOR` and `DISAMBIG` report a missing tagger. Console commands
 other than the main Vocab/reader lookup path run synchronously.
 
 Leitner schedules reviews across five boxes, 1, 3, 7, 16 and 35 calendar days apart.
-Each answer saves progress immediately. Mechanical mode keeps the reference answer and
-score visible until **Continue**. In the terminal, mechanical mode shows the judge's
-score and the reference, then asks `did you get it? [Y/n]`: Enter keeps the judge's
-verdict, `y` or `n` records your own, and `q` stops without recording the card. Nothing
-is saved before you answer. Study All writes each review to its original module.
-Cards changed, deleted, or reviewed in another session are skipped with a notice,
-preserving the newer progress.
+Each recorded answer saves progress immediately. Study All writes each review to its
+original module. Cards changed, deleted, or reviewed in another session are skipped with
+a notice, preserving the newer progress.
 
 Intervals count calendar days on this computer's clock. A card answered on Monday with a
 3-day interval is due from the start of Thursday (local midnight), whatever time you
@@ -168,9 +164,23 @@ In the terminal, press Enter to reveal the definition, then answer `did you get 
 recording the card. Any other reply asks again, as does a failed save, so the answer is
 not lost.
 
-Mechanical mode grades a typed definition by its wording, not its meaning: it passes
-when it contains at least half of the key terms of the card's definition. The feedback
-states the verdict and names the key terms left out, as the definition writes them.
+In mechanical mode you type the definition and press Enter. The judge compares it with
+the card's definition and suggests a verdict, shown with its score and the reference;
+nothing is saved until you decide. Enter keeps the judge's verdict; J or Y records
+**Got it** and F or N **Missed it**, whatever the judge suggested, and the button marked
+Enter is the suggestion. As in reveal mode, Space and keys with Ctrl, Alt, Cmd or the
+Windows key never record a verdict, and Tab or the mouse reach the buttons. Ending the
+session before choosing records nothing for that card. The summary counts the cards
+where you overruled the judge. Pressing Enter twice records the judge's verdict, as Enter
+and **Continue** did before, so read the reference before the second Enter; and once an
+answer is judged, J, Y, F and N record a verdict, so a key typed after an early Enter can
+record one. In the terminal, answer `did you get it? [Y/n]` with Enter to keep the
+judge's verdict, or `y` or `n`; `q` stops without recording the card, and a failed save
+asks again.
+
+The judge goes by wording, not meaning: it suggests **Got it** when the answer contains
+at least half of the key terms of the card's definition. The feedback states the verdict
+and names the key terms left out, as the definition writes them.
 Regular English inflections match (make, makes, making; story, stories), irregular ones
 do not (made). A key term negated differently from the definition earns no credit
 ("not permanent" for "permanent"). A negation said with another word is the same
@@ -183,9 +193,8 @@ split into words, so only whole matching words count there.
 Numbers are key terms only in a definition without other key terms ("1984"), so "a
 hundred years" passes for "a period of 100 years"; 1,760 and 1760 are the same number.
 A definition made only of short or common words ("an ox", "to go") is compared on those
-words. When a card's definition has no words at all, the terminal shows the reference with
-no suggestion and you choose; the desktop app skips the card without recording a review,
-so study it there with `MODE MECH OFF`.
+words. When a card's definition has no words at all, the judge makes no suggestion and you
+choose: Enter does nothing in the study view and asks again in the terminal.
 
 ## Your data
 

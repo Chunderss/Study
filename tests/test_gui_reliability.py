@@ -269,7 +269,7 @@ def test_failed_add_retains_input(window):
     assert not window.app.storage.load_words("Book").words
 
 
-def test_mechanical_feedback_waits_for_continue(window, qt):
+def test_mechanical_feedback_waits_for_the_verdict(window, qt):
     from vocab.gui.study_view import StudyView
     from vocab.study.session import StudySession
     from vocab.study.judge import KeywordJudge
@@ -283,10 +283,12 @@ def test_mechanical_feedback_waits_for_continue(window, qt):
     QTest.keyClick(view.input, Qt.Key_Return)
     assert "reference:" in view.answer.text()
     assert "score" in view.feedback.text()
-    assert session.reviewed == 1
+    assert session.reviewed == 0 and session.judgement is not None   # nothing saved yet
+    assert window.app.storage.load_stats("Book")["word"]["reps"] == 0
     assert not view._ended
-    view._continue()
-    assert view._ended
+    QTest.keyClick(view, Qt.Key_Return)      # keeps the judge's verdict
+    assert session.reviewed == 1 and view._ended
+    assert window.app.storage.load_stats("Book")["word"]["box"] == 2
     view.deleteLater()
     qt.processEvents()
 

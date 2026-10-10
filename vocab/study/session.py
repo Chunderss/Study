@@ -34,7 +34,6 @@ class SessionResult:
     correct: int = 0
     skipped: int = 0        # changed or deleted elsewhere
     overruled: int = 0      # mechanical mode: recorded against the judge's suggestion
-    ungraded: int = 0       # the judge could not grade the typed answer (desktop)
 
     def mark(self, correct: bool) -> None:
         self.reviewed += 1
@@ -199,13 +198,10 @@ class StudySession:
         self._i += 1
         self._judgement = None
 
-    def _unavailable(self, reason: str, *, ungraded: bool = False) -> NoReturn:
+    def _unavailable(self, reason: str) -> NoReturn:
         word = self.queue[self._i].word.word
         self._advance()
-        if ungraded:
-            self.result.ungraded += 1
-        else:
-            self.result.skipped += 1
+        self.result.skipped += 1
         raise StudyCardUnavailable(f"Skipped '{word}': {reason}")
 
     def _apply(self, correct: bool, judgement: Judgement | None = None) -> AnswerOutcome:
@@ -271,15 +267,6 @@ class StudySession:
             raise RuntimeError("Type a definition first.")
         return self._apply(bool(correct), self._judgement)
 
-    def answer_text(self, typed: str) -> AnswerOutcome:
-        """The study view's path until it asks for a verdict: record the
-        judge's verdict at once, and skip a card the judge cannot grade."""
-        judgement = self.judge_text(typed)
-        if judgement.suggested is None:
-            self._unavailable("its definition has no words to compare a typed answer "
-                              "with. Study it with MODE MECH OFF.", ungraded=True)
-        return self.answer(judgement.suggested)
-
     def skip(self) -> None:
         """Advance without recording a review (used when the user quits early)."""
         self._advance()
@@ -296,7 +283,4 @@ class StudySession:
             summary += f" You overruled the judge on {self.result.overruled} card(s)."
         if self.result.skipped:
             summary += f" Skipped {self.result.skipped} changed or deleted card(s)."
-        if self.result.ungraded:
-            summary += (f" Skipped {self.result.ungraded} card(s) whose definition "
-                        "cannot be graded by typing.")
         return summary

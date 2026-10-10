@@ -207,26 +207,6 @@ def test_ctrl_alt_or_meta_enter_or_space_never_click_a_focused_study_button(wind
 
 
 @DELIVERY
-def test_enter_activates_the_tab_reached_end_and_continue_in_mechanical_mode(window, qt, delivery):
-    keys = Keys(window, qt, delivery)
-    view = _open_study(window, qt, mechanical=True)
-    view.input.setText(DEFINITIONS[view.word.text()])
-    keys.press(Qt.Key_Return)           # submits; Continue takes focus
-    assert view._awaiting_next and qt.focusWidget() is view.next_btn
-    keys.tab_to(view.end_btn)
-    keys.tab_to(view.next_btn)
-    keys.press(Qt.Key_Enter)
-    assert not view._awaiting_next and qt.focusWidget() is view.input
-    assert view.session.reviewed == 1
-
-    view.input.setText(DEFINITIONS[view.word.text()])
-    keys.press(Qt.Key_Return)
-    keys.tab_to(view.end_btn)
-    keys.press(Qt.Key_Return)           # ends the session instead of continuing
-    assert view._ended and view.session.reviewed == 2
-
-
-@DELIVERY
 def test_ctrl_alt_or_meta_letters_never_grade(window, qt, delivery):
     keys = Keys(window, qt, delivery)
     view = _open_study(window, qt)

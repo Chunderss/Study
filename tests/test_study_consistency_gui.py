@@ -21,6 +21,7 @@ def test_deleted_card_advances_gui_without_recording_an_answer(window, qt, mecha
     if mechanical:
         view.input.setText("first letter")
         view._submit_typed()
+        view._grade(True)
     else:
         view._reveal()
         view._grade(True)
@@ -28,7 +29,7 @@ def test_deleted_card_advances_gui_without_recording_an_answer(window, qt, mecha
     assert view.word.text() == "beta"
     assert "word was deleted" in view.feedback.text()
     assert session.reviewed == 0
-    assert not view._awaiting_next
+    assert session.judgement is None
     view.deleteLater()
     qt.processEvents()
 
@@ -62,8 +63,9 @@ def test_failed_mechanical_save_keeps_typed_answer(window, qt, monkeypatch):
     monkeypatch.setattr(window.app.storage, "save_stats", fail)
     view.input.setText("first letter")
     view._submit_typed()
+    view._grade(True)
     assert view.input.text() == "first letter"
-    assert view.input.isEnabled()
+    assert session.judgement is not None
     assert "disk full" in view.feedback.text()
     assert session.reviewed == 0
     view.deleteLater()

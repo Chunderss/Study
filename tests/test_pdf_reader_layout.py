@@ -136,24 +136,60 @@ def test_zooming_in_from_fit_width_enlarges_the_page(window, qt):
 def test_a_zoom_step_never_goes_the_wrong_way(window, monkeypatch):
     make_pdf(window)
     viewer = window._open_viewer(str(window.app.paths.documents_dir("Book") / "book.pdf"))
-    monkeypatch.setattr(viewer, "_effective_zoom", lambda: 6.0)  # Fit width above the limit
-    viewer._zoom(1.25)
-    assert viewer._view.zoomFactor() == pytest.approx(6.0)
-    monkeypatch.setattr(viewer, "_effective_zoom", lambda: 0.05)
+    for shown, step in ((6.0, 1.25), (0.05, 0.8)):  # Fit width beyond a limit
+        monkeypatch.setattr(viewer, "_effective_zoom", lambda shown=shown: shown)
+        viewer._zoom(step)
+        assert mode(viewer) == "FitToWidth"  # no step possible: nothing changes
+    viewer._zoom(0.8)  # from 0.05 back up is fine
+    monkeypatch.setattr(viewer, "_effective_zoom", lambda: 6.0)
     viewer._zoom(0.8)
-    assert viewer._view.zoomFactor() == pytest.approx(0.05)
+    assert mode(viewer) == "Custom" and viewer._view.zoomFactor() == pytest.approx(4.8)
 
 
-def aligned(viewer):
-    """Whether the view shows its current page from the top."""
+def aligned(viewer, page_index=None):
+    """Whether the view shows a page (the current one) from its top. The top
+    is found by jumping there from the first or last page, both tall."""
     from PySide6.QtCore import QPointF
     bar, nav = viewer._view.verticalScrollBar(), viewer._view.pageNavigator()
-    value, page_index = bar.value(), nav.currentPage()
-    nav.jump(page_index - 1 if page_index else page_index + 1, QPointF(0, 0))
+    value = bar.value()
+    page_index = nav.currentPage() if page_index is None else page_index
+    nav.jump(0 if page_index > 1 else viewer._doc.pageCount() - 1, QPointF(0, 0))
     nav.jump(page_index, QPointF(0, 0))
     top = bar.value()
     bar.setValue(value)
     return value == top
+
+
+def make_pdf_with_short_page(window):
+    """Four pages; the second is only 60 points tall."""
+    path = window.app.paths.documents_dir("Book") / "short.pdf"
+    sizes = [792, 60, 792, 792]
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>",
+               b"<< /Type /Pages /Kids [" + b" ".join(b"%d 0 R" % (3 + i) for i in range(4)) + b"] /Count 4 >>"]
+    objects += [b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 %d] >>" % height for height in sizes]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf += b"%d 0 obj\n" % index + obj + b"\nendobj\n"
+    start = len(pdf)
+    pdf += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    pdf += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    pdf += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, start)
+    path.write_bytes(bytes(pdf))
+    return path
+
+
+def test_a_short_page_before_the_target_does_not_misalign_it(window, qt):
+    window.resize(1000, 800)
+    path = make_pdf_with_short_page(window)
+    window._open_source("Book", {"filename": "short.pdf", "kind": "pdf", "page": 2})
+    viewer = window.workspace.focused.component
+    settle(qt)
+    assert viewer._doc.pageCount() == 4 and aligned(viewer, 2)
+    window.resize(800, 800)
+    settle(qt)
+    assert aligned(viewer, 2)
 
 
 def test_the_requested_page_is_shown_from_its_top_after_relayout(window, qt):
@@ -169,14 +205,26 @@ def test_the_requested_page_is_shown_from_its_top_after_relayout(window, qt):
     assert page(viewer) == 1 and aligned(viewer)
 
 
-def test_scroll_here_from_the_scrollbar_menu_ends_the_pending_page(window, qt):
-    from PySide6.QtCore import QPoint, QTimer
+@pytest.mark.parametrize("choice", ["dismissed", "scroll_here"])
+def test_the_scrollbar_menu_ends_the_pending_page_only_if_it_moves(window, qt, monkeypatch, choice):
+    # The offscreen platform cannot show the menu (Windows' style has one), so
+    # stand in for the scrollbar's own handling: "Scroll here" moves it
+    # without a scrollbar action; a dismissed menu does nothing.
+    from PySide6.QtCore import QPoint
     from PySide6.QtGui import QContextMenuEvent
     from PySide6.QtWidgets import QApplication
     viewer = open_source(window)
     settle(qt)
     bar = viewer._view.verticalScrollBar()
-    QTimer.singleShot(50, lambda: QApplication.activePopupWidget() and QApplication.activePopupWidget().close())
-    point = QPoint(2, bar.height() - 2)
+    handled = []
+
+    def menu(event):
+        handled.append(event.type())
+        if choice == "scroll_here":
+            bar.setValue(0)
+        return True
+    monkeypatch.setattr(bar, "event", menu)
+    point = QPoint(2, 20)
     QApplication.sendEvent(bar, QContextMenuEvent(QContextMenuEvent.Mouse, point, bar.mapToGlobal(point)))
-    assert viewer._pending_page is None
+    assert handled  # the filter delivered the event to the scrollbar
+    assert viewer._pending_page == (1 if choice == "dismissed" else None)

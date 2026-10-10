@@ -310,10 +310,14 @@ class PdfViewer(QWidget):
     def _show_page(self, page):
         from PySide6.QtCore import QPointF
         nav = self._view.pageNavigator()
-        if nav.currentPage() == page and self._doc.pageCount() > 1:
-            # QPdfView scrolls only when the page changes: step away first, so
-            # the page is shown from its top after a relayout too.
-            nav.jump(page - 1 if page > 0 else page + 1, QPointF(0, 0))
+        # QPdfView scrolls only when the page changes: step away first, so the
+        # page is shown from its top after a relayout too. A short previous
+        # page can leave this page current (its 40% line), so then try the next.
+        for other in (page - 1, page + 1):
+            if nav.currentPage() != page:
+                break
+            if 0 <= other < self._doc.pageCount():
+                nav.jump(other, QPointF(0, 0))
         nav.jump(page, QPointF(0, 0))
 
     def _reapply_page(self, *_):
@@ -330,7 +334,11 @@ class PdfViewer(QWidget):
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.ContextMenu and watched is self._view.verticalScrollBar():
-            self._pending_page = None
+            before = watched.value()
+            watched.event(event)  # the scrollbar's menu; it returns once closed
+            if watched.value() != before:
+                self._pending_page = None  # "Scroll here" moved it
+            return True
         return False
 
     def _current_page(self):
@@ -402,10 +410,12 @@ class PdfViewer(QWidget):
 
     def _zoom(self, factor: float):
         current = self._effective_zoom()
-        # Fit width can exceed the limits; a step never goes the other way.
-        low, high = min(self.ZOOM_MIN, current), max(self.ZOOM_MAX, current)
+        # Fit width can show a page beyond the limits: a step that would go
+        # further out does nothing (never the other way), and keeps the mode.
+        if (factor > 1 and current >= self.ZOOM_MAX) or (factor < 1 and current <= self.ZOOM_MIN):
+            return
         self._view.setZoomMode(self._view.ZoomMode.Custom)
-        self._view.setZoomFactor(max(low, min(high, current * factor)))
+        self._view.setZoomFactor(max(self.ZOOM_MIN, min(self.ZOOM_MAX, current * factor)))
 
     def _fit(self):
         from PySide6.QtPdfWidgets import QPdfView

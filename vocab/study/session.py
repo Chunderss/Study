@@ -17,7 +17,8 @@ from ..core.storage import ModuleNotFound, Storage
 
 
 class StudyCardUnavailable(ValueError):
-    """The displayed card was skipped because it changed outside this session."""
+    """The displayed card was skipped without a review: it changed outside this
+    session, or the judge cannot grade a typed answer to it."""
 
 
 @dataclass
@@ -31,7 +32,8 @@ class StudyCard:
 class SessionResult:
     reviewed: int = 0
     correct: int = 0
-    skipped: int = 0
+    skipped: int = 0        # changed or deleted elsewhere
+    ungraded: int = 0       # the judge could not grade the typed answer
     # home_list -> {word_key -> updated card}; flushed by the caller
     dirty: Dict[str, Dict[str, dict]] = field(default_factory=dict)
 
@@ -172,10 +174,13 @@ class StudySession:
         )
 
     # ---- actions --------------------------------------------------------
-    def _unavailable(self, reason: str) -> NoReturn:
+    def _unavailable(self, reason: str, *, ungraded: bool = False) -> NoReturn:
         word = self.queue[self._i].word.word
         self._i += 1
-        self.result.skipped += 1
+        if ungraded:
+            self.result.ungraded += 1
+        else:
+            self.result.skipped += 1
         raise StudyCardUnavailable(f"Skipped '{word}': {reason}")
 
     def _apply(self, correct: bool, *, score=None, feedback="", reference="") -> AnswerOutcome:
@@ -225,6 +230,10 @@ class StudySession:
             raise RuntimeError("No judge configured for mechanical mode.")
         reference = self.queue[self._i].word.primary_definition()
         jr = self.judge.score(typed, reference)
+        if not jr.gradable:
+            # A data problem, not a wrong answer: record nothing.
+            self._unavailable("its definition has no words to compare a typed answer "
+                              "with. Study it with MODE MECH OFF.", ungraded=True)
         return self._apply(jr.passed, score=jr.score,
                            feedback=jr.feedback, reference=reference)
 
@@ -241,4 +250,7 @@ class StudySession:
         summary = f"Session done: {self.result.correct}/{self.result.reviewed} correct ({acc:.0f}%)."
         if self.result.skipped:
             summary += f" Skipped {self.result.skipped} changed or deleted card(s)."
+        if self.result.ungraded:
+            summary += (f" Skipped {self.result.ungraded} card(s) whose definition "
+                        "cannot be graded by typing.")
         return summary

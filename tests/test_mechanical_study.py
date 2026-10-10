@@ -20,6 +20,13 @@ def app(tmp_path):
     return app
 
 
+def answer_by_word(output, answers):
+    """A scripted prompt answering for the card run_study last announced."""
+    def prompt(_text):
+        return answers[output[-1].split()[-1]]
+    return prompt
+
+
 def add_due(app, word, definition, box=4, reps=7):
     app.cmd_add(word, manual_def=definition)
     stats = app.storage.load_stats("Book")
@@ -89,3 +96,28 @@ def test_terminal_study_accepts_the_definition_in_another_script(app):
     summary = app.run_study(["Book"], lambda _text: next(answers), lambda _line: None)
     assert "1/1 correct" in summary
     assert app.storage.load_stats("Book")["эфемерный"]["box"] == 5
+
+
+def test_a_card_whose_definition_has_no_words_is_skipped_without_a_review(app):
+    before = add_due(app, "dash", "—")
+    add_due(app, "alpha", "first letter")
+    output = []
+    prompt = answer_by_word(output, {"dash": "a dash", "alpha": "first letter"})
+    summary = app.run_study(["Book"], prompt, output.append)
+    assert ("Skipped 'dash': its definition has no words to compare a typed answer "
+            "with. Study it with MODE MECH OFF.") in output
+    assert app.storage.load_stats("Book")["dash"] == before
+    assert app.storage.load_stats("Book")["alpha"]["box"] == 5
+    assert summary.endswith("Session done: 1/1 correct (100%). Skipped 1 card(s) "
+                            "whose definition cannot be graded by typing.")
+
+
+def test_terminal_study_grades_a_short_definition(app):
+    add_due(app, "beeves", "an ox")
+    add_due(app, "wend", "to go")
+    output = []
+    prompt = answer_by_word(output, {"beeves": "a big elephant", "wend": "go"})
+    summary = app.run_study(["Book"], prompt, output.append)
+    assert "1/2 correct" in summary
+    stats = app.storage.load_stats("Book")
+    assert stats["beeves"]["box"] == 1 and stats["wend"]["box"] == 5

@@ -124,6 +124,9 @@ states the verdict and names the key terms left out, as the definition writes th
 Accents on Latin letters are optional (cafe matches café), while marks in other scripts
 must match (е is not ё). Chinese and Japanese text is not split into words, so only whole
 matching words count there.
+A definition made only of short or common words ("an ox", "to go") is compared on those
+words. A card whose definition has no words at all is skipped without recording a review;
+study it with `MODE MECH OFF`.
 
 ## Your data
 

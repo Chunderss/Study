@@ -3,13 +3,18 @@
 Interface: score(user_answer, reference) -> JudgeResult. The judge gives the
 verdict (passed) and words its feedback from the same rule, so the two cannot
 disagree; the study session records a pass as Review.GOOD and anything else as
-Review.AGAIN.
+Review.AGAIN. A reference the judge cannot grade (gradable=False) is not
+recorded at all.
 
 KeywordJudge (MVP): tokenises both texts, drops stopwords, stems crudely, and
 computes the share of the reference's keywords that the user recalled; an
 answer passes with at least PASS_SCORE of them. This is deterministic,
 instant, and needs no downloads — good enough to gate promotion while the
 semantic judges (embeddings/ollama) remain optional.
+
+Keywords leave out stopwords and words of one or two letters. A definition
+with nothing else is compared on its short words ("an ox"), then on all its
+words; one with no words at all cannot be graded.
 
 Both texts are read as Unicode words after NFKC normalisation and case
 folding. Accents on Latin letters are optional (cafe = café); marks in other
@@ -59,12 +64,16 @@ def _plain(word: str) -> str:
     return unicodedata.normalize("NFC", "".join(out))
 
 
-def _keywords(text: str) -> Dict[str, str]:
-    """Keywords in order: compared form -> the word as first written."""
+def _keywords(text: str, tier: int) -> Dict[str, str]:
+    """Keywords in order: compared form -> the word as first written.
+
+    Tier 1 leaves out stopwords and words of 1-2 letters, tier 2 keeps the
+    short words, and tier 3 keeps every word.
+    """
     out: Dict[str, str] = {}
     for w in _scan(unicodedata.normalize("NFKC", text or "")):
         low = _plain(w.casefold())
-        if low in _STOP or len(low) <= 2:
+        if (tier < 3 and low in _STOP) or (tier < 2 and len(low) <= 2):
             continue
         out.setdefault(_stem(low), w)
     return out
@@ -83,6 +92,7 @@ class JudgeResult:
     feedback: str         # states the verdict
     missed: Set[str]      # reference keywords not mentioned, as written
     passed: bool          # the verdict the study session records
+    gradable: bool = True  # False: the reference has no words to compare with
 
 
 class Judge(ABC):
@@ -99,13 +109,15 @@ class KeywordJudge(Judge):
     name = "Keyword overlap (offline, no download)"
 
     def score(self, user_answer: str, reference: str) -> JudgeResult:
-        ref = _keywords(reference)
-        ans = _keywords(user_answer)
-        if not ref:
-            # No content words to match (rare) -> accept any non-empty answer.
-            ok = bool(ans)
-            return JudgeResult(1.0 if ok else 0.0,
-                               "Accepted." if ok else "Empty answer.", set(), passed=ok)
+        for tier in (1, 2, 3):
+            ref = _keywords(reference, tier)
+            if ref:
+                break
+        else:
+            return JudgeResult(0.0, "This card's definition has no words to compare "
+                                    "with, so it cannot be graded here.", set(),
+                               passed=False, gradable=False)
+        ans = _keywords(user_answer, tier)
         missed = [word for key, word in ref.items() if key not in ans]
         hit = len(ref) - len(missed)
         passed = hit / len(ref) >= PASS_SCORE

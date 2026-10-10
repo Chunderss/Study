@@ -57,3 +57,34 @@ def test_an_unrelated_answer_does_not_pass_a_definition_in_another_script():
     result = judge.score("a big elephant", "мимолётный кратковременный")
     assert result.score == 0.0 and not result.passed
     assert result.feedback.endswith("Key terms not mentioned: мимолётный, кратковременный.")
+
+
+@pytest.mark.parametrize("answer, reference", [
+    ("an ox", "an ox"),
+    ("ox", "an ox"),
+    ("go", "to go"),
+    ("no", "no"),
+    ("not any", "not any"),
+])
+def test_a_short_definition_is_compared_on_its_short_words(answer, reference):
+    assert judge.score(answer, reference).score == 1.0
+
+
+@pytest.mark.parametrize("answer, reference", [
+    ("a big elephant", "an ox"),
+    ("anything at all", "to go"),
+    ("the", "an ox"),
+    ("yes", "no"),
+])
+def test_an_unrelated_answer_does_not_pass_a_short_definition(answer, reference):
+    result = judge.score(answer, reference)
+    assert result.score == 0.0 and not result.passed
+    assert result.feedback.startswith("Not accepted")
+
+
+@pytest.mark.parametrize("reference", ["—", "?", "...", ""])
+def test_a_definition_without_words_cannot_be_graded(reference):
+    result = judge.score("anything", reference)
+    assert result.score == 0.0 and not result.passed
+    assert "cannot be graded" in result.feedback
+    assert not result.gradable

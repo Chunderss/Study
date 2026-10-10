@@ -193,6 +193,27 @@ NEGATION_TABLE = [
     ("doesnt last", "not lasting", True),
     ("lasting", "not lasting", False),
     ("without waiting", "without delay", True),
+    # a definition that says "not" with a word such as "impossible"
+    ("can't forget", "impossible to forget", True),
+    ("you can't forget it", "impossible to forget", True),
+    ("impossible to forget", "can't forget", True),
+    ("cannot be cured", "incapable of being cured", True),
+    ("incapable of being cured", "cannot be cured", True),
+    ("cannot be avoided or prevented", "incapable of being avoided or prevented", True),
+    ("cannot read", "an inability to read", True),
+    ("without color", "deprived of color", True),
+    ("lacking curiosity", "deficient in curiosity", True),
+    ("lacking vitamins", "a deficiency of vitamins", True),
+    ("lack of water", "a shortage of water", True),
+    ("lack of hearing", "loss of hearing", True),
+    ("do not harm", "refrain from harming", True),
+    ("do not vote", "abstain from voting", True),
+    ("not attend school", "failure to attend (especially school)", True),
+    ("not taxed", "exempt from tax", True),
+    ("cant be cured", "cannot be cured", True),
+    ("wont last", "not lasting", True),
+    ("cured", "cannot be cured", False),
+    ("lasting", "won't last", False),
 ]
 
 

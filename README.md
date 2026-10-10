@@ -132,8 +132,10 @@ when it contains at least half of the key terms of the card's definition. The fe
 states the verdict and names the key terms left out, as the definition writes them.
 Regular English inflections match (make, makes, making; story, stories), irregular ones
 do not (made). A key term negated differently from the definition earns no credit
-("not permanent" for "permanent"). A "not" applies to the next word only, so a reversed
-answer that keeps the other key terms can still pass.
+("not permanent" for "permanent"). A negation said with another word is the same
+negation ("can't forget" for "impossible to forget", "without color" for "deprived of
+color"). A "not" applies to the next word only, so a reversed answer that keeps the
+other key terms can still pass.
 Accents on Latin letters are optional (cafe matches café), while marks in other scripts
 must match (е is not ё). Chinese and Japanese text is not split into words, so only whole
 matching words count there.

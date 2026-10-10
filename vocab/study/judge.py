@@ -49,12 +49,17 @@ _NEGATORS = {
     "lack", "lacks", "lacked", "lacking", "devoid", "absence", "absent",
 }
 # Words that can carry a clause's "not" without standing right before the word
-# it applies to ("missing school", "sugar-free"). They only keep a keyword
-# from counting as negated differently; they never take credit away.
+# it applies to ("missing school", "sugar-free", "impossible to forget"). They
+# only keep a keyword from counting as negated differently; they never take
+# credit away. "cant" and "wont" are words too, so they are not read as negators.
 _NEGATIVE = _NEGATORS | {
     "missing", "free", "unable", "insufficient", "nothing", "none", "nobody",
-    "nowhere", "fail", "fails", "failed", "failing", "refuse", "refuses",
-    "refused", "refusing", "avoid", "avoids", "avoided", "avoiding",
+    "nowhere", "fail", "fails", "failed", "failing", "failure", "failures",
+    "refuse", "refuses", "refused", "refusing", "avoid", "avoids", "avoided",
+    "avoiding", "impossible", "incapable", "inability", "deprived",
+    "deficient", "deficiency", "deficiencies", "shortage", "shortages", "loss",
+    "losses", "refrain", "refrains", "refrained", "refraining", "abstain",
+    "abstains", "abstained", "abstaining", "exempt", "exempted", "cant", "wont",
 }
 _CONTRACTIONS = [
     (re.compile(r"\bcan['’]t\b", re.IGNORECASE), "cannot"),
@@ -232,8 +237,9 @@ def _negation_matches(ref: _Word, ans: _Word) -> bool:
     "not" somewhere in the clause, its exact place is not compared: English
     puts it in different places for the same meaning ("having no money",
     "doesn't have money"; "no longer in use", "not in use anymore"). Words
-    such as "missing" and "free" count as saying "not" there ("missing
-    school" for "absent from school").
+    such as "missing", "free" and "impossible" count as saying "not" there
+    ("missing school" for "absent from school", "can't forget" for
+    "impossible to forget").
     """
     if ref.negated and not ans.negative_clause:
         return False

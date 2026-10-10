@@ -260,3 +260,30 @@ def test_a_space_typed_for_the_apostrophe_reads_as_not():
     assert judge.score("moving", "isn t moving").score == 0.0
     # only before a word or the end of a clause, so an initial stays a name
     assert judge.score("Don T. Smith", "Don Smith").score == 1.0
+
+
+@pytest.mark.parametrize("answer, reference", [
+    ("a hundred years", "a period of 100 years"),
+    ("a thousand years", "a span of 1000 years"),
+    ("the hundredth anniversary", "the 100th anniversary (or the celebration of it)"),
+    ("an architect from America", "American architect (1759-1828)"),
+])
+def test_numbers_are_key_terms_only_when_the_definition_has_no_others(answer, reference):
+    result = judge.score(answer, reference)
+    assert result.passed
+    assert not any(ch.isdigit() for word in result.missed for ch in word)
+    assert judge.score("1984", "in 1984").score == 1.0
+    assert judge.score("1985", "in 1984").score == 0.0
+
+
+MILE = "a unit of length equal to 1760 yards or 5280 feet; exactly 1609.344 meters"
+
+
+def test_commas_and_points_between_digits_do_not_split_a_number():
+    assert judge.score("1760", "1,760").score == 1.0
+    assert judge.score("1,760", "1760").score == 1.0
+    assert judge.score("3,785", "3.785").score == 1.0
+    legs = judge.score("having 1000 legs", "having 1,000 legs")
+    assert legs.score == 1.0 and legs.missed == set()        # no "000"
+    mile = judge.score("a unit of length equal to 1760 yards", MILE)
+    assert mile.passed and mile.missed == {"feet", "exactly", "meters"}

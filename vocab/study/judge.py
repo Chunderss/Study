@@ -12,9 +12,11 @@ the user recalled; an answer passes with at least PASS_SCORE of them. This is
 deterministic, instant, and needs no downloads — good enough to gate promotion
 while the semantic judges (embeddings/ollama) remain optional.
 
-Keywords leave out stopwords and words of one or two letters. A definition
-with nothing else is compared on its short words ("an ox"), then on all its
-words; one with no words at all cannot be graded.
+Keywords leave out stopwords, words of one or two letters and numbers
+(words that start with a digit: 1984, 100th). A definition with nothing else
+is compared on its short words and numbers ("an ox", "1984"), then on all its
+words; one with no words at all cannot be graded. Commas and points between
+digits do not split a number (1,760 = 1760).
 
 Both texts are read as Unicode words after NFKC normalisation and case
 folding. Accents on Latin letters are optional (cafe = café); marks in other
@@ -76,6 +78,8 @@ _CONTRACTIONS = [
     (re.compile(r"\b(do|does|did|is|are|was|were|has|have|had|could|should|would"
                 r"|must|need)nt\b", re.IGNORECASE), r"\1 not"),
 ]
+# Commas and points between digits: "1,760" and "1609.344" are one number each.
+_DIGIT_SEPARATOR = re.compile(r"(?<=\d)[,.](?=\d)")
 # A "not" reaches no further than its clause, which ends at punctuation,
 # dashes, slashes and "but".
 _CLAUSE = re.compile(r"[,;:.!?()\[\]{}\"“”«»/—–―]|\s-+\s|\bbut\b", re.IGNORECASE)
@@ -209,10 +213,10 @@ class _Word:
 def _words(text: str, tier: int) -> List[_Word]:
     """Keywords of text, in order.
 
-    Tier 1 leaves out stopwords and words of 1-2 letters, tier 2 keeps the
-    short words, and tier 3 keeps every word.
+    Tier 1 leaves out stopwords, numbers and words of 1-2 letters, tier 2
+    keeps the short words and numbers, and tier 3 keeps every word.
     """
-    text = unicodedata.normalize("NFKC", text or "")
+    text = _DIGIT_SEPARATOR.sub("", unicodedata.normalize("NFKC", text or ""))
     for pattern, replacement in _CONTRACTIONS:
         text = pattern.sub(replacement, text)
     out: List[_Word] = []
@@ -227,7 +231,7 @@ def _words(text: str, tier: int) -> List[_Word]:
                 pending = True
             elif not stop:   # stopwords pass a negation on ("not a ...")
                 negated, pending = pending, False
-            if stop or (tier < 2 and len(low) <= 2):
+            if stop or (tier < 2 and (len(low) <= 2 or low[0].isdigit())):
                 continue
             out.append(_Word(_stem(low), w, negated, any(j != i for j in negative)))
     return out

@@ -182,6 +182,13 @@ class PdfViewer(QWidget):
         lay.addLayout(actions)
         lay.addWidget(self._view, 1)
 
+        # A page requested before the view has its final size (Source, a saved
+        # position) is applied again whenever layout changes the scroll range,
+        # until the user scrolls.
+        self._pending_page = None
+        bar = self._view.verticalScrollBar()
+        bar.rangeChanged.connect(self._reapply_page)
+        bar.actionTriggered.connect(self._user_scrolled)
         self._doc.statusChanged.connect(self._update_info)
         self._doc.statusChanged.connect(self._restore_when_ready)
         self._update_info()
@@ -207,19 +214,37 @@ class PdfViewer(QWidget):
             page = int(saved.get("page", 0) or 0)
         except (TypeError, ValueError):
             page = 0
-        if page > 0:
-            try:
-                nav = self._view.pageNavigator()
-                from PySide6.QtCore import QPointF
-                nav.jump(min(page, self._doc.pageCount() - 1), QPointF(0, 0))
-            except Exception:
-                pass
+        if page > 0 and self._pending_page is None:  # a Source target wins
+            self._jump(min(page, self._doc.pageCount() - 1))
+
+    def _jump(self, page):
+        from PySide6.QtCore import QPointF
+        self._pending_page = page
+        self._view.pageNavigator().jump(page, QPointF(0, 0))
+
+    def _reapply_page(self, *_):
+        if self._pending_page is not None:
+            # Let the layout finish first; it resets the scroll position.
+            QTimer.singleShot(0, self, self._apply_pending_page)
+
+    def _apply_pending_page(self):
+        if self._pending_page is not None and isValid(self._view):
+            from PySide6.QtCore import QPointF
+            self._view.pageNavigator().jump(self._pending_page, QPointF(0, 0))
+
+    def _user_scrolled(self, _action):
+        self._pending_page = None
+
+    def _current_page(self):
+        if self._pending_page is not None:
+            return self._pending_page
+        return max(0, self._view.pageNavigator().currentPage())
 
     def save_position(self) -> None:
         if not (self._storage and self._module):
             return
         try:
-            page = self._view.pageNavigator().currentPage()
+            page = self._current_page()
         except Exception:
             page = 0
         try:
@@ -234,8 +259,7 @@ class PdfViewer(QWidget):
         self._back.setText(text)
 
     def source_location(self):
-        return {"kind": "pdf", "filename": self._fname,
-                "page": max(0, self._view.pageNavigator().currentPage())}
+        return {"kind": "pdf", "filename": self._fname, "page": self._current_page()}
 
     def _capture(self):
         if self.ctx:
@@ -244,9 +268,7 @@ class PdfViewer(QWidget):
             self.ctx.capture_requested.emit(self._module or "", quote, source)
 
     def go_to(self, source):
-        from PySide6.QtCore import QPointF
-        page = max(0, min(int(source.get("page", 0)), self._doc.pageCount() - 1))
-        self._view.pageNavigator().jump(page, QPointF(0, 0))
+        self._jump(max(0, min(int(source.get("page", 0)), self._doc.pageCount() - 1)))
 
     def closeEvent(self, e):
         _save_on_close(self)

@@ -138,3 +138,40 @@ def test_a_zoom_step_never_goes_the_wrong_way(window, monkeypatch):
     viewer._zoom(0.8)
     assert viewer._view.zoomFactor() == pytest.approx(0.05)
 
+
+def aligned(viewer):
+    """Whether the view shows its current page from the top."""
+    from PySide6.QtCore import QPointF
+    bar, nav = viewer._view.verticalScrollBar(), viewer._view.pageNavigator()
+    value, page_index = bar.value(), nav.currentPage()
+    nav.jump(page_index - 1 if page_index else page_index + 1, QPointF(0, 0))
+    nav.jump(page_index, QPointF(0, 0))
+    top = bar.value()
+    bar.setValue(value)
+    return value == top
+
+
+def test_the_requested_page_is_shown_from_its_top_after_relayout(window, qt):
+    window.resize(1200, 700)
+    viewer = open_source(window)
+    settle(qt)
+    assert page(viewer) == 1 and aligned(viewer)
+    window.resize(1000, 700)
+    settle(qt)
+    assert page(viewer) == 1 and aligned(viewer)
+    viewer._zoom(0.8)
+    settle(qt)
+    assert page(viewer) == 1 and aligned(viewer)
+
+
+def test_scroll_here_from_the_scrollbar_menu_ends_the_pending_page(window, qt):
+    from PySide6.QtCore import QPoint, QTimer
+    from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtWidgets import QApplication
+    viewer = open_source(window)
+    settle(qt)
+    bar = viewer._view.verticalScrollBar()
+    QTimer.singleShot(50, lambda: QApplication.activePopupWidget() and QApplication.activePopupWidget().close())
+    point = QPoint(2, bar.height() - 2)
+    QApplication.sendEvent(bar, QContextMenuEvent(QContextMenuEvent.Mouse, point, bar.mapToGlobal(point)))
+    assert viewer._pending_page is None

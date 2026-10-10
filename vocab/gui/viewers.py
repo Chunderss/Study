@@ -225,6 +225,7 @@ class PdfViewer(QWidget):
         bar = self._view.verticalScrollBar()
         bar.rangeChanged.connect(self._reapply_page)
         bar.actionTriggered.connect(self._user_scrolled)
+        bar.installEventFilter(self)  # its menu ("Scroll here") moves without an action
         self._doc.statusChanged.connect(self._update_info)
         self._doc.statusChanged.connect(self._restore_when_ready)
         self._update_info()
@@ -258,9 +259,17 @@ class PdfViewer(QWidget):
             self._jump(min(page, self._doc.pageCount() - 1))
 
     def _jump(self, page):
-        from PySide6.QtCore import QPointF
         self._pending_page = page
-        self._view.pageNavigator().jump(page, QPointF(0, 0))
+        self._show_page(page)
+
+    def _show_page(self, page):
+        from PySide6.QtCore import QPointF
+        nav = self._view.pageNavigator()
+        if nav.currentPage() == page and self._doc.pageCount() > 1:
+            # QPdfView scrolls only when the page changes: step away first, so
+            # the page is shown from its top after a relayout too.
+            nav.jump(page - 1 if page > 0 else page + 1, QPointF(0, 0))
+        nav.jump(page, QPointF(0, 0))
 
     def _reapply_page(self, *_):
         if self._pending_page is not None:
@@ -269,11 +278,15 @@ class PdfViewer(QWidget):
 
     def _apply_pending_page(self):
         if self._pending_page is not None and isValid(self._view):
-            from PySide6.QtCore import QPointF
-            self._view.pageNavigator().jump(self._pending_page, QPointF(0, 0))
+            self._show_page(self._pending_page)
 
     def _user_scrolled(self, _action):
         self._pending_page = None
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.ContextMenu and watched is self._view.verticalScrollBar():
+            self._pending_page = None
+        return False
 
     def _current_page(self):
         if self._pending_page is not None:

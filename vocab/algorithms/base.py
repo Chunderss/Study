@@ -27,11 +27,11 @@ class Scheduler(ABC):
     def review(self, card: dict, outcome: Review, now_ts: float) -> dict:
         """Return the updated card after a review outcome."""
 
-    @abstractmethod
     def card_problem(self, card) -> Optional[str]:
         """Why ``card`` cannot be used as this scheduler's progress, or None."""
         return None if isinstance(card, dict) else "progress is not an object"
 
+    @abstractmethod
     def due_order(self, cards: Dict[str, dict], now_ts: float) -> List[str]:
         """Return keys of due cards, in the order they should be studied."""
 

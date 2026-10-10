@@ -119,3 +119,23 @@ def test_failed_publication_leaves_nothing_and_a_retry_works(app, tmp_path, monk
     app.cmd_import(str(bundle), "Copy", True)
     app.cmd_create("Fresh")
     assert app.storage.load_stats("Copy")["ephemeral"]["reps"] == 4
+
+
+def test_schedulers_keep_their_contract():
+    from vocab.algorithms.base import Scheduler
+
+    class Written(Scheduler):  # the four required methods, no card_problem
+        def new_card(self): return {}
+        def is_due(self, card, now_ts): return True
+        def review(self, card, outcome, now_ts): return card
+        def due_order(self, cards, now_ts): return list(cards)
+
+    assert Written().card_problem({}) is None and Written().card_problem(5)
+
+    class Unfinished(Scheduler):
+        def new_card(self): return {}
+        def is_due(self, card, now_ts): return True
+        def review(self, card, outcome, now_ts): return card
+
+    with pytest.raises(TypeError, match="due_order"):
+        Unfinished()

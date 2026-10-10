@@ -18,7 +18,7 @@ from ..core.models import Sense, Word
 from ..core.paths import InvalidListName, get_paths, sanitize_list_name, sanitize_module_name
 from ..core.locking import write_lock
 from ..core.storage import (ListExists, ListNotFound, ModuleExists, ModuleNotFound, Storage,
-                             in_transaction)
+                             full_path, in_transaction)
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
 from ..dictionaries.base import SENSE_LIMIT
 from .. import nltk_resources
@@ -548,7 +548,7 @@ class App:
         name = self.storage.import_list(src, new_name=new_name, with_stats=with_stats,
                                         card_problem=self.scheduler.card_problem)
         prog = "imported progress" if with_stats else "fresh progress"
-        return f"Imported module '{name}' ({prog}). USE it to start."
+        return f"Imported module '{name}' from {full_path(src)} ({prog}). USE it to start."
 
     # ---- stats ----------------------------------------------------------
     def vocabulary_cards(self, name: str):

@@ -79,6 +79,8 @@ SHARING
       --stats may go anywhere; the name after AS may be several words.
       Windows paths work as typed; quote a path that contains spaces:
         IMPORT "C:\Users\Pat Smith\book.json" as The Great Gatsby
+      A relative path such as book.json is relative to the folder the
+      program was started in; the reply shows the full path.
 
 OTHER
   DOCTOR                     diagnose setup (runtime, dictionaries, POS tagger)

@@ -181,6 +181,15 @@ def _read_json_object(path: Path, default):
     return data
 
 
+def full_path(path) -> Path:
+    """A path as replies show it. A relative path is made absolute, and
+    resolved, against the working directory, which depends on how the program
+    was started. A path given in full is kept as given: resolving it would show
+    a mapped drive as its network name, or a linked folder as its target."""
+    path = Path(path)
+    return path if path.is_absolute() else path.resolve()
+
+
 class ModuleExists(Exception):
     pass
 
@@ -695,13 +704,23 @@ class Storage:
 
     # ---- import / export (vocab bundle) --------------------------------
     def export_list(self, name: str, dest: Path, include_stats: bool = False) -> Path:
-        """Write a portable JSON bundle of a module's vocab for sharing."""
+        """Write a portable JSON bundle of a module's vocab for sharing.
+
+        Returns, and names in a write error, the full path (see full_path):
+        a relative ``dest`` is relative to the working directory.
+        """
         wl = self.load_words(name)
         bundle = {"words": wl.to_dict()}
         if include_stats:
             bundle["stats"] = self.load_stats(name)
-        _atomic_write(Path(dest), bundle)
-        return Path(dest)
+        try:
+            _atomic_write(Path(dest), bundle)
+        except OSError as error:
+            raise OSError(f"Could not write {full_path(dest)}: "
+                          f"{error.strerror or error}") from error
+        # Written to the path as given, as before (a destination that is a link
+        # is replaced, not its target), and resolved for the reply only after.
+        return full_path(dest)
 
     def import_list(self, src: Path, new_name: str | None = None,
                     with_stats: bool = False, card_problem=None) -> str:
@@ -711,13 +730,14 @@ class Storage:
         once complete, so a rejected or failed import leaves nothing behind.
         ``card_problem`` is the scheduler's progress check.
         """
-        raw = _read_json(Path(src), None)  # the source file is only read
+        path = full_path(src)  # errors name a relative file in full
+        raw = _read_json(path, None)  # the source file is only read
         if raw is None:
-            raise ModuleNotFound(f"Import file not found: {src}")
+            raise ModuleNotFound(f"Import file not found: {path}")
         try:
             wl, stats = parse_import(raw, with_stats=with_stats, card_problem=card_problem)
         except ValueError as error:
-            raise ValueError(f"Cannot import {src}: {error}. Nothing was imported.") from None
+            raise ValueError(f"Cannot import {path}: {error}. Nothing was imported.") from None
         wl.name = sanitize_module_name(new_name or wl.name or Path(src).stem)
         with self.transaction():
             if self.exists(wl.name):

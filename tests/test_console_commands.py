@@ -126,3 +126,16 @@ def test_console_quoted_note_name(window):
     log = console(window, 'NOTE ADD "My Note"')
     assert "'My Note' already exists" in log
     assert window.app.storage.load_note("Book", "My Note") == "first line"
+
+
+def test_console_reports_the_full_path_of_a_relative_file(window, tmp_path, monkeypatch):
+    started = tmp_path / "app folder"  # the packaged app starts in its own folder
+    started.mkdir()
+    monkeypatch.chdir(started)
+    bundle = started / "book.json"
+    assert f"Exported 'Book' -> {bundle}\n" in console(window, "EXPORT Book book.json")
+    assert bundle.is_file()
+    log = console(window, "IMPORT book.json as Copy")
+    assert f"Imported module 'Copy' from {bundle} (fresh progress)" in log
+    log = console(window, "IMPORT gone.json as Other")
+    assert f"! Import file not found: {started / 'gone.json'}" in log

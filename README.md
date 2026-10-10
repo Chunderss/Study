@@ -200,6 +200,11 @@ Vocabulary sharing remains available through Console commands:
 Without `--stats`, an import starts with fresh progress.
 Windows paths work as typed (backslashes are ordinary characters). Put double quotes
 around a name or path that contains spaces: `IMPORT "C:\Users\Pat Smith\book.json" as NewBook`.
+A relative path such as `book.json` is relative to the folder the program was started
+in, and the reply shows the full path of the file written or read. On Windows, starting
+VocabStudy.exe from Explorer makes that the application folder, which you may delete or
+replace when you install a new build, so give a full path to keep an export elsewhere:
+`EXPORT Book "C:\Users\Pat Smith\Documents\book.json"`.
 These vocabulary exports do not include captures or notes. Back up the complete data
 folder to preserve books, notes, recovery copies, and concept reviews together.
 

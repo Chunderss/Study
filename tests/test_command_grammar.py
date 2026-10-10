@@ -7,6 +7,7 @@ at the start of an argument groups it.
 """
 import io
 import json
+import os
 import re
 import sys
 
@@ -363,3 +364,37 @@ def test_bodyless_note_add_keeps_a_windows_case_alias_and_a_legacy_name(app, mon
     assert "'Double.md' already exists" in run(app, "NOTE ADD Double.md")
     assert (notes_dir / "One.md").read_text(encoding="utf-8") == "original"
     assert (notes_dir / "Double.md.md").read_text(encoding="utf-8") == "legacy text"
+
+
+def test_relative_paths_are_reported_in_full(app, tmp_path, monkeypatch):
+    # A relative name is relative to the working directory, which depends on
+    # how the program was started (from Explorer, the app's own folder, which
+    # an update may replace), so every reply names the full path.
+    cwd = tmp_path / "started here"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    app.cmd_add("ephemeral", manual_def="lasting a short time")
+    assert run(app, "EXPORT Book book.json") == f"Exported 'Book' -> {cwd / 'book.json'}"
+    assert (cwd / "book.json").is_file()
+    assert run(app, "EXPORT Book ../up.json") == f"Exported 'Book' -> {tmp_path / 'up.json'}"
+    assert (tmp_path / "up.json").is_file()
+    assert f"from {cwd / 'book.json'} (fresh progress)" in run(app, "IMPORT book.json as Copy")
+    assert definition(app, "ephemeral", "Copy") == "lasting a short time"
+    (cwd / "broken.json").write_text("{not json", encoding="utf-8")
+    (cwd / "other.json").write_text('{"note": 1}', encoding="utf-8")
+    (cwd / "folder").mkdir()
+    out = loop(app, "IMPORT missing.json", "IMPORT broken.json", "IMPORT other.json",
+               "EXPORT Book book.json/x.json", "EXPORT Book folder")
+    assert f"! Import file not found: {cwd / 'missing.json'}\n" in out
+    assert f"! Could not read {cwd / 'broken.json'}: " in out
+    assert f"! Cannot import {cwd / 'other.json'}: " in out
+    assert f"! Could not write {cwd / 'book.json' / 'x.json'}: " in out  # book.json is a file
+    assert f"! Could not write {cwd / 'folder'}: " in out  # not a temporary file's name
+    assert set(app.storage.list_names()) == {"Book", "Copy"}
+    if os.name != "nt":  # a path typed in full is shown as typed, not resolved
+        (tmp_path / "real").mkdir()
+        (tmp_path / "linked").symlink_to(tmp_path / "real", target_is_directory=True)
+        typed = tmp_path / "linked" / "book.json"
+        assert run(app, f'EXPORT Book "{typed}"') == f"Exported 'Book' -> {typed}"
+        assert (tmp_path / "real" / "book.json").is_file()
+        assert f"from {typed} (fresh" in run(app, f'IMPORT "{typed}" as Linked')

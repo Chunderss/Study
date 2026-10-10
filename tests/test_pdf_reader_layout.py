@@ -67,3 +67,54 @@ def test_scrolling_away_is_never_undone(window, qt):
     window.resize(700, 600)
     settle(qt)
     assert page(viewer) == 0 and viewer.source_location()["page"] == 0
+
+
+def reopen(window, viewer):
+    window.workspace.set_focused_component("documents")  # saves the place
+    return window._open_viewer(viewer.path)
+
+
+def mode(viewer):
+    return viewer._view.zoomMode().name
+
+
+def test_fit_width_and_custom_zoom_are_remembered(window, qt):
+    make_pdf(window)
+    path = str(window.app.paths.documents_dir("Book") / "book.pdf")
+    viewer = window._open_viewer(path)
+    assert mode(viewer) == "FitToWidth"
+    viewer = reopen(window, viewer)
+    assert window.app.storage.load_reading_pos("Book", "book.pdf") == {"page": 0, "zoom_mode": "fit_width"}
+    window.resize(600, 700)  # a narrower pane: still fits its width
+    settle(qt)
+    assert mode(viewer) == "FitToWidth"
+    viewer._zoom(1.25)
+    factor = viewer._view.zoomFactor()
+    viewer = reopen(window, viewer)
+    assert mode(viewer) == "Custom" and viewer._view.zoomFactor() == pytest.approx(factor)
+    viewer._fit()
+    viewer = reopen(window, viewer)
+    assert mode(viewer) == "FitToWidth"
+
+
+@pytest.mark.parametrize("saved, factor", [({"page": 0, "zoom": 1.5}, 1.5), ({"zoom": 50}, 5.0),
+                                           ({"zoom": 0.001}, 0.1)])
+def test_older_records_and_extreme_zoom_open_as_custom(window, saved, factor):
+    make_pdf(window)
+    window.app.storage.save_reading_pos("Book", "book.pdf", saved)
+    viewer = window._open_viewer(str(window.app.paths.documents_dir("Book") / "book.pdf"))
+    assert mode(viewer) == "Custom" and viewer._view.zoomFactor() == pytest.approx(factor)
+
+
+def test_zooming_in_from_fit_width_enlarges_the_page(window, qt):
+    window.resize(1600, 900)
+    make_pdf(window)
+    viewer = window._open_viewer(str(window.app.paths.documents_dir("Book") / "book.pdf"))
+    settle(qt)
+    shown = viewer._effective_zoom()
+    assert shown > 1.3  # a wide pane shows the page above 100%
+    assert viewer._view.horizontalScrollBar().maximum() == 0  # it fits
+    viewer._zoom(1.25)
+    settle(qt)
+    assert viewer._view.zoomFactor() == pytest.approx(shown * 1.25)
+    assert viewer._view.horizontalScrollBar().maximum() > 0  # now wider than the pane

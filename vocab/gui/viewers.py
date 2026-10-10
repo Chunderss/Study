@@ -134,6 +134,8 @@ class PdfViewer(QWidget):
     """Native paged PDF viewer via QtPdf."""
 
     back_requested = Signal()
+    ZOOM_MIN = 0.1
+    ZOOM_MAX = 5.0
 
     def __init__(self, path: str, ctx=None, parent=None, module=None):
         super().__init__(parent)
@@ -204,10 +206,13 @@ class PdfViewer(QWidget):
             saved = self._storage.load_reading_pos(self._module, self._fname)
         except Exception:
             saved = {}
-        if "zoom" in saved:
+        # Fit width is saved as a mode; a number (also in older records) is a
+        # custom zoom.
+        if saved.get("zoom_mode") != "fit_width" and "zoom" in saved:
             try:
+                zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, float(saved["zoom"])))
                 self._view.setZoomMode(self._view.ZoomMode.Custom)
-                self._view.setZoomFactor(float(saved["zoom"]))
+                self._view.setZoomFactor(zoom)
             except (TypeError, ValueError):
                 pass
         try:
@@ -247,13 +252,13 @@ class PdfViewer(QWidget):
             page = self._current_page()
         except Exception:
             page = 0
-        try:
-            zoom = float(self._view.zoomFactor())
-        except Exception:
-            zoom = 1.0
+        position = {"page": int(page)}
+        if self._view.zoomMode() == self._view.ZoomMode.FitToWidth:
+            position["zoom_mode"] = "fit_width"  # zoomFactor() is stale in this mode
+        else:
+            position["zoom"] = float(self._view.zoomFactor())
         # A failure is the caller's to report: the reader stays open to retry.
-        self._storage.save_reading_pos(self._module, self._fname,
-                                       {"page": int(page), "zoom": zoom})
+        self._storage.save_reading_pos(self._module, self._fname, position)
 
     def set_back_label(self, text):
         self._back.setText(text)
@@ -287,9 +292,24 @@ class PdfViewer(QWidget):
         n = self._doc.pageCount()
         self._info.setText(f"{os.path.basename(self.path)}  ·  {n} page(s)")
 
+    def _effective_zoom(self) -> float:
+        """The scale pages are shown at. In Fit width mode zoomFactor() keeps
+        its last custom value, so compute the scale as QPdfView lays it out."""
+        view = self._view
+        if view.zoomMode() == view.ZoomMode.Custom:
+            return view.zoomFactor()
+        from PySide6.QtGui import QGuiApplication
+        screen = QGuiApplication.primaryScreen()
+        resolution = (screen.logicalDotsPerInch() if screen else 72.0) / 72.0
+        width = self._doc.pagePointSize(self._current_page()).width() * resolution
+        margins = view.documentMargins()
+        available = view.viewport().width() - margins.left() - margins.right()
+        return available / width if width > 0 and available > 0 else view.zoomFactor()
+
     def _zoom(self, factor: float):
+        zoom = self._effective_zoom() * factor
         self._view.setZoomMode(self._view.ZoomMode.Custom)
-        self._view.setZoomFactor(max(0.1, min(5.0, self._view.zoomFactor() * factor)))
+        self._view.setZoomFactor(max(self.ZOOM_MIN, min(self.ZOOM_MAX, zoom)))
 
     def _fit(self):
         from PySide6.QtPdfWidgets import QPdfView

@@ -52,6 +52,19 @@ class DataFileError(ValueError):
         self.reason = str(reason)
 
 
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 def _read_json(path: Path, default):
     if not path.exists():
         return default
@@ -251,6 +264,23 @@ class Storage:
 
     def save_words(self, wl: WordList) -> None:
         _atomic_write(self.paths.words_file(wl.name), wl.to_dict())
+
+    @in_transaction
+    def save_words_and_stats(self, wl: WordList, stats: Dict[str, dict]) -> None:
+        """Write both files of one vocabulary change. If the progress write
+        fails, words.json gets its previous bytes back, so a module never
+        keeps half of a change."""
+        words = self.paths.words_file(wl.name)
+        previous = words.read_bytes() if words.exists() else None
+        self.save_words(wl)
+        try:
+            self.save_stats(wl.name, stats)
+        except BaseException:
+            if previous is None:
+                words.unlink(missing_ok=True)
+            else:
+                _atomic_write_bytes(words, previous)
+            raise
 
     # ---- stats (scheduler state) ---------------------------------------
     def load_stats(self, name: str) -> Dict[str, dict]:

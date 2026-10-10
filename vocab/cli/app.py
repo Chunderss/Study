@@ -283,6 +283,8 @@ class App:
         if not word_clean or not senses or not senses[0].definition.strip():
             raise ValueError("A word and a non-empty definition are required.")
         wl = self.storage.load_words(target)
+        # Read (and validate) progress before changing anything.
+        stats = self.storage.load_stats(target)
         existed = wl.has(word_clean)
         if existed and dict_id != "manual":
             kept = wl.words[wl.normalize_key(word_clean)].word
@@ -295,11 +297,9 @@ class App:
                              "being looked up, so the current version was kept.")
         w = Word(word=word_clean, dictionary=dict_id, senses=senses)
         wl.add(w)
-        self.storage.save_words(wl)
         # give the new word a fresh scheduler card
-        stats = self.storage.load_stats(target)
         stats.setdefault(wl.normalize_key(word_clean), self.scheduler.new_card())
-        self.storage.save_stats(target, stats)
+        self.storage.save_words_and_stats(wl, stats)
         verb = "Updated" if existed else "Added"
         msg = (f"{verb} '{word_clean}' -> {target}  [{dict_id}]\n"
                f"    {senses[0].pos + ': ' if senses[0].pos else ''}{senses[0].definition[:100]}")
@@ -309,12 +309,11 @@ class App:
     def cmd_delete_word(self, word: str, target: Optional[str] = None) -> str:
         target = self._resolve_target(target)
         wl = self.storage.load_words(target)
+        stats = self.storage.load_stats(target)  # validated before any change
         if not wl.remove(word):
             raise ValueError(f"'{word}' is not in '{target}'.")
-        self.storage.save_words(wl)
-        stats = self.storage.load_stats(target)
         stats.pop(wl.normalize_key(word), None)
-        self.storage.save_stats(target, stats)
+        self.storage.save_words_and_stats(wl, stats)
         return f"Removed '{word.strip()}' from '{target}'."
 
     # ---- disambiguation (in-context sense selection) -------------------

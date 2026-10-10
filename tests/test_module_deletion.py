@@ -74,6 +74,31 @@ def test_leftover_names_are_never_listed(app):
     assert app.storage.unsupported_module_dirs() == []
 
 
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_a_linked_module_is_not_deleted_through_its_link(app, tmp_path):
+    outside = tmp_path / "elsewhere"
+    app.paths.module_dir("Book").rename(outside)
+    app.paths.module_dir("Book").symlink_to(outside, target_is_directory=True)
+    mode = outside.stat().st_mode
+    with pytest.raises(OSError, match="is a link.*nothing was deleted"):
+        app.cmd_delete("Book")
+    assert app.storage.list_names() == ["Book"] and hidden(app) == []
+    App(app.paths.root)
+    assert outside.stat().st_mode == mode
+    assert (outside / "documents" / "doc.pdf").read_bytes() == b"%PDF-1.4 content"
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs POSIX permissions enforced for this user")
+def test_read_only_folders_do_not_stop_deletion(app, tmp_path):
+    documents = app.paths.documents_dir("Book")
+    (documents / "doc.pdf").chmod(0o444)
+    documents.chmod(0o555)
+    app.cmd_delete("Book")
+    assert not app.storage.exists("Book") and hidden(app) == []
+
+
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QMessageBox  # noqa: E402
 

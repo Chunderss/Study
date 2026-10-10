@@ -61,10 +61,39 @@ TRASH_PREFIX = ".vocab-trash-"
 _STALE_STAGING = 24 * 3600  # an unfinished copy this old is abandoned
 
 
+_JUNCTION = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
+
+
+def _is_link(path) -> bool:
+    """A symlink, or a Windows junction: removing it must not touch its target."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISLNK(st.st_mode)
+            or getattr(st, "st_reparse_tag", None) == _JUNCTION)
+
+
 def _remove_tree(folder: Path) -> None:
-    """Remove an app-owned folder, clearing read-only flags inside it."""
-    def make_writable(function, path, _error):
-        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+    """Remove an app-owned folder. A read-only entry inside it is made writable
+    and retried; links are removed, never followed, and nothing outside the
+    folder has its permissions changed."""
+    root = os.path.abspath(folder)
+
+    def inside(path):
+        path = os.path.abspath(path)
+        return path == root or path.startswith(root + os.sep)
+
+    def make_writable(function, path, error):
+        error = error if isinstance(error, BaseException) else error[1]
+        if not isinstance(error, PermissionError):
+            raise error
+        # POSIX refuses to remove from a read-only folder; Windows refuses a read-only file.
+        parent = os.path.dirname(path)
+        if inside(parent) and not _is_link(parent):
+            os.chmod(parent, stat.S_IRWXU)
+        if inside(path) and not _is_link(path):
+            os.chmod(path, stat.S_IRWXU if os.path.isdir(path) else stat.S_IREAD | stat.S_IWRITE)
         function(path)
     if sys.version_info >= (3, 12):
         shutil.rmtree(folder, onexc=make_writable)
@@ -356,9 +385,14 @@ class Storage:
         name = sanitize_module_name(name)
         if not self.exists(name):
             raise ModuleNotFound(f"Module '{name}' does not exist.")
+        folder = self.paths.module_dir(name)
+        if _is_link(folder):
+            raise OSError(f"Could not delete '{name}': its folder is a link to "
+                          f"{os.path.realpath(folder)}. Remove the link yourself if you no "
+                          "longer want it; nothing was deleted.")
         trash = self.paths.modules_dir / f"{TRASH_PREFIX}{uuid.uuid4().hex}"
         try:
-            self.paths.module_dir(name).rename(trash)
+            folder.rename(trash)
         except OSError as error:
             raise OSError(f"Could not delete '{name}': {error.strerror or error}. Close any "
                           "document from this module and try again; nothing was deleted.") from error

@@ -372,6 +372,9 @@ class EpubViewer(QWidget):
         for i, (name, _p) in enumerate(self._book.chapters):
             self._picker.addItem(f"{i + 1}. {name}")
         self._picker.currentIndexChanged.connect(self._jump)
+        # Choosing the chapter already selected must still work: from a page
+        # outside the reading order (a footnote) it returns to the chapter.
+        self._picker.activated.connect(self._jump)
         fdown = QPushButton("A−"); fdown.setToolTip("Smaller text"); fdown.clicked.connect(lambda: self._bump(1 / self.ZOOM_STEP))
         fup = QPushButton("A+"); fup.setToolTip("Larger text"); fup.clicked.connect(lambda: self._bump(self.ZOOM_STEP))
         addw = QPushButton("＋ Add word")
@@ -778,7 +781,9 @@ class EpubViewer(QWidget):
         self._load(self._idx + delta)
 
     def _jump(self, i: int):
-        if i != self._idx:
+        if not 0 <= i < len(self._book.chapters):
+            return
+        if i != self._idx or self._current_path != str(Path(self._book.chapters[i][1]).resolve()):
             self._pending_scroll = None
             self._set_highlight_source(None)
             self._load(i)

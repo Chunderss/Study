@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                QPushButton, QSplitter, QTextEdit, QVBoxLayout,
                                QWidget)
 
-from ..cli.parser import parse
+from ..cli.parser import CommandSyntaxError, parse
 from ..cli.repl import Repl
 from ..core.storage import ModuleNotFound
 from . import theme
@@ -490,13 +490,14 @@ class ConsoleComponent(BaseComponent):
         line = self.cmd.text().strip()
         if not line:
             return
-        self.cmd.clear()
         self.log(f"vocab> {line}")
         try:
             cmd = parse(line)
-        except ValueError as e:  # an unclosed quote: nothing runs
+        except CommandSyntaxError as e:  # an unclosed quote: nothing runs
             self.log(f"! {e}")
+            self.cmd.end(False)  # keep the line to correct, the cursor at its end
             return
+        self.cmd.clear()
         if cmd is None:
             return
         if cmd.verb in ("STUDY", "STUDYALL") and cmd.body is None:

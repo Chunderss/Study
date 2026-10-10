@@ -40,12 +40,24 @@ def test_console_exports_to_an_unquoted_native_path(window, tmp_path):
     assert os.path.exists(path)
 
 
-def test_console_reports_an_unclosed_quote(window, tmp_path, monkeypatch):
+def test_console_reports_an_unclosed_quote_and_keeps_the_line(window, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     before = set(tmp_path.iterdir())
-    log = console(window, 'EXPORT Book "book.json')
-    assert "! Unclosed quote" in log
+    window.workspace.set_focused_component("console")
+    component = window.workspace.focused.component
+    component.cmd.setFocus()
+    QTest.keyClicks(component.cmd, 'EXPORT Book "book.json')
+    QTest.keyClick(component.cmd, Qt.Key_Home)  # Enter with the cursor anywhere
+    QTest.keyClick(component.cmd, Qt.Key_Return)
+    assert "! Unclosed quote" in component.out.toPlainText()
     assert set(tmp_path.iterdir()) == before
+    # The line stays to be corrected, with the cursor at its end.
+    assert component.cmd.text() == 'EXPORT Book "book.json'
+    assert component.cmd.cursorPosition() == len(component.cmd.text())
+    QTest.keyClicks(component.cmd, '"')
+    QTest.keyClick(component.cmd, Qt.Key_Return)
+    assert "Exported 'Book'" in component.out.toPlainText()
+    assert (tmp_path / "book.json").is_file() and component.cmd.text() == ""
     assert "Current list: Book" in console(window, "WHERE")  # the Console carries on
 
 

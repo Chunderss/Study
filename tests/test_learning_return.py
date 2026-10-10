@@ -188,8 +188,8 @@ def test_back_to_a_removed_module_keeps_the_reader_and_names_the_way_out(window,
         back_button(viewer).click()
         qt.processEvents()
         assert reader_pane.component is viewer
-        assert window.status.text() == ("! Cannot return to Learning: module 'Book' is no longer "
-                                        "available. Use View → Documents to leave this reader.")
+        assert window.message.text() == ("! Cannot return to Learning: module 'Book' is no longer "
+                                         "available. Use View → Documents to leave this reader.")
     assert not window.app.storage.exists("Book")  # never recreated empty
     # Once the module is back, so is the way back to Learning.
     for path, data in zip(files, contents):

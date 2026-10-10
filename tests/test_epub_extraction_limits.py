@@ -178,7 +178,7 @@ pane = window.workspace.focused
 before = pane.component
 assert window._open_viewer(str(path)) is None
 assert pane.component is before
-status = window.status.text()
+status = window.message.text()
 assert status.startswith("! Could not open document: This EPUB would extract to 64."), status
 assert status.endswith("more than the 20.0 KB the reader allows per book."), status
 window.close()

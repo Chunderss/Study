@@ -31,8 +31,9 @@ The original archive is preserved beside the updated source folder.
   against fresh storage state and the original target module.
 - Failed lookups keep the entry text. Late completions do not erase newly typed input.
 - Empty definitions and empty dictionary responses are rejected before writing.
-- Removed startup dictionary downloads, implicit NLP resource downloads, and Ollama
-  network checks during focus changes.
+- Removed the desktop app's startup dictionary download (the terminal keeps its one-time
+  first-run install), implicit NLP resource downloads, and Ollama network checks during
+  focus changes.
 - Fixed duplicate senses when the inferred part of speech matches none of the senses.
 - Study grades persist immediately, surviving pane closure or early application exit.
   Finishing a session no longer replays old stats over newer/deleted cards.
@@ -65,7 +66,10 @@ The original archive is preserved beside the updated source folder.
 - Bundle the English WordNet corpus; no download is required for packaged offline lookups.
 - Report desktop exceptions in a dialog and log them under the user's data directory.
 
-## Verification and limits
+## Verification and limits (2026-09-24)
+
+This section records what was checked for the original review and is not updated.
+README.md describes current behavior; run `python -m pytest -q` for the current suite.
 
 Validated here with Python 3.10.12, PySide6 6.11.2, NLTK 3.10.3, and PyInstaller 6.22.3:
 
@@ -83,7 +87,9 @@ The workflow has been added but was not run remotely. The exact intermittent Win
 keystroke symptom could not be reproduced on this platform; input handling is hardened
 and covered by synthetic Qt key and IME regression tests.
 
-Drafts remain in memory until saved; they do not survive a process crash. Console commands
-other than the main Vocab/reader lookup paths remain synchronous. Full interactive EPUB
-browser behavior, native Windows IME behavior, and Windows display scaling still need a
-Windows desktop smoke test. This review does not establish that every possible bug is gone.
+At the time, drafts remained in memory until saved and did not survive a process crash.
+Draft recovery copies were added shortly afterwards, in 1d8fd12 (2026-09-25); see
+README.md, "Markdown notes and drafts". Console commands other than the main Vocab/reader
+lookup paths remain synchronous. Full interactive EPUB browser behavior, native Windows
+IME behavior, and Windows display scaling still need a Windows desktop smoke test. This
+review does not establish that every possible bug is gone.

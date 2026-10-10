@@ -226,11 +226,9 @@ class PdfViewer(QWidget):
             zoom = float(self._view.zoomFactor())
         except Exception:
             zoom = 1.0
-        try:
-            self._storage.save_reading_pos(self._module, self._fname,
-                                           {"page": int(page), "zoom": zoom})
-        except Exception:
-            pass
+        # A failure is the caller's to report: the reader stays open to retry.
+        self._storage.save_reading_pos(self._module, self._fname,
+                                       {"page": int(page), "zoom": zoom})
 
     def set_back_label(self, text):
         self._back.setText(text)
@@ -251,12 +249,16 @@ class PdfViewer(QWidget):
         self._view.pageNavigator().jump(page, QPointF(0, 0))
 
     def closeEvent(self, e):
-        self.save_position()
+        _save_on_close(self)
         super().closeEvent(e)
 
     def on_replaced(self) -> None:
-        """Called by Pane.set_component when this viewer is swapped out."""
+        """Called by Pane.set_component when this viewer is swapped out. If the
+        position cannot be saved this raises, and the viewer stays usable."""
         self.save_position()
+        self.release()
+
+    def release(self) -> None:
         self._doc.close()  # release the file now, not only when deleted
 
     def _update_info(self, *_):
@@ -849,16 +851,27 @@ class EpubViewer(QWidget):
         self._web.setFocus()
 
     def closeEvent(self, e):
-        self.save_position()
+        _save_on_close(self)
         super().closeEvent(e)
 
     def on_replaced(self) -> None:
-        """Called by Pane.set_component when this viewer is swapped out."""
+        """Called by Pane.set_component when this viewer is swapped out. If the
+        position cannot be saved this raises, and the viewer stays usable."""
+        self.save_position()
+        self.release()
+
+    def release(self) -> None:
         # A renderer reply can arrive between pane replacement and deleteLater.
-        # Invalidate it even if saving fails and the pane still replaces us.
         self._load_generation += 1
         self._document_loaded = False
-        self.save_position()
+
+
+def _save_on_close(viewer):
+    try:
+        viewer.save_position()
+    except Exception as error:
+        if viewer.ctx:
+            viewer.ctx.log.emit(f"! Could not save your place in {viewer._fname}: {error}")
 
 
 # --------------------------------------------------------------------------- #

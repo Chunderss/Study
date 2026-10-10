@@ -40,6 +40,8 @@ def test_capture_callback_keeps_original_location_and_ignores_stale_reader(qt, c
             viewer.save_position = cannot_save
             with pytest.raises(OSError):
                 viewer.on_replaced()
+            assert viewer._document_loaded  # a failed save leaves the reader usable
+            viewer.release()  # the user continued without saving
         elif change == "deletion":
             delete(viewer)
         else:

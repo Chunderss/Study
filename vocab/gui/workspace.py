@@ -46,21 +46,40 @@ class Pane(QFrame):
         lay.addWidget(component, 1)
         self._apply_focus_style()
 
-    def set_component(self, component, factory_key: str) -> None:
-        old = self.component
-        # let the outgoing component persist any state (e.g. reading position)
-        hook = getattr(old, "on_replaced", None)
+    def let_go(self, component, save: bool = True,
+               action: str = "Could not switch this pane") -> bool:
+        """Let an outgoing component save its state (e.g. a reading position)
+        through on_replaced(), then release it. If saving fails, the user
+        decides (Workspace.confirm_unsaved); False means it stays, usable.
+        With save=False it is only released (release())."""
+        hook = getattr(component, "on_replaced", None) if save else None
         if callable(hook):
             try:
                 hook()
-            except Exception:
-                pass
+                return True
+            except Exception as error:
+                if not self.workspace.continue_without_saving(component, error, action):
+                    return False
+        release = getattr(component, "release", None)
+        if callable(release):
+            release()
+        return True
+
+    def set_component(self, component, factory_key: str, save: bool = True) -> bool:
+        """Show ``component`` instead of the current one. Returns False, and
+        discards ``component``, if the current one could not be let go."""
+        old = self.component
+        if not self.let_go(old, save):
+            component.setParent(None)
+            component.deleteLater()
+            return False
         self.layout().replaceWidget(old, component)
         old.setParent(None)
         old.deleteLater()
         self.component = component
         self.factory_key = factory_key
         self.title.setText(getattr(component, "TITLE", "Pane"))
+        return True
 
     def set_focused(self, on: bool) -> None:
         """Highlight AND (when on) move keyboard focus into the component.
@@ -106,6 +125,9 @@ class Workspace(QWidget):
         self._panes: List[Pane] = []
         self._focused: Optional[Pane] = None
         self._zoom_saved = None   # (root_splitter) while zoomed
+        # confirm_unsaved(component, error, action) -> bool: whether to go on
+        # when a component's state could not be saved. None: report and stay.
+        self.confirm_unsaved = None
 
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(0, 0, 0, 0)
@@ -295,16 +317,8 @@ class Workspace(QWidget):
             return
         # Persist before changing the logical tree or zoom state. If this fails,
         # the pane must stay usable so the user can retry after fixing storage.
-        hook = getattr(cur.component, "on_replaced", None)
-        if callable(hook):
-            try:
-                hook()
-            except Exception as error:
-                context = getattr(cur.component, "ctx", None)
-                if context is None:
-                    raise
-                context.log.emit(f"! Could not close pane: {error}")
-                return
+        if not cur.let_go(cur.component, action="Could not close pane"):
+            return
         if self.is_zoomed:
             self.toggle_zoom()
         parent = cur.parentWidget()
@@ -392,15 +406,24 @@ class Workspace(QWidget):
         except ValueError:
             i = 0
         key = self._order[(i + delta) % len(self._order)]
-        cur.set_component(self._make(key), key)
-        cur.set_focused(True)
+        if cur.set_component(self._make(key), key):
+            cur.set_focused(True)
 
     def set_focused_component(self, key: str) -> None:
         cur = self._focused
         if cur is None:
             return
-        cur.set_component(self._make(key), key)
-        cur.set_focused(True)
+        if cur.set_component(self._make(key), key):
+            cur.set_focused(True)
+
+    def continue_without_saving(self, component, error, action) -> bool:
+        if self.confirm_unsaved is not None:
+            return bool(self.confirm_unsaved(component, error, action))
+        context = getattr(component, "ctx", None)
+        if context is None:
+            raise error
+        context.log.emit(f"! {action}: {error}")
+        return False
 
     def snapshot(self, describe):
         """Serialize the logical tree, including the slot temporarily zoomed out."""

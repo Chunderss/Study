@@ -150,6 +150,7 @@ class MainWindow(QWidget):
 
         # workspace
         self.workspace = Workspace(self._make_component, COMPONENT_ORDER)
+        self.workspace.confirm_unsaved = self._confirm_unsaved
         body.addWidget(self.workspace, 1)
 
         # status / keyhint bar
@@ -320,7 +321,8 @@ class MainWindow(QWidget):
         for pane in list(self.workspace._panes):
             path = getattr(pane.component, "path", None)
             if isinstance(path, str) and folder in Path(path).resolve().parents:
-                pane.set_component(self._make_component("documents"), "documents")
+                # Its place is not saved: the module is about to be deleted.
+                pane.set_component(self._make_component("documents"), "documents", save=False)
                 pane.title.setText("Documents")
                 released = True
         if released:
@@ -492,7 +494,8 @@ class MainWindow(QWidget):
             self.ctx.log.emit("! No in-app viewer for that file type.")
             return
         self._bind_viewer_return(pane, viewer, learning_return)
-        pane.set_component(viewer, "viewer")
+        if not pane.set_component(viewer, "viewer"):
+            return None  # the current reader stays: its place could not be saved
         pane.title.setText(getattr(viewer, "TITLE", "Document"))
         if self.workspace.is_zoomed and self.workspace.focused is not pane:
             self.workspace.toggle_zoom()
@@ -571,7 +574,8 @@ class MainWindow(QWidget):
             self.ctx.module_changed.emit(self.app.current_module)
         key = "learning" if state is not None else "documents"
         component = self._make_component(key)
-        pane.set_component(component, key)
+        if not pane.set_component(component, key):
+            return
         pane.title.setText(component.TITLE)
         if self.workspace.is_zoomed and self.workspace.focused is not pane:
             self.workspace.toggle_zoom()
@@ -671,10 +675,34 @@ class MainWindow(QWidget):
         self._refresh_status()
         super().focusInEvent(e)
 
+    def _confirm_unsaved(self, component, error, action) -> bool:
+        """A pane's state (a reader's place) could not be saved: go on anyway?"""
+        title = getattr(component, "TITLE", "this pane")
+        return QMessageBox.question(
+            self, "Reading position not saved",
+            f"Could not save your place in {title}:\n\n{error}\n\nContinue without saving it?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+
     def closeEvent(self, e):
         if self.ctx.busy:
             QMessageBox.information(self, "Lookup in progress",
                                     "Please let the current word lookup finish before closing.")
+            e.ignore()
+            return
+        # Save every reader's place first; a failure is shown, and No keeps
+        # the window open to retry.
+        unsaved = []
+        for pane in list(self.workspace._panes):
+            saver = getattr(pane.component, "save_position", None)
+            if callable(saver):
+                try:
+                    saver()
+                except Exception as error:
+                    unsaved.append(f"• {getattr(pane.component, 'TITLE', 'Document')}: {error}")
+        if unsaved and QMessageBox.question(
+                self, "Reading position not saved",
+                "Could not save your place in:\n\n" + "\n".join(unsaved) + "\n\nQuit anyway?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             e.ignore()
             return
         drafts = self.ctx.notes.dirty_buffers()
@@ -722,14 +750,6 @@ class MainWindow(QWidget):
                     e.ignore()
                     return
         self.hotkeys.stop()
-        # persist reading position for any open document viewer before quitting
-        for pane in list(self.workspace._panes):
-            saver = getattr(pane.component, "save_position", None)
-            if callable(saver):
-                try:
-                    saver()
-                except Exception:
-                    pass
         try:
             self._save_session()
         except Exception as error:

@@ -34,7 +34,7 @@ class Dictionary(ABC):
     name: str = ""
     #: one-line description shown in `dict list`
     description: str = ""
-    #: approximate install footprint shown BEFORE download, e.g. "~40 MB". ""=none.
+    #: approximate install footprint shown BEFORE download, e.g. "~13 MB". ""=none.
     install_cost: str = ""
     #: whether the backend needs the network at lookup time
     requires_network: bool = False

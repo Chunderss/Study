@@ -151,7 +151,9 @@ The Console supports `DICT`, `DICT USE wordnet`, `DICT USE freedict`, `MODE MECH
 `DICT INSTALL wordnet` (about 13 MB: WordNet and the tagger; about 1.5 MB if only the
 tagger is missing). Downloads are explicit and may take a while; the terminal
 interface's first run downloads both when WordNet is the configured dictionary but is
-missing. `DOCTOR` and `DISAMBIG` report a missing tagger. Console commands
+missing. A download waits at most 30 seconds for a network that does not answer; the
+terminal's first-run download can be skipped with Ctrl-C and is tried again at the next
+start. `DOCTOR` and `DISAMBIG` report a missing tagger. Console commands
 other than the main Vocab/reader lookup path run synchronously.
 
 Leitner schedules reviews across five boxes, 1, 3, 7, 16 and 35 calendar days apart.

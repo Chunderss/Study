@@ -241,10 +241,14 @@ class Repl:
             nltk_present = False
 
         if preferred.id == "wordnet" and nltk_present:
+            # The same size text as DICT INSTALL's question.
             self.echo("First run: downloading the offline WordNet dictionary, one time: "
-                      f"{preferred.install_cost}...")
+                      f"{preferred.pending_cost()}... (Ctrl-C skips it)")
             try:
-                preferred.install()
+                preferred.install()  # each network wait is bounded (DOWNLOAD_TIMEOUT)
+            except KeyboardInterrupt:
+                # Skipped this time only: the next start tries again.
+                self.echo("  skipped. DICT INSTALL wordnet downloads it later.")
             except Exception as e:
                 self.echo(f"  could not download automatically: {e}")
             if preferred.available():

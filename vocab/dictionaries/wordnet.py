@@ -9,6 +9,8 @@ packages (tools/build_desktop.py, VocabStudy.spec).
 """
 from __future__ import annotations
 
+import io
+import socket
 from typing import List
 
 from .. import nltk_resources
@@ -16,6 +18,12 @@ from ..core.models import Sense
 from .base import Dictionary, LookupFailed
 
 _POS_MAP = {"n": "noun", "v": "verb", "a": "adjective", "s": "adjective", "r": "adverb"}
+
+# The longest an install waits for any one connect or read. NLTK passes no
+# timeout of its own, so a network that silently drops packets would stall
+# the download (and the terminal's first start) forever. A slow but steady
+# download is not cut off; DNS lookups keep the system resolver's timeouts.
+DOWNLOAD_TIMEOUT = 30.0
 
 
 class WordNet(Dictionary):
@@ -63,8 +71,18 @@ class WordNet(Dictionary):
         # is in NLTK's download folder, even when it works from another one.
         packages = ([nltk_resources.POS_TAGGER] if self.available()
                     else list(nltk_resources.NLTK_PACKAGES))
-        for package in packages:
-            nltk.download(package, quiet=True, raise_on_error=True)
+        # NLTK opens its connections with the process's default timeout, so
+        # that bounds every wait; it is restored however the install ends.
+        previous = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(DOWNLOAD_TIMEOUT)
+        try:
+            for package in packages:
+                # The error is raised, and callers report it: NLTK's own
+                # "[nltk_data] Error loading ..." line would repeat it.
+                nltk.download(package, quiet=True, raise_on_error=True,
+                              print_error_to=io.StringIO())
+        finally:
+            socket.setdefaulttimeout(previous)
 
     def lookup(self, word: str) -> List[Sense]:
         wn = self._corpus()

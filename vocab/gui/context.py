@@ -38,6 +38,8 @@ class WorkspaceContext(QObject):
     # a lookup finished for (module, word); added is False when an existing
     # entry was kept. The sense picker offers the senses of an added word.
     senses_available = Signal(str, str, bool)
+    # a component asks for a word's senses: (module, word)
+    senses_requested = Signal(str, str)
     # find_more_senses(listing) finished: (token, listing with its extra senses)
     more_senses_done = Signal(int, object)
 

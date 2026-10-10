@@ -322,7 +322,7 @@ def test_leader_w_without_a_word_says_what_to_do(window, qt, no_dialogs):
     native = focus(window, window.workspace.focused.component.add_input, qt)
     leader(native, Qt.Key_W)
     assert not window.sense_picker.isVisible()
-    assert window.message.text() == "! Add a word first, then press Ctrl+B w to see its senses."
+    assert window.message.text() == "! Add a word first, or click a word in Vocab to see its senses."
     assert any(row[0] == "w" and row[2].startswith("Senses of the last added word")
                for row in window._keymap())
 
@@ -345,3 +345,65 @@ def test_the_picker_keeps_clear_of_the_help_panel_and_the_focused_pane(
     assert picker.isVisible()
     pane = QRect(right.mapTo(window, QPoint(0, 0)), right.size())
     assert not picker.geometry().intersects(pane)
+
+
+# ---- from the Vocab list -----------------------------------------------------
+def two_words(window, monkeypatch):
+    mock_lookup(window, monkeypatch)
+    window.app.cmd_add("flag", target="Book")
+    window.app.cmd_add("bank", target="Book", manual_def="mine")
+    window.ctx.changed.emit()
+    return window.workspace.focused.component
+
+
+def test_a_word_in_the_vocab_list_opens_its_senses_from_the_keyboard(
+        window, qt, monkeypatch, no_dialogs):
+    vocab = two_words(window, monkeypatch)
+    native = focus(window, vocab.words, qt)
+    QTest.keyClick(native, Qt.Key_Tab)    # first word link: bank
+    QTest.keyClick(native, Qt.Key_Tab)    # second: flag
+    QTest.keyClick(native, Qt.Key_Return)
+    picker = window.sense_picker
+    assert picker.isVisible() and qt.focusWidget() is picker.list
+    assert picker.title.text() == "flag" and picker.state.text() == "Chosen automatically"
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Return)
+    assert definitions(window, "flag")[0] == "become less intense"
+    QTest.keyClick(native, Qt.Key_Escape)
+    assert qt.focusWidget() is vocab.words  # back in the list
+
+
+def test_a_click_on_a_word_opens_its_senses_even_your_own(window, qt, monkeypatch, no_dialogs):
+    vocab = two_words(window, monkeypatch)
+    focus(window, vocab.add_input, qt)
+    document = vocab.words.document()
+    cursor = document.find("bank")
+    rect = vocab.words.cursorRect(cursor)
+    QTest.mouseClick(vocab.words.viewport(), Qt.LeftButton, pos=rect.center() - QPoint(8, 0))
+    picker = window.sense_picker
+    assert picker.isVisible() and picker.title.text() == "bank"
+    assert picker.state.text() == "Your own definition"
+
+
+def test_the_vocab_list_keeps_its_place_and_shows_words_as_typed(window, qt, monkeypatch):
+    for i in range(80):
+        window.app.cmd_add(f"word{i:02d}", target="Book", manual_def=f"meaning {i}")
+    window.app.cmd_add("<b>x</b> & y", target="Book", manual_def="<i>not markup</i>")
+    window.ctx.changed.emit()
+    vocab = window.workspace.focused.component
+    qt.processEvents()
+    scroll = vocab.words.verticalScrollBar()
+    assert scroll.maximum() > 0
+    scroll.setValue(scroll.maximum() // 2)
+    middle = scroll.value()
+    window.ctx.changed.emit()  # e.g. a word added in a reader
+    assert scroll.value() == middle
+    text = vocab.words.toPlainText()
+    assert "<b>x</b> & y" in text and "<i>not markup</i>" in text
+    window.app.cmd_create("Other")
+    window.app.cmd_add("w", target="Other", manual_def="m")
+    for _ in range(40):
+        window.app.cmd_add(f"other{_:02d}", target="Other", manual_def="m")
+    window.app.cmd_use("Other")
+    window.ctx.module_changed.emit("Other")
+    assert scroll.value() == 0  # another module starts at the top

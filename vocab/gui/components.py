@@ -9,11 +9,13 @@ Components talk only to WorkspaceContext (ctx). No component references another.
 """
 from __future__ import annotations
 
+import html
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMessageBox,
-                               QPushButton, QSplitter, QTextEdit, QVBoxLayout,
-                               QWidget)
+                               QPushButton, QSplitter, QTextBrowser, QTextEdit,
+                               QVBoxLayout, QWidget)
 
 from ..cli.parser import CommandSyntaxError, parse
 from ..cli.repl import Repl
@@ -47,7 +49,12 @@ class VocabComponent(BaseComponent):
         super().__init__(ctx, parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
-        self.words = QTextEdit(readOnly=True)
+        # Each word is a link (click, or Tab to it and press Enter) to its senses.
+        self.words = QTextBrowser()
+        self.words.setOpenLinks(False)
+        self.words.anchorClicked.connect(self._open_senses)
+        self._linked = []           # the words the links name, by position
+        self._linked_module = None  # the module those links belong to
         lay.addWidget(self.words, 1)
         row = QHBoxLayout()
         self._pending = None
@@ -95,28 +102,50 @@ class VocabComponent(BaseComponent):
         if success and self.add_input.text().strip() == self._submitted:
             self.add_input.clear()
 
+    def _show_text(self, text: str) -> None:
+        self._linked, self._linked_module = [], None
+        self.words.setPlainText(text)
+
+    def _open_senses(self, url) -> None:
+        """A word's link: show its senses in the sense picker."""
+        try:
+            word = self._linked[int(url.toString().partition(":")[2])]
+        except (ValueError, IndexError):
+            return
+        self.ctx.senses_requested.emit(self._linked_module, word)
+
     def refresh(self) -> None:
         name = self.app.current_module
         if not name:
-            self.words.setPlainText("No module selected.")
+            self._show_text("No module selected.")
             return
         try:
             wl = self.app.storage.load_words(name)
         except ModuleNotFound:
-            self.words.setPlainText(f"Module '{name}' is no longer available.")
+            self._show_text(f"Module '{name}' is no longer available.")
             return
         except Exception as error:  # refresh runs on every change; never raise here
-            self.words.setPlainText(f"Could not read this module's vocabulary.\n\n{error}")
+            self._show_text(f"Could not read this module's vocabulary.\n\n{error}")
             return
         if not wl.words:
-            self.words.setPlainText("(no vocab yet) — add your first word below.")
+            self._show_text("(no vocab yet) — add your first word below.")
             return
-        lines = []
+        # A refresh of the same module keeps the place in a long list.
+        scroll = self.words.verticalScrollBar()
+        keep = scroll.value() if self._linked_module == name else 0
+        blocks, linked = [], []
         for key in sorted(wl.words):
             w = wl.words[key]
             pos = f"[{w.senses[0].pos}] " if w.senses and w.senses[0].pos else ""
-            lines.append(f"{w.word}\n    {pos}{w.primary_definition()}")
-        self.words.setPlainText("\n".join(lines))
+            # The link names a position, so no word text goes into a URL.
+            blocks.append(f'<p><a href="sense:{len(linked)}">{html.escape(w.word)}</a><br>'
+                          f"&nbsp;&nbsp;&nbsp;&nbsp;{html.escape(pos + w.primary_definition())}"
+                          "</p>")
+            linked.append(w.word)
+        self._linked, self._linked_module = linked, name
+        self.words.setHtml("".join(blocks))
+        self.words.document().documentLayout().documentSize()  # lay out before scrolling
+        scroll.setValue(keep)
 
 
 # --------------------------------------------------------------------------- #

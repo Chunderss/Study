@@ -55,6 +55,7 @@ class MainWindow(QWidget):
         self.sense_picker = SensePicker(self.ctx, self)
         self._last_word = None  # (module, word) of the latest desktop lookup
         self.ctx.senses_available.connect(self._offer_senses)
+        self.ctx.senses_requested.connect(self._show_senses)
         self._session_warning = ""
         self._restore_session()
         # Keep a reference: Qt event filters must remain alive for key delivery.
@@ -273,6 +274,11 @@ class MainWindow(QWidget):
         elif not self.sense_picker.has_focus():
             self.sense_picker.hide()  # an untouched list of an earlier word
 
+    def _show_senses(self, module: str, word: str) -> None:
+        """A word clicked in the Vocab list: move into its senses."""
+        self._last_word = (module, word)
+        self.sense_picker.show_word(module, word, focus=True)
+
     def _focus_senses(self) -> None:
         """Ctrl+B w: move to the sense picker's list, opening it for the last
         word a desktop lookup added or kept; pressed in the list, close it."""
@@ -282,7 +288,7 @@ class MainWindow(QWidget):
         elif picker.isVisible():
             picker.focus_list()
         elif self._last_word is None:
-            self.ctx.log.emit("! Add a word first, then press Ctrl+B w to see its senses.")
+            self.ctx.log.emit("! Add a word first, or click a word in Vocab to see its senses.")
         else:
             picker.show_word(*self._last_word, focus=True)
 

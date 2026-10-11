@@ -120,6 +120,32 @@ def _renders_as_xhtml(source: Path) -> bool:
             and names <= set(html.entities.name2codepoint))
 
 
+class _UnreadableXml(Exception):
+    """A book's XML file that cannot be parsed: malformed, or in a character
+    encoding the parser does not support. The message names only the
+    problem and its position, never the book's own text."""
+
+
+def _parse_xml(path):
+    """The root element of a book's XML file. Errors reading the file
+    itself (OSError) are not caught."""
+    try:
+        return ET.parse(path, ET.XMLParser()).getroot()
+    except ET.ParseError as error:
+        line, column = error.position
+        raise _UnreadableXml(f"markup error at line {line}, column {column}") from None
+    except (LookupError, ValueError):  # unknown and multi-byte declared encodings
+        raise _UnreadableXml("an unsupported character encoding") from None
+
+
+def _walk_sorted(top):
+    """os.walk in a fixed order: folders compared without regard to case,
+    as Windows lists them, and file names sorted."""
+    for base, dirs, files in os.walk(top):
+        dirs.sort(key=lambda name: (name.upper(), name))
+        yield base, sorted(files)
+
+
 class _BoundedStream:
     """An archive entry being extracted. It may not yield more than the size
     it declared, nor more than is left of its archive's byte budget. CPython's
@@ -191,6 +217,9 @@ class EpubBook:
         self.tmpdir = str(Path(self._temp.name).resolve())
         self.title = os.path.splitext(os.path.basename(path))[0]
         self.chapters: list[tuple[str, str]] = []
+        # Why the book reads differently from how it is made, for the reader
+        # to show. Our own wording, without the book's entry names.
+        self.warnings: list[str] = []
         try:
             self._extract_and_parse(path)
         except Exception:
@@ -237,54 +266,74 @@ class EpubBook:
             # book at its total limit, so the checks hold for a lying archive.
             z.extractall(self.tmpdir, members=entries)
         # 1) container.xml -> OPF path
-        container = os.path.join(self.tmpdir, "META-INF", "container.xml")
-        opf_rel = None
-        if os.path.exists(container):
-            root = ET.parse(container).getroot()
-            rf = root.find(".//cnt:rootfile", _OPF_NS)
-            if rf is not None:
-                opf_rel = rf.get("full-path")
-        if not opf_rel:  # fallback: first .opf we can find
-            for base, _dirs, files in os.walk(self.tmpdir):
-                for f in files:
-                    if f.endswith(".opf"):
-                        opf_rel = os.path.relpath(os.path.join(base, f), self.tmpdir)
-                        break
-                if opf_rel:
-                    break
+        opf_rel = self._package_path()
         if not opf_rel:
             raise ValueError("Not a valid EPUB (no OPF package found)")
 
         opf_path = self._inside(self.tmpdir, opf_rel)
         opf_dir = os.path.dirname(opf_path)
-        tree = ET.parse(opf_path).getroot()
+        try:
+            tree = _parse_xml(opf_path)
+        except _UnreadableXml as error:
+            self.warnings.append(f"This book's package file could not be read ({error}). Chapters "
+                                 "are listed in file-name order, which may differ from the book's "
+                                 "reading order.")
+            tree = None
 
-        # title (nice-to-have)
-        t = tree.find(".//dc:title", _OPF_NS)
-        if t is not None and t.text:
-            self.title = t.text.strip()
+        if tree is not None:
+            # title (nice-to-have)
+            t = tree.find(".//dc:title", _OPF_NS)
+            if t is not None and t.text:
+                self.title = t.text.strip()
 
-        # 2) manifest: id -> href
-        manifest: dict[str, str] = {}
-        for item in tree.findall(".//opf:manifest/opf:item", _OPF_NS):
-            manifest[item.get("id")] = item.get("href")
+            # 2) manifest: id -> href
+            manifest: dict[str, str] = {}
+            for item in tree.findall(".//opf:manifest/opf:item", _OPF_NS):
+                manifest[item.get("id")] = item.get("href")
 
-        # 3) spine: ordered idrefs -> files
-        for it in tree.findall(".//opf:spine/opf:itemref", _OPF_NS):
-            idref = it.get("idref")
-            href = manifest.get(idref)
-            if not href:
-                continue
-            fpath = self._inside(opf_dir, href)
-            if os.path.exists(fpath):
-                self.chapters.append((self._nice_name(href), fpath))
+            # 3) spine: ordered idrefs -> files
+            for it in tree.findall(".//opf:spine/opf:itemref", _OPF_NS):
+                idref = it.get("idref")
+                href = manifest.get(idref)
+                if not href:
+                    continue
+                fpath = self._inside(opf_dir, href)
+                if os.path.exists(fpath):
+                    self.chapters.append((self._nice_name(href), fpath))
 
         if not self.chapters:
-            # last resort: any xhtml/html in reading-ish order
-            for base, _dirs, files in os.walk(self.tmpdir):
-                for f in sorted(files):
+            # last resort: any xhtml/html, in file-name order
+            for base, files in _walk_sorted(self.tmpdir):
+                for f in files:
                     if f.lower().endswith((".xhtml", ".html", ".htm")):
                         self.chapters.append((f, os.path.join(base, f)))
+
+    def _package_path(self):
+        """The package file (OPF) that container.xml names, relative to the
+        book. If container.xml is missing, damaged or names a file the book
+        does not contain, the first .opf file found in a fixed order."""
+        container = os.path.join(self.tmpdir, "META-INF", "container.xml")
+        if os.path.exists(container):
+            try:
+                root = _parse_xml(container)
+            except _UnreadableXml as error:
+                self.warnings.append(f"This book's container.xml could not be read ({error}), so "
+                                     "its package file was found by searching the book.")
+            else:
+                rf = root.find(".//cnt:rootfile", _OPF_NS)
+                full = rf.get("full-path") if rf is not None else None
+                if full:
+                    # A path leaving the book still refuses it.
+                    if os.path.isfile(self._inside(self.tmpdir, full)):
+                        return full
+                    self.warnings.append("This book's container.xml names a package file the book "
+                                         "does not contain, so its package file was found by "
+                                         "searching the book.")
+        for base, files in _walk_sorted(self.tmpdir):
+            for f in files:
+                if f.endswith(".opf"):
+                    return os.path.relpath(os.path.join(base, f), self.tmpdir)
+        return None
 
     @staticmethod
     def _nice_name(href: str) -> str:
@@ -682,6 +731,15 @@ class EpubViewer(QWidget):
             w.setFocusPolicy(Qt.NoFocus)
         lay.addLayout(actions)
 
+        # Why a damaged book reads differently; shown while it is open.
+        self._notice = QLabel(" ".join(self._book.warnings))
+        self._notice.setTextFormat(Qt.PlainText)
+        self._notice.setWordWrap(True)
+        self._notice.setContentsMargins(6, 0, 6, 4)
+        self._notice.setVisible(bool(self._book.warnings))
+        lay.addWidget(self._notice)
+        if self._book.warnings and self.ctx:
+            self.ctx.log.emit(f"! {self._fname}: " + " ".join(self._book.warnings))
         self._error = QLabel()
         self._error.setTextFormat(Qt.PlainText)
         self._error.setWordWrap(True)

@@ -105,6 +105,11 @@ it, and stops unpacking if a file holds more than it declared. Such archives are
 damaged or built to fill the disk; large image-heavy textbooks stay well within these
 limits.
 
+A book whose `container.xml` or package file is damaged still opens: the reader says
+so above the page while the book is open, and View → Console keeps the message. If
+the package file could not be read, chapters are listed by file name, in file-name
+order, which may differ from the book's reading order.
+
 The app reopens the selected module, pane layout, selected notes, preview visibility,
 and document readers after a normal exit. A vocabulary quiz reopens as a Vocab pane;
 its completed reviews are already saved. Each reader pane reopens at its own page

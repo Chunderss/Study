@@ -522,6 +522,24 @@ def test_the_vocab_list_keeps_its_place_and_shows_words_as_typed(window, qt, mon
     assert scroll.value() == 0  # another module starts at the top
 
 
+def test_the_vocab_list_stays_where_it_was_scrolled_when_focus_leaves(window, qt, monkeypatch):
+    for i in range(60):
+        window.app.cmd_add(f"word{i:02d}", target="Book", manual_def=f"meaning {i}")
+    window.ctx.changed.emit()
+    vocab = window.workspace.focused.component
+    native = focus(window, vocab.words, qt)
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Down)  # word01 highlighted, then the list is scrolled
+    scroll = vocab.words.verticalScrollBar()
+    scroll.setValue(scroll.maximum())
+    QTest.keyClick(native, Qt.Key_Tab)
+    assert qt.focusWidget() is vocab.add_input and not vocab.words.textCursor().hasSelection()
+    assert scroll.value() == scroll.maximum()
+    QTest.keyClick(native, Qt.Key_Tab, Qt.ShiftModifier)  # back: the place, still scrolled
+    assert vocab.words.textCursor().selectedText() == "word01"
+    assert scroll.value() == scroll.maximum()
+
+
 def test_the_picker_starts_the_reviews_over_only_when_asked(window, qt, monkeypatch, no_dialogs):
     vocab, native = reader_add(window, qt, monkeypatch)
     stats = window.app.storage.load_stats("Book")

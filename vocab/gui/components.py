@@ -159,9 +159,11 @@ class WordList(QTextBrowser):
         # focus; a selection made with the mouse is left alone.
         if (self._highlighted() is not None
                 and event.reason() not in (Qt.ActiveWindowFocusReason, Qt.PopupFocusReason)):
+            scroll = self.verticalScrollBar().value()
             cursor = self.textCursor()
             cursor.clearSelection()
             self.setTextCursor(cursor)
+            self.verticalScrollBar().setValue(scroll)  # not back to the word
         super().focusOutEvent(event)
 
 

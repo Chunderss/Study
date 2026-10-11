@@ -153,12 +153,13 @@ def test_quitting_saves_the_reader_used_last_as_the_documents_place(window, reop
     reopened.show()
     qt.processEvents()
     first, second = readers(reopened)
-    wheel(second)
-    expected = second.reading_position()
+    wheel(first)
+    expected = first.reading_position()
+    assert expected != second.reading_position()
     assert reopened.close()
     assert saved(window) == expected
     reopened = reopen(root)
-    assert reopened.close()  # nothing used: the saved place stays
+    assert reopened.close()  # nothing used: not the last pane's place either
     assert saved(window) == expected
 
     # A reader you leave saves its place. A reader not used since then keeps
@@ -291,3 +292,14 @@ def test_a_books_title_shows_as_text_in_its_pane(qt, tmp_path):
     finally:
         workspace.deleteLater()
         qt.processEvents()
+
+
+def test_a_lone_reader_saves_its_place_at_quit_even_if_unused(window, reopen):
+    root = window.app.paths.root
+    set_place(window._open_viewer(str(make_pdf(window))), 0, "fit")
+    assert window.close()
+    reopened = reopen(root)
+    [reader] = readers(reopened)
+    reader.go_to({"page": 1})  # moved without input, as a restore or Source moves it
+    assert reopened.close()
+    assert saved(window) == {"page": 1, "zoom_mode": "fit_width"}

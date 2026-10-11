@@ -161,7 +161,10 @@ class HotkeyFilter(QObject):
 
     # ---- event handling -------------------------------------------------
     def eventFilter(self, obj, ev):
-        if (ev.type() in (QEvent.ApplicationDeactivate, QEvent.WindowDeactivate) or
+        # Leaving the application is handled by _application_state_changed:
+        # Qt sends ApplicationDeactivate to QApplication only, which this
+        # filter never watches.
+        if (ev.type() == QEvent.WindowDeactivate or
                 (ev.type() == QEvent.FocusOut and ev.reason() == Qt.PopupFocusReason)):
             # Popup menus can grab the keyboard without changing focusWidget().
             # Their Escape must not leave a workspace command armed underneath.
@@ -170,10 +173,10 @@ class HotkeyFilter(QObject):
             return False
         if ev.type() not in (QEvent.KeyPress, QEvent.KeyRelease, QEvent.ShortcutOverride):
             return False
-        # Native input passes through QWindow before reaching the focused
-        # QWidget. Ignore that intermediate delivery without changing leader
-        # state; otherwise releasing Ctrl+B cancels the sequence. Handle the
-        # widget delivery only, so each command runs once.
+        # start() installs this filter on widgets only (the owner and the
+        # focused widget), never on a QWindow or QApplication, so native key
+        # input reaches it once: on the focused widget. The type check only
+        # guards direct callers.
         if not isinstance(obj, QWidget):
             return False
         owner = self.parent()

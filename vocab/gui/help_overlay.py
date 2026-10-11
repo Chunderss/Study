@@ -4,7 +4,7 @@ A non-modal reference panel that can stay OPEN while you keep using shortcuts.
 Key design points that make "keep it up while doing other keybinds" work:
 
   * It never grabs keyboard focus (WA_ShowWithoutActivating + focus policy
-    NoFocus on every child), so the app-level HotkeyFilter keeps receiving keys
+    NoFocus on every child), so the window's HotkeyFilter keeps receiving keys
     while the panel is visible.
   * It doesn't cover/interceptt input for the whole window — it's a slim panel
     docked on the right, not a full-screen dim overlay, so panes stay usable.

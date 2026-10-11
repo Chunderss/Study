@@ -550,7 +550,45 @@ def test_study_shows_every_kept_sense_and_accepts_any_of_them(app, monkeypatch):
     app.run_study(["Book"], lambda prompt: next(answers), shown.append)
     assert app.storage.load_stats("Book")["flag"]["box"] == 3, shown
     assert not any("Skipped" in line for line in shown)
-    assert "  reference: decorate with flags; become less intense" in shown
+    at = shown.index("  reference:")  # numbered, as revealing shows them
+    assert shown[at + 1:at + 3] == ["  1. decorate with flags", "  2. become less intense"]
+    assert shown[at - 1].startswith("  score 67% (sense 2) — Accepted"), shown
+
+
+FAIR = [Sense("free from favoritism or self-interest or bias or deception; conforming with "
+              "established standards or rules", "adjective"),
+        Sense("a traveling show; having sideshows and rides and games of skill etc.", "noun")]
+
+
+def test_judged_senses_are_numbered_and_the_score_names_its_sense(app, monkeypatch):
+    from vocab.study.judge import KeywordJudge
+    from vocab.study.session import StudySession
+    looked_up(app, monkeypatch, FAIR)
+    app.cmd_add("fair")
+    say(app, "SENSE 1,2 fair")  # glosses that contain "; " themselves
+    session = StudySession(app.storage, app.scheduler, ["Book"], mechanical=True,
+                           judge=KeywordJudge())
+    judged = session.judge_text("a show that travels")
+    assert judged.references == [sense.definition for sense in FAIR]
+    assert judged.sense == 2 and judged.suggested is False
+    assert judged.score == KeywordJudge().score("a show that travels", FAIR[1].definition).score
+    assert judged.reference_lines() == [f"1. {FAIR[0].definition}", f"2. {FAIR[1].definition}"]
+    app.config.mechanical_repetition = True
+    shown = []
+    answers = iter(["a show that travels", "y"])
+    app.run_study(["Book"], lambda prompt: next(answers), shown.append)
+    at = shown.index("  reference:")
+    assert shown[at - 1].startswith(f"  score {judged.score:.0%} (sense 2) — Not accepted")
+    assert shown[at + 1:at + 3] == [f"  1. {FAIR[0].definition}", f"  2. {FAIR[1].definition}"]
+    app.cmd_sense("2", "fair")  # one sense: shown as before, with no number
+    stats = app.storage.load_stats("Book")
+    stats["fair"]["due"] = 0
+    app.storage.save_stats("Book", stats)
+    shown.clear()
+    answers = iter(["a show that travels", "y"])
+    app.run_study(["Book"], lambda prompt: next(answers), shown.append)
+    assert f"  reference: {FAIR[1].definition}" in shown
+    assert not any("(sense" in line for line in shown)
 
 
 def test_a_kept_sense_that_cannot_be_graded_leaves_the_others(app, monkeypatch):

@@ -1073,8 +1073,15 @@ class App:
                 if judgement.suggested is None:
                     echo(f"  {judgement.feedback}")
                 else:
-                    echo(f"  score {judgement.score:.0%} — {judgement.feedback}")
-                echo(f"  reference: {judgement.reference}")
+                    which = f" (sense {judgement.sense})" if judgement.sense else ""
+                    echo(f"  score {judgement.score:.0%}{which} — {judgement.feedback}")
+                lines = judgement.reference_lines()
+                if len(lines) > 1:  # several senses studied: numbered, as revealed
+                    echo("  reference:")
+                    for line in lines:
+                        echo(f"  {line}")
+                else:
+                    echo(f"  reference: {lines[0]}")
                 outcome = self._record_verdict(session, prompt, echo, judgement.suggested)
                 if outcome is _STOP:
                     break

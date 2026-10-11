@@ -283,8 +283,12 @@ Numbers are key terms only in a definition without other key terms ("1984"), so 
 hundred years" passes for "a period of 100 years"; 1,760 and 1760 are the same number.
 A definition made only of short or common words ("an ox", "to go") is compared on those
 words. A word studied with several senses (see `SENSE` above) passes when the answer
-passes for any one of them, and the reference lists them all. When a card's definition has no words at all, the judge makes no suggestion and you
-choose: Enter does nothing in the study view and asks again in the terminal.
+passes for any one of them. The reference then lists them all, numbered as revealing
+does, and the score line names the sense its score and feedback come from, as in
+`score 29% (sense 2) — ...`: the best-scoring sense the answer passes for, else the
+best-scoring one. When a card's definition has no words at all, the judge makes no
+suggestion and you choose: Enter does nothing in the study view and asks again in the
+terminal.
 
 ## Your data
 

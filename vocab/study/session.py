@@ -101,12 +101,26 @@ class CardView:
 @dataclass
 class Judgement:
     """The judge's suggestion for a typed answer. Nothing is recorded until the
-    user confirms or overrules it with StudySession.answer()."""
+    user confirms or overrules it with StudySession.answer().
+
+    The answer is compared with every studied sense of the word. The score,
+    feedback and suggestion come from one of them: the best-scoring sense the
+    answer passes for, else the best-scoring one (the first of equals)."""
     typed: str
-    reference: str               # the definition the answer was compared with
+    reference: str               # the studied definitions, joined with "; "
     feedback: str
     score: float | None          # 0..1, None when the judge cannot grade the card
     suggested: bool | None       # the judge's verdict, None when it cannot grade
+    references: List[str] = field(default_factory=list)  # each studied definition, first first
+    sense: int | None = None     # several studied: which (from 1) gave score and feedback
+
+    def reference_lines(self) -> List[str]:
+        """The reference as shown: one line, or one numbered line per studied
+        sense ("1. ...") when there are several, as revealing numbers them."""
+        if len(self.references) > 1:
+            return [f"{number}. {definition}"
+                    for number, definition in enumerate(self.references, 1)]
+        return [self.reference]
 
 
 @dataclass
@@ -255,14 +269,18 @@ class StudySession:
             raise ValueError("Type a definition first.")
         definitions = [s.definition for s in self.queue[self._i].word.kept_senses()]
         # With several senses studied, an answer right for any of them counts:
-        # the suggestion comes from the first passing one, else the best score.
+        # the score, feedback and suggestion come from the best-scoring passing
+        # sense, else the best-scoring one; max() keeps the first of equals.
         results = [self.judge.score(typed, definition) for definition in definitions or [""]]
-        gradable = [jr for jr in results if jr.gradable]
-        jr = max(gradable, key=lambda result: (result.passed, result.score)) if gradable else results[0]
+        gradable = [i for i, result in enumerate(results) if result.gradable]
+        best = max(gradable, key=lambda i: (results[i].passed, results[i].score)) if gradable else 0
+        jr = results[best]
         self._judgement = Judgement(
             typed=typed, reference="; ".join(definitions), feedback=jr.feedback,
             score=jr.score if gradable else None,
-            suggested=jr.passed if gradable else None)
+            suggested=jr.passed if gradable else None,
+            references=definitions,
+            sense=best + 1 if gradable and len(definitions) > 1 else None)
         return self._judgement
 
     def answer(self, correct: bool) -> AnswerOutcome:

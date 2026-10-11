@@ -294,13 +294,21 @@ class StudyView(QWidget):
             return
         j = self.session.judge_text(typed)
         view = self.session.current()
-        self.answer.setText(f"reference:  {j.reference}")
+        lines = j.reference_lines()
+        if len(lines) > 1:  # several senses studied: numbered, as revealed
+            reference = "\n".join(lines)
+            self.answer.setText(f"reference:\n{reference}")
+            spoken = f"Reference:\n{reference}\n"
+        else:
+            self.answer.setText(f"reference:  {lines[0]}")
+            spoken = f"Reference: {lines[0]}. "
         self.feedback.setStyleSheet("")
         if j.suggested is None:
             self.feedback.setText(j.feedback)
             keys = "Press J if you got it, or F if you missed it."
         else:
-            self.feedback.setText(f"score {j.score:.0%} — {j.feedback}")
+            which = f" (sense {j.sense})" if j.sense else ""
+            self.feedback.setText(f"score {j.score:.0%}{which} — {j.feedback}")
             if j.suggested:
                 self.good_btn.setText("Got it  (J / Enter)")
             else:
@@ -311,7 +319,7 @@ class StudyView(QWidget):
         self.input.setEnabled(False)
         self.good_btn.setEnabled(True)
         self.bad_btn.setEnabled(True)
-        self._describe(f"{view.word}. You wrote: {j.typed}. Reference: {j.reference}. "
+        self._describe(f"{view.word}. You wrote: {j.typed}. {spoken}"
                        f"{self.feedback.text()}\n\n{keys}")
         # Not on a button: Space there would record a verdict.
         self.setFocus()

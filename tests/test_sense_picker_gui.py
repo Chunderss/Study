@@ -641,7 +641,10 @@ def test_study_view_shows_and_grades_every_kept_sense(window, qt, monkeypatch):
     qt.processEvents()
     view.input.setText("grow less intense")
     view._submit_typed()
-    assert view.answer.text() == "reference:  decorate with flags; become less intense"
+    assert view.answer.text() == "reference:\n1. decorate with flags\n2. become less intense"
+    assert view.feedback.text().startswith("score 67% (sense 2) — Accepted")
+    assert ("You wrote: grow less intense. Reference:\n1. decorate with flags\n"
+            "2. become less intense\nscore 67% (sense 2)") in view.accessibleDescription()
     assert window.app.storage.load_stats("Book")["flag"]["box"] == 1  # not recorded yet
     QTest.keyClick(view, Qt.Key_Return)  # keep the judge's verdict
     assert window.app.storage.load_stats("Book")["flag"]["box"] == 2

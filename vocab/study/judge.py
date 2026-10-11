@@ -36,6 +36,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, List, Set
 
+from ..core.text import drop_latin_accents
+
 # Share of the reference's keywords an answer must recall to pass.
 PASS_SCORE = 0.5
 
@@ -104,21 +106,11 @@ def _scan(text: str) -> List[str]:
     return words
 
 
-# Latin letters that have no accent to split off, compared as their base
-# letters, and the middle dot that _scan keeps in l·l, compared as nothing
-_LATIN_BASE = str.maketrans({"ł": "l", "ø": "o", "đ": "d", "ħ": "h", "ŧ": "t",
-                             "ı": "i", "æ": "ae", "œ": "oe", "\u00b7": ""})
-
-
 def _plain(word: str) -> str:
-    """Drop accents from Latin letters ('café' -> 'cafe', 'żółty' -> 'zolty');
-    other scripts keep theirs. word is case-folded."""
-    out: List[str] = []
-    for ch in unicodedata.normalize("NFD", word).translate(_LATIN_BASE):
-        if unicodedata.combining(ch) and out and out[-1].isascii():
-            continue
-        out.append(ch)
-    return unicodedata.normalize("NFC", "".join(out))
+    """Drop accents from Latin letters ('café' -> 'cafe', 'żółty' -> 'zolty'),
+    and the middle dot that _scan keeps in l·l; other scripts keep theirs.
+    word is case-folded."""
+    return drop_latin_accents(word)
 
 
 # ---- stemming ----------------------------------------------------------------

@@ -9,6 +9,8 @@ from __future__ import annotations
 import sys
 from typing import List, Optional
 
+from ..core.backup import BackupExists
+from ..core.storage import size_text
 from ..dictionaries import get_dictionary
 from .app import App
 from .help_text import BANNER, HELP
@@ -36,11 +38,22 @@ def _path_problem(path: str) -> Optional[str]:
     return None
 
 
+# Backups and restores at least this large announce themselves.
+PROGRESS_THRESHOLD = 20 << 20
+
+
 class Repl:
     def __init__(self, app: App, in_stream=None, out_stream=None):
         self.app = app
         self.inp = in_stream or sys.stdin
         self.out = out_stream or sys.stdout
+        # Called as progress(done, total, label) during BACKUP; the desktop
+        # Console replaces it with a progress dialog, as it replaces _confirm.
+        self.progress = self._announce
+
+    def _announce(self, done: int, total: int, label: str = "") -> None:
+        if done == 0 and total >= PROGRESS_THRESHOLD:
+            self.echo(f"{label} ({size_text(total)})... Ctrl-C cancels.")
 
     def echo(self, text: str = "") -> None:
         self.out.write(text + "\n")
@@ -140,6 +153,12 @@ class Repl:
             return _path_problem(rest[1]) or app.cmd_export(rest[0], rest[1], include_stats=stats)
         if v == "IMPORT":
             return self._import(a)
+        if v == "BACKUP":
+            if not 1 <= len(a) <= 2:
+                return ("Usage: BACKUP <module> [<file.zip> | <folder>]   "
+                        "(quote a name or path that contains spaces)")
+            dest = a[1] if len(a) == 2 else None
+            return (_path_problem(dest) if dest else None) or self._backup(a[0], dest)
         if v == "FOLDER":
             if len(a) > 1:
                 return ("Usage: FOLDER [<full path> | DEFAULT]   "
@@ -147,6 +166,15 @@ class Repl:
             return (_path_problem(a[0]) if a else None) or app.cmd_folder(a[0] if a else "")
 
         return f"Unknown command '{cmd.verb}'. Type HELP."
+
+    def _backup(self, name: str, dest: Optional[str]) -> str:
+        try:
+            return self.app.cmd_backup(name, dest, progress=self.progress)
+        except BackupExists as exists:
+            if not self._confirm(f"{exists.path} already exists. Replace it?"):
+                return "Cancelled; nothing was written."
+            return self.app.cmd_backup(name, str(exists.path), replace=True,
+                                       progress=self.progress)
 
     def _dict(self, a: List[str]) -> str:
         if not a:

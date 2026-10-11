@@ -274,8 +274,37 @@ follows OneDrive and folder redirection), on Linux the XDG documents folder, oth
 - Every reply shows the full path of the file written or read. Files exported with a
   relative path before this change stay where they were written.
 
-These vocabulary exports do not include captures or notes. Back up the complete data
-folder to preserve books, notes, recovery copies, and concept reviews together.
+These vocabulary exports do not include captures or notes; a module backup does.
+
+### Back up and restore modules
+
+`BACKUP <module> [<file.zip> | <folder>]`, in the terminal or the Console, writes one ZIP
+archive with everything the module holds: its words and study progress, notes, documents,
+Learning captures (with their source links, EPUB highlights and review attempts) and
+reading positions.
+
+- Without a destination the archive is `<Module> <YYYY-MM-DD>.zip` in the folder for
+  files (` (2)`, ` (3)`... when that name is taken). A folder given gets that name
+  inside it; a file name without `.zip` gets `.zip` appended. The folder must exist.
+- An existing file is replaced only after you confirm.
+- The module is checked first with the rules a restore applies, so every archive
+  written can be restored. A module with a damaged file is refused, naming the file;
+  repair or move it, or copy the module's folder yourself.
+- The module is left exactly as it was. Its small files are read while other windows
+  wait a moment; each document is copied afterwards and checked for changes, and a
+  document that changed meanwhile refuses the backup (try again).
+- The archive is written under a hidden temporary name beside its destination, read
+  back and checked, and only then given its name, so a failure, a full disk or Ctrl-C
+  leaves no file behind.
+- Not included, and said in the reply: recovery copies of unsaved note changes (save
+  them first) and files in the module's folder that Vocab Study does not manage.
+- Large backups print a start line; Ctrl-C cancels.
+
+The archive is a standard ZIP file. A manifest, `vocab-study-backup.json`, records the
+format (`vocab-study-module-backup`, version 1), the app version, the time, the module and,
+for every file, its size and SHA-256; `module/` mirrors the module's folder. The
+checksums detect damage, not deliberate changes, since anyone can rewrite the manifest
+too, so a restore also checks the content of every JSON file.
 
 ## Development
 

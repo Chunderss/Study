@@ -203,6 +203,21 @@ def _capture_problem(key, item, scheduler):
     return None
 
 
+def learning_problem(data, scheduler=None):
+    """Why the content of a learning.json cannot be used, or None. Checks
+    everything the app reads from it (module backups use it as well)."""
+    scheduler = scheduler or LeitnerScheduler()
+    if not isinstance(data, dict) or not isinstance(data.get("items"), dict):
+        return 'expected {"schema": 1, "items": {...}}'
+    if data.get("schema") != 1:
+        return f"unsupported version {data.get('schema')!r}"
+    for key, item in data["items"].items():
+        problem = _capture_problem(key, item, scheduler)
+        if problem:
+            return f"capture {key!r}: {problem}"
+    return None
+
+
 class LearningStore:
     def __init__(self, storage):
         self.storage = storage
@@ -218,14 +233,9 @@ class LearningStore:
         reads from them; a damaged file raises DataFileError and is left as is."""
         path = self._path(module)
         data = _read_json(path, {"schema": 1, "items": {}})
-        if not isinstance(data, dict) or not isinstance(data.get("items"), dict):
-            raise DataFileError(path, 'expected {"schema": 1, "items": {...}}')
-        if data.get("schema") != 1:
-            raise DataFileError(path, f"unsupported version {data.get('schema')!r}")
-        for key, item in data["items"].items():
-            problem = _capture_problem(key, item, self.scheduler)
-            if problem:
-                raise DataFileError(path, f"capture {key!r}: {problem}")
+        problem = learning_problem(data, self.scheduler)
+        if problem:
+            raise DataFileError(path, problem)
         return data["items"]
 
     @in_transaction

@@ -14,12 +14,13 @@ from typing import Callable, List, Optional
 
 from ..algorithms.base import get_scheduler
 from ..core.config import Config
+from ..core import backup as _backup
 from ..core import migrate as _migrate
 from ..core.models import Sense, Word
 from ..core import paths as _paths
 from ..core.paths import expand_home, get_paths, resolve_user_path, sanitize_list_name
 from ..core.locking import write_lock
-from ..core.storage import ListNotFound, Storage, full_path, in_transaction
+from ..core.storage import ListNotFound, Storage, full_path, in_transaction, size_text
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
 from ..dictionaries.base import SENSE_LIMIT
 from .. import nltk_resources
@@ -57,6 +58,36 @@ def _typed_word(word: str, command: bool = True) -> str:
         return quote_arg(word)
     except CommandSyntaxError:
         return ""
+
+
+def _count(number: int, noun: str) -> str:
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
+def _quoted_names(names) -> str:
+    return ", ".join(f"'{name}'" for name in names)
+
+
+def backup_counts(summary: dict) -> str:
+    """'42 words, 3 notes, 2 documents, 15 captures'."""
+    return ", ".join(_count(summary.get(key, 0), key[:-1])
+                     for key in ("words", "notes", "documents", "captures"))
+
+
+def backup_reply(result) -> str:
+    """The reply to a finished backup, with what it left out."""
+    lines = [f"Backed up '{result.module}' -> {result.path} ({backup_counts(result.summary)}; "
+             f"{size_text(result.size)})."]
+    if result.drafts:
+        which = "the note" if len(result.drafts) == 1 else "the notes"
+        lines.append(f"  Not included: recovery copies of unsaved changes to {which} "
+                     f"{_quoted_names(result.drafts)}. Save them in the desktop app, then back "
+                     "up again.")
+    if result.others:
+        items = _count(len(result.others), "other item")
+        lines.append(f"  Not included: {items} in {result.folder} that Vocab Study does not "
+                     "manage.")
+    return "\n".join(lines)
 
 
 def _tagger_fix(problem: nltk_resources.TaggerProblem) -> str:
@@ -606,6 +637,33 @@ class App:
                                         card_problem=self.scheduler.card_problem)
         prog = "imported progress" if with_stats else "fresh progress"
         return f"Imported module '{name}' from {full_path(src)} ({prog}). USE it to start."
+
+    # ---- module backups ---------------------------------------------------
+    def backup_destination(self, name: str, dest: Optional[str] = None):
+        """Where BACKUP writes, and whether that is a default dated name:
+        the folder for files (or a folder given) gets '<Module> <date>.zip';
+        a file name without .zip gets it appended."""
+        name = self.storage.canonical_name(name)
+        if dest is None:
+            return _backup.default_backup_path(self.files_folder(), name), True
+        path = self.user_path(dest)
+        if path.is_dir():
+            return _backup.default_backup_path(path, name), True
+        if not path.name.lower().endswith(".zip"):
+            path = path.with_name(path.name + ".zip")
+        return path, False
+
+    def cmd_backup(self, name: str, dest: Optional[str] = None, *, replace: bool = False,
+                   progress=None) -> str:
+        """Back up a module into one archive. Raises BackupExists when the
+        destination exists and ``replace`` was not confirmed."""
+        path, auto = self.backup_destination(name, dest)
+        try:
+            result = _backup.write_backup(self.storage, name, path, scheduler=self.scheduler,
+                                          replace=replace, progress=progress, auto_number=auto)
+        except (_backup.Cancelled, KeyboardInterrupt):
+            return "Backup cancelled; nothing was written."
+        return backup_reply(result)
 
     # ---- stats ----------------------------------------------------------
     def vocabulary_cards(self, name: str):

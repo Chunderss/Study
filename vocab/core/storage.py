@@ -181,6 +181,17 @@ def _read_json_object(path: Path, default):
     return data
 
 
+def size_text(size, *, up=False):
+    """A byte count as people read it: 4.0 GB, 12.5 MB, 900 bytes. A size
+    that broke a limit rounds up and the limit rounds down, so the first
+    always reads larger."""
+    for unit, scale in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if size >= scale:
+            tenths = -(-size * 10 // scale) if up else size * 10 // scale
+            return f"{tenths // 10}.{tenths % 10} {unit}"
+    return f"{size:,} bytes"
+
+
 def full_path(path) -> Path:
     """A path as replies show it. A relative path is made absolute, and
     resolved, against the working directory, which depends on how the program

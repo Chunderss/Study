@@ -30,7 +30,7 @@ from shiboken6 import isValid
 from . import theme
 from .epub_highlights import SELECTION_ANCHOR_JS, render_highlights_js
 from ..core.learning import LearningStore
-from ..core.storage import ModuleNotFound
+from ..core.storage import ModuleNotFound, size_text as _size_text
 
 
 # --------------------------------------------------------------------------- #
@@ -117,17 +117,6 @@ def _renders_as_xhtml(source: Path) -> bool:
     public = _PUBLIC_ID.search(text)
     return (public is not None and public.group(1)[1:-1] in _XHTML_PUBLIC_IDS
             and names <= set(html.entities.name2codepoint))
-
-
-def _size_text(size, *, up=False):
-    """A byte count as people read it: 4.0 GB, 12.5 MB, 900 bytes. A size
-    that broke a limit rounds up and the limit rounds down, so the first
-    always reads larger."""
-    for unit, scale in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
-        if size >= scale:
-            tenths = -(-size * 10 // scale) if up else size * 10 // scale
-            return f"{tenths // 10}.{tenths % 10} {unit}"
-    return f"{size:,} bytes"
 
 
 class _BoundedStream:

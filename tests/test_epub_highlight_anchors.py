@@ -261,3 +261,83 @@ app.processEvents()
                             cwd=Path(__file__).resolve().parents[1], env=env,
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_highlight_sheet_keeps_the_books_adopted_sheets_and_falls_back_to_a_style_element():
+    script = r'''
+import json
+from PySide6.QtCore import QEvent
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+from PySide6.QtWebEngineCore import QWebEngineScript
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from vocab.gui.epub_highlights import render_highlights_js
+
+app = QApplication([])
+web = QWebEngineView()
+web.resize(850, 600)
+web.show()
+READER = QWebEngineScript.ScriptWorldId.ApplicationWorld.value
+PAGE = """<html><head><title>Sheets</title><script>
+const sheet = new CSSStyleSheet();
+sheet.replaceSync('#book { color: rgb(10, 120, 30); }');
+document.adoptedStyleSheets = [sheet];
+</script></head><body><p id="book">A passage the book styles itself.</p></body></html>"""
+
+def wait_for(check):
+    for _ in range(500):
+        if check(): return
+        QTest.qWait(20)
+    raise AssertionError("Chromium callback did not finish")
+
+def js(code, world=READER):
+    results = []
+    web.page().runJavaScript(code, world, results.append)
+    wait_for(lambda: bool(results))
+    return results[0]
+
+def load():
+    loaded = []
+    web.loadFinished.connect(loaded.append)
+    web.setHtml(PAGE)
+    wait_for(lambda: True in loaded)
+    web.loadFinished.disconnect()
+
+def highlight_style():
+    return js("""(() => {
+        const style = getComputedStyle(document.getElementById('book'), '::highlight(vocab-study-saved)');
+        return style.backgroundColor;
+    })()""")
+
+records = [{"id": "passage", "anchor": {"exact": "passage the book"}}]
+load()
+for _ in range(2):  # refreshing again adds nothing
+    assert json.loads(js(render_highlights_js(records)))["rendered"] == ["passage"]
+assert js("document.adoptedStyleSheets.length") == 2
+assert js("document.adoptedStyleSheets[0].cssRules[0].selectorText") == "#book"
+assert js("getComputedStyle(document.getElementById('book')).color") == "rgb(10, 120, 30)"
+assert js("document.querySelectorAll('style').length") == 0
+assert highlight_style() == "rgba(244, 204, 69, 0.45)"
+
+# Without constructed sheets, a style element carries the rules, once.
+load()
+js("Object.defineProperty(Document.prototype, 'adoptedStyleSheets', {value: undefined}); true;")
+for _ in range(2):
+    assert json.loads(js(render_highlights_js(records)))["rendered"] == ["passage"]
+assert js("document.querySelectorAll('style').length") == 1
+assert js("document.adoptedStyleSheets.length", world=0) == 1  # the book's only
+assert highlight_style() == "rgba(244, 204, 69, 0.45)"
+web.close()
+web.deleteLater()
+app.sendPostedEvents(None, QEvent.DeferredDelete)
+app.processEvents()
+'''
+    env = dict(os.environ)
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if sys.platform == "win32":
+        env["QT_QPA_PLATFORM"] = "windows"
+    env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
+    result = subprocess.run([sys.executable, "-c", script],
+                            cwd=Path(__file__).resolve().parents[1], env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr

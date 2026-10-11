@@ -214,6 +214,35 @@ function domRange(index, start, end) {
     return range;
 }
 
+const HIGHLIGHT_RULES =
+    '::highlight(vocab-study-saved){background-color:rgba(244,204,69,0.45);color:inherit}' +
+    '::highlight(vocab-study-active){background-color:rgba(242,157,54,0.72);color:inherit;' +
+    'text-decoration:underline}';
+
+function ensureHighlightStyle(state) {
+    // A constructed sheet is not an inline style, so a chapter whose
+    // Content-Security-Policy forbids those still paints the highlights.
+    // It goes after the sheets the book adopted, which stay.
+    try {
+        if (Array.isArray(document.adoptedStyleSheets) && typeof CSSStyleSheet === 'function' &&
+            typeof CSSStyleSheet.prototype.replaceSync === 'function') {
+            if (!state.sheet) {
+                const sheet = new CSSStyleSheet();
+                sheet.replaceSync(HIGHLIGHT_RULES);
+                state.sheet = sheet;
+            }
+            if (!document.adoptedStyleSheets.includes(state.sheet))
+                document.adoptedStyleSheets = [...document.adoptedStyleSheets, state.sheet];
+            return;
+        }
+    } catch (error) { /* a browser without constructed sheets: use a style element */ }
+    if (!state.style || !state.style.isConnected) {
+        state.style = document.createElement('style');
+        state.style.textContent = HIGHLIGHT_RULES;
+        (document.head || document.body).appendChild(state.style);
+    }
+}
+
 function clearHighlights(state) {
     if (state.registry) {
         state.registry.delete(SAVED);
@@ -340,13 +369,7 @@ def render_highlights_js(records, active_id=None, focus_id=None):
         state.registry = CSS.highlights;
         state.registry.set(SAVED, saved);
         state.registry.set(ACTIVE, active);
-        if (!state.style || !state.style.isConnected) {
-            state.style = document.createElement('style');
-            state.style.textContent =
-                '::highlight(vocab-study-saved){background-color:rgba(244,204,69,0.45);color:inherit}' +
-                '::highlight(vocab-study-active){background-color:rgba(242,157,54,0.72);color:inherit;text-decoration:underline}';
-            (document.head || document.body).appendChild(state.style);
-        }
+        ensureHighlightStyle(state);
         if (selection) restoreSelection(index, selection);
     } else {
         spanHighlights(index, resolved, activeId, state);

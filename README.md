@@ -87,6 +87,7 @@ opened. Messages are kept in memory only, until the app closes.
 Concept reviews are separate from vocabulary Study/Study All. Captures, explanations,
 and review history are stored locally. This workflow requires no AI or network access.
 EPUB highlights live with the module's captures; the original EPUB file is unchanged.
+They also show in books whose pages forbid inline styles.
 An optional tutor has not been added yet; no model is downloaded or sent your passages.
 
 The EPUB reader does not run a book's own JavaScript, because a script inside a

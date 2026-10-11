@@ -762,11 +762,27 @@ class MainWindow(QWidget):
                 e.ignore()
                 return
             if choice == QMessageBox.Save:
-                try:
-                    for buffer in drafts:
+                # Try every note: one conflict or write error must not leave
+                # the others unsaved. A note that fails keeps its draft, its
+                # recovery copy and its conflict check, and the window stays.
+                failed = []
+                for buffer in drafts:
+                    name = f"{buffer.module}/{buffer.note}"
+                    try:
                         buffer.save()
-                except Exception as error:
-                    QMessageBox.warning(self, "Could not save notes", str(error))
+                    except Exception as error:
+                        # A conflict message starts with the note's name.
+                        reason = str(error).removeprefix(f"'{name}' ")
+                        failed.append(f"• {name}: {reason}")
+                if failed:
+                    saved = len(drafts) - len(failed)
+                    text = ("Could not save these notes. Their drafts are still open:\n\n"
+                            + "\n".join(failed))
+                    if saved:
+                        self.ctx.changed.emit()  # views show the notes that were saved
+                        text += ("\n\nThe other note was saved." if saved == 1 else
+                                 f"\n\nThe other {saved} notes were saved.")
+                    QMessageBox.warning(self, "Could not save notes", text)
                     e.ignore()
                     return
             elif choice == QMessageBox.Discard:

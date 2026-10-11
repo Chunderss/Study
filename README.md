@@ -106,8 +106,11 @@ preview below the source. Tab moves between source and preview; use spaces for i
   Check the status beneath the editor: it reports pending backups and write failures.
   Edits since the last successful recovery write can still be lost in a crash.
 - Closing the app offers **Save / Discard / Cancel** for all drafts, including hidden ones.
-  A failed save keeps the app open. Save updates the Markdown file; Discard explicitly
-  removes the recovery copy. Previewing and recovery writes do not overwrite saved Markdown.
+  Save updates the Markdown files; Discard explicitly removes the recovery copies.
+  Save tries every draft. Notes that could not be saved, for example because another
+  program changed them, are listed together and keep their drafts and recovery copies;
+  the others are saved, and the app stays open. Previewing and recovery writes do not
+  overwrite saved Markdown.
 - Creating a note with an existing name is rejected. Deletion confirms that edits will be lost.
 - If another program changes a file while you have a draft, saving reports a conflict
   instead of overwriting it. Copy your draft before resolving the external change.

@@ -74,3 +74,50 @@ def test_declining_to_quit_never_leaves_discarded_notes_untracked(window, monkey
     assert one._active and one in window.ctx.notes.dirty_buffers()
     assert storage.load_note_draft("Book", "One")["content"] == "unsaved work"
     monkeypatch.setattr(storage, "clear_note_draft", clear)
+
+
+def open_draft(window, module, note, text):
+    window.app.storage.save_note(module, note, f"{note} on disk")
+    buffer = window.ctx.notes.open(module, note)
+    buffer.document.setPlainText(text)
+    buffer.flush_recovery()
+    return buffer
+
+
+def test_close_save_tries_every_note_and_lists_each_failure(window, monkeypatch):
+    storage = window.app.storage
+    window.app.cmd_create("Other")
+    a = open_draft(window, "Book", "A", "draft A")    # changed on disk: conflict
+    b = open_draft(window, "Other", "B", "draft B")   # saves
+    c = open_draft(window, "Book", "C", "draft C")    # write error
+    storage.save_note("Book", "A", "A changed elsewhere")
+    save_note = storage.save_note
+    def fail_c(module, note, *args, **kwargs):
+        if note == "C":
+            raise OSError("disk full")
+        return save_note(module, note, *args, **kwargs)
+    monkeypatch.setattr(storage, "save_note", fail_c)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Save)
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda parent, title, text, *rest: warnings.append((title, text)))
+    assert window.close() is False and window.isVisible()
+    # B, after the conflict, was saved and its recovery copy removed.
+    assert storage.load_note("Other", "B") == "draft B"
+    assert storage.load_note_draft("Other", "B") is None and not b.dirty
+    assert storage.load_note("Book", "A") == "A changed elsewhere"  # never overwritten
+    for buffer, text in ((a, "draft A"), (c, "draft C")):
+        assert buffer.dirty and buffer._active and buffer.document.toPlainText() == text
+        assert storage.load_note_draft("Book", buffer.note)["content"] == text
+    assert len(warnings) == 1
+    title, text = warnings[0]
+    assert title == "Could not save notes"
+    assert "• Book/A: changed on disk." in text and "• Book/C: disk full" in text
+    assert "Other/B" not in text and text.endswith("The other note was saved.")
+    # Closing again offers only the notes still unsaved.
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda parent, title, text, *rest: asked.append(text) or QMessageBox.Cancel)
+    assert window.close() is False
+    assert "Book/A" in asked[0] and "Book/C" in asked[0] and "Other/B" not in asked[0]
+    monkeypatch.setattr(storage, "save_note", save_note)

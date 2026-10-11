@@ -155,6 +155,21 @@ def test_platform_documents_folder(tmp_path, monkeypatch):
     assert paths.platform_documents_folder() == home
 
 
+def test_vocab_documents_stands_in_for_the_documents_folder(tmp_path, monkeypatch,
+                                                            documents_folder):
+    assert os.environ["VOCAB_DOCUMENTS"] == str(documents_folder)  # set for every test
+    assert paths.documents_folder() == documents_folder
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VOCAB_DOCUMENTS", "docs")       # relative: the working directory
+    assert paths.documents_folder() == tmp_path / "docs"
+    monkeypatch.setenv("HOME", str(tmp_path / "pat"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "pat"))
+    monkeypatch.setenv("VOCAB_DOCUMENTS", os.path.join("~", "docs"))
+    assert paths.documents_folder() == tmp_path / "pat" / "docs"
+    monkeypatch.setenv("VOCAB_DOCUMENTS", "")           # empty: the platform's folder
+    assert paths.documents_folder() == paths.platform_documents_folder()
+
+
 def test_path_forms(tmp_path, monkeypatch):
     base = tmp_path / "docs"
     calls = []
@@ -185,10 +200,10 @@ def test_documents_folder_matches_windows(tmp_path):
         os.path.normcase(os.path.normpath(expected))
 
 
-def test_terminal_relative_paths_use_the_chosen_folder_from_any_directory(tmp_path):
+def test_terminal_relative_paths_use_the_chosen_folder_from_any_directory(tmp_path,
+                                                                           documents_folder):
     # The real terminal, started in one folder with the folder for files set
-    # to another. (A child process does not see the conftest's Documents
-    # folder, so it is given a chosen folder.)
+    # to another, which comes before the Documents folder.
     home = tmp_path / "home"
     files = tmp_path / "files"
     started = tmp_path / "started"
@@ -202,4 +217,4 @@ def test_terminal_relative_paths_use_the_chosen_folder_from_any_directory(tmp_pa
                            env=dict(os.environ, VOCAB_HOME=str(home)))
     assert f"Exported 'Book' -> {files / 'book.json'}" in child.stdout, child.stdout + child.stderr
     assert (files / "book.json").is_file()
-    assert list(started.iterdir()) == []
+    assert list(started.iterdir()) == [] and list(documents_folder.iterdir()) == []

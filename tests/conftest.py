@@ -1,7 +1,8 @@
 """Settings every test gets, which child processes inherit through os.environ.
 
-No test may use a real data folder, and every child Python a test starts must
-import this checkout, whichever directory pytest was started from. vocab is a
+No test may use a real data folder or the real Documents folder, and every
+child Python a test starts must import this checkout, whichever directory
+pytest was started from. vocab is a
 namespace package, so a child otherwise imports the vocab/ its working
 directory or an installed copy of another checkout provides.
 """
@@ -42,14 +43,13 @@ def vocab_home(tmp_path_factory, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def documents_folder(tmp_path_factory, monkeypatch):
-    """Point the Documents folder, where relative paths in EXPORT, IMPORT
-    and the backup commands start, at a new temporary folder for each test,
-    so no test reads or writes the developer's real Documents folder.
-
-    Only this process is covered: a child process a test starts must be
-    given full paths.
+    """Point VOCAB_DOCUMENTS, the Documents folder where relative paths in
+    EXPORT, IMPORT and the backup commands start, at a new temporary folder
+    for each test, so neither a test nor a child process it starts, with
+    its own VOCAB_HOME or not, reads or writes the developer's real
+    Documents folder. A test of the real folder's lookup calls
+    platform_documents_folder(), or removes VOCAB_DOCUMENTS with monkeypatch.
     """
-    from vocab.core import paths
     folder = tmp_path_factory.mktemp("documents")
-    monkeypatch.setattr(paths, "documents_folder", lambda: folder)
+    monkeypatch.setenv("VOCAB_DOCUMENTS", str(folder))
     return folder

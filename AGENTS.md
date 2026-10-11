@@ -29,7 +29,7 @@ Use four-space indentation, `snake_case` for functions/modules, `PascalCase` for
 
 ## Testing Guidelines
 
-Tests use pytest, `test_*.py` filenames, and `test_*` functions. Add focused regressions for changed behavior, especially persistence, draft recovery, and reader interactions. Use `tmp_path` for data isolation and Qt's offscreen platform for GUI tests. `tests/conftest.py` gives every test a temporary `VOCAB_HOME` and puts this checkout first on `PYTHONPATH`; child processes inherit both. Give every child process an explicit `cwd`: the repository root, or a fresh `tmp_path` where a test needs one (`tests/test_child_processes.py` checks this). Install PySide6 to avoid skipped GUI coverage; Linux also needs Qt system libraries. CI downloads WordNet and tests the packaged Windows executable. No numeric coverage threshold is configured.
+Tests use pytest, `test_*.py` filenames, and `test_*` functions. Add focused regressions for changed behavior, especially persistence, draft recovery, and reader interactions. Use `tmp_path` for data isolation and Qt's offscreen platform for GUI tests. `tests/conftest.py` gives every test a temporary `VOCAB_HOME` and Documents folder (`VOCAB_DOCUMENTS`, where relative file paths start) and puts this checkout first on `PYTHONPATH`; child processes inherit all three. Give every child process an explicit `cwd`: the repository root, or a fresh `tmp_path` where a test needs one (`tests/test_child_processes.py` checks this). Install PySide6 to avoid skipped GUI coverage; Linux also needs Qt system libraries. CI downloads WordNet and tests the packaged Windows executable. No numeric coverage threshold is configured.
 
 ## Commit & Pull Request Guidelines
 
@@ -37,4 +37,4 @@ History uses imperative subjects such as “Restore Ctrl+B shortcuts for native 
 
 ## Data & Configuration
 
-Use `VOCAB_HOME` or `--home DIR` for isolated development data. Preserve atomic writes and migration backups. Keep personal notes, dictionaries, virtual environments, and generated bundles out of commits.
+Use `VOCAB_HOME` or `--home DIR` for isolated development data, and `VOCAB_DOCUMENTS` for the folder relative file paths start in. Preserve atomic writes and migration backups. Keep personal notes, dictionaries, virtual environments, and generated bundles out of commits.

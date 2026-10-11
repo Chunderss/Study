@@ -349,6 +349,9 @@ follows OneDrive and folder redirection), on Linux the XDG documents folder, oth
   folder. Full paths still work.
 - Every reply shows the full path of the file written or read. Files exported with a
   relative path before this change stay where they were written.
+- For test runs and other isolated runs, the environment variable `VOCAB_DOCUMENTS`
+  names a folder to use instead of Documents, as `VOCAB_HOME` does for the data folder.
+  A folder chosen with `FOLDER` still comes first.
 
 These vocabulary exports include each word's senses and the sentence it was added
 from, but not captures or notes; a module backup does.

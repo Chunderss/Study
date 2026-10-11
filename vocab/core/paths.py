@@ -295,7 +295,13 @@ def platform_documents_folder() -> Path:
 
 
 def documents_folder() -> Path:
-    """The default folder for files (tests replace this function)."""
+    """The default folder for files: the folder VOCAB_DOCUMENTS names, when
+    it is set, else platform_documents_folder(). Tests set VOCAB_DOCUMENTS,
+    as they set VOCAB_HOME, so that neither they nor the processes they start
+    reach the real folder. A relative value starts in the working directory."""
+    override = os.environ.get("VOCAB_DOCUMENTS")
+    if override:
+        return Path(os.path.abspath(expand_home(override)))
     return platform_documents_folder()
 
 

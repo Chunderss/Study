@@ -3,8 +3,10 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import uuid
 
 from vocab.cli.app import App
+from vocab.core import paths
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,3 +55,31 @@ def test_a_developer_vocab_home_is_left_alone(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert [p.name for p in real.iterdir()] == ["config.json"]
     assert (real / "config.json").read_text(encoding="utf-8") == '{"keep": true}'
+
+
+def test_child_processes_use_the_test_documents_folder(documents_folder, tmp_path):
+    # A child with its own data folder, writing to relative paths. Its home
+    # is a stand-in for the developer's, where a child that missed the
+    # test's Documents folder would write on Linux and macOS; on Windows
+    # such a child would write to the real Documents folder, so the names
+    # are new and anything found there is removed.
+    data, home = tmp_path / "data", tmp_path / "home"
+    (home / "Documents").mkdir(parents=True)
+    name = f"isolation-{uuid.uuid4().hex}"
+    real = [paths.platform_documents_folder() / f"{name}.{suffix}" for suffix in ("json", "zip")]
+    commands = f"CREATE Book\nEXPORT Book {name}.json\nBACKUP Book {name}.zip\nQUIT\n"
+    try:
+        child = subprocess.run([sys.executable, "-m", "vocab"], input=commands, text=True,
+                               capture_output=True, timeout=60, cwd=tmp_path,
+                               env=dict(os.environ, VOCAB_HOME=str(data), HOME=str(home),
+                                        USERPROFILE=str(home)))
+        assert f"Exported 'Book' -> {documents_folder / f'{name}.json'}" in child.stdout, \
+            child.stdout + child.stderr
+        assert f"-> {documents_folder / f'{name}.zip'} (" in child.stdout
+        assert sorted(p.name for p in documents_folder.iterdir()) == [f"{name}.json", f"{name}.zip"]
+        assert [p.relative_to(home) for p in home.rglob("*")] == [Path("Documents")]
+        assert not any(path.exists() for path in real)
+    finally:
+        for path in real:
+            if path.is_file():
+                path.unlink()

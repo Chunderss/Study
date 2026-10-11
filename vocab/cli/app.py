@@ -7,6 +7,7 @@ stdout, tests drive App methods directly.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -933,13 +934,17 @@ class App:
     def backup_destination(self, name: str, dest: Optional[str] = None):
         """Where BACKUP writes, and whether that is a default dated name:
         the folder for files (or a folder given) gets '<Module> <date>.zip';
-        a file name without .zip gets it appended."""
+        a file name without .zip gets it appended. A path typed with a
+        trailing separator names a folder, which must exist."""
         name = self.storage.canonical_name(name)
         if dest is None:
             return _backup.default_backup_path(self.files_folder(), name), True
         path = self.user_path(dest)
         if path.is_dir():
             return _backup.default_backup_path(path, name), True
+        if dest.endswith(tuple(filter(None, ("/", os.sep, os.altsep)))):
+            raise _backup.BackupError(f"Could not write to {path}: that folder does not exist. "
+                                      "Nothing was written.")
         if not path.name.lower().endswith(".zip"):
             path = path.with_name(path.name + ".zip")
         return path, False

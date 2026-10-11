@@ -189,6 +189,24 @@ def test_backup_default_names_folders_and_suffix(app, tmp_path, documents_folder
     assert run(app, "BACKUP Nope") == "! Module 'Nope' does not exist."
 
 
+def test_backup_to_a_folder_that_does_not_exist_is_refused(app, tmp_path, documents_folder):
+    app.cmd_create("Book")
+    endings = ["/"] + (["\\"] if os.name == "nt" else [])
+    for ending in endings:
+        assert run(app, f"BACKUP Book newdir{ending}") == (
+            f"! Could not write to {documents_folder / 'newdir'}: that folder does not exist. "
+            "Nothing was written.")
+        assert list(documents_folder.iterdir()) == []  # no newdir.zip
+    (documents_folder / "newdir").mkdir()
+    for number, ending in enumerate(endings, 1):
+        name = f"Book {DATE}.zip" if number == 1 else f"Book {DATE} ({number}).zip"
+        assert run(app, f"BACKUP Book newdir{ending}").startswith(
+            f"Backed up 'Book' -> {documents_folder / 'newdir' / name} (")
+    # Without the separator a missing name is still a file name.
+    assert run(app, "BACKUP Book other").startswith(
+        f"Backed up 'Book' -> {documents_folder / 'other.zip'} (")
+
+
 def test_backup_replaces_an_existing_file_only_after_confirmation(app, tmp_path,
                                                                   documents_folder):
     make_module(app, tmp_path)

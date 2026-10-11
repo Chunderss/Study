@@ -381,7 +381,9 @@ reading positions.
 
 - Without a destination the archive is `<Module> <YYYY-MM-DD>.zip` in the folder for
   files (` (2)`, ` (3)`... when that name is taken). A folder given gets that name
-  inside it; a file name without `.zip` gets `.zip` appended. The folder must exist.
+  inside it; a file name without `.zip` gets `.zip` appended. The folder must exist; a
+  path ending in `/` (or `\` on Windows) always names a folder, so `BACKUP Book newdir/`
+  is refused when `newdir` does not exist rather than writing `newdir.zip`.
 - An existing file is replaced only after you confirm.
 - The module is checked first with the rules a restore applies, so every archive
   written can be restored. A module with a damaged file, or a file it cannot read (no

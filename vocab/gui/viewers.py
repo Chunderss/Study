@@ -138,6 +138,10 @@ def _parse_xml(path):
         raise _UnreadableXml("an unsupported character encoding") from None
 
 
+def _pages(count):
+    return f"{count} page" if count == 1 else f"{count} pages"
+
+
 def _walk_sorted(top):
     """os.walk in a fixed order: folders compared without regard to case,
     as Windows lists them, and file names sorted."""
@@ -292,14 +296,31 @@ class EpubBook:
                 manifest[item.get("id")] = item.get("href")
 
             # 3) spine: ordered idrefs -> files
+            remote = missing = 0
             for it in tree.findall(".//opf:spine/opf:itemref", _OPF_NS):
                 idref = it.get("idref")
                 href = manifest.get(idref)
                 if not href:
+                    missing += 1  # it names no page of the book
                     continue
+                url = urlsplit(href)
+                if (url.netloc or len(url.scheme) > 1) and url.scheme.lower() != "file":
+                    remote += 1  # a web address: the reader shows only pages inside the book
+                    continue
+                # Paths leaving the book, file: addresses and drive letters
+                # still refuse it.
                 fpath = self._inside(opf_dir, href)
                 if os.path.exists(fpath):
                     self.chapters.append((self._nice_name(href), fpath))
+                else:
+                    missing += 1
+            if remote:
+                self.warnings.append(f"Skipped {_pages(remote)} of this book's reading order given as "
+                                     f"{'a web address' if remote == 1 else 'web addresses'}; the "
+                                     "reader shows only pages inside the book.")
+            if missing:
+                self.warnings.append(f"Skipped {_pages(missing)} of this book's reading order "
+                                     "missing from the book.")
 
         if not self.chapters:
             # last resort: any xhtml/html, in file-name order

@@ -163,3 +163,43 @@ finally:
                             cwd=Path(__file__).resolve().parents[1], env=env,
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def spine_book(path, hrefs, ids=None):
+    """A book whose reading order lists ``hrefs``, of which only the files
+    named one, two and three.xhtml exist."""
+    ids = ids or [f"i{n}" for n in range(len(hrefs))]
+    manifest = "".join(f'<item id="i{n}" href="{href}"/>' for n, href in enumerate(hrefs))
+    spine = "".join(f'<itemref idref="{idref}"/>' for idref in ids)
+    return make_book(path, {
+        "META-INF/container.xml": CONTAINER.format("content.opf"),
+        "content.opf": f'<package xmlns="http://www.idpf.org/2007/opf"><manifest>{manifest}</manifest>'
+                       f'<spine>{spine}</spine></package>',
+        "one.xhtml": PAGE.format("One"), "two.xhtml": PAGE.format("Two"),
+        "three.xhtml": PAGE.format("Three")})
+
+
+def test_reading_order_pages_given_by_web_address_are_skipped(tmp_path):
+    local = [("one", "one.xhtml"), ("two", "two.xhtml"), ("three", "three.xhtml")]
+    book = EpubBook(spine_book(tmp_path / "web.epub", [
+        "one.xhtml", "https://example.com/x.xhtml", "two.xhtml", "http://example.com/y.xhtml",
+        "data:text/html,hello", "three.xhtml"]))
+    assert chapters(book) == local
+    assert book.warnings == ["Skipped 3 pages of this book's reading order given as web addresses; "
+                             "the reader shows only pages inside the book."]
+    book = EpubBook(spine_book(tmp_path / "one-web.epub", [
+        "one.xhtml", "//example.com/x.xhtml", "two.xhtml", "three.xhtml"]))
+    assert chapters(book) == local
+    assert book.warnings == ["Skipped 1 page of this book's reading order given as a web address; "
+                             "the reader shows only pages inside the book."]
+
+    # Pages the book does not have, or no page at all, were already skipped.
+    book = EpubBook(spine_book(tmp_path / "missing.epub", [
+        "one.xhtml", "gone.xhtml", "two.xhtml", "three.xhtml"], ids=["i0", "i1", "i2", "nothing", "i3"]))
+    assert chapters(book) == local
+    assert book.warnings == ["Skipped 2 pages of this book's reading order missing from the book."]
+
+    # Local paths leaving the book still refuse it, file: addresses included.
+    for escaping in ("../../x.xhtml", "C:/x.xhtml", "file:///etc/passwd", "file://server/share/x.xhtml"):
+        with pytest.raises(ValueError, match="inside the book|outside the book"):
+            EpubBook(spine_book(tmp_path / "escaping.epub", ["one.xhtml", escaping]))

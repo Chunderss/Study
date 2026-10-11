@@ -108,7 +108,9 @@ limits.
 A book whose `container.xml` or package file is damaged still opens: the reader says
 so above the page while the book is open, and View → Console keeps the message. If
 the package file could not be read, chapters are listed by file name, in file-name
-order, which may differ from the book's reading order.
+order, which may differ from the book's reading order. Pages that a book's reading
+order gives as web addresses, or that are missing from the book, are skipped and
+counted in the same notice.
 
 The app reopens the selected module, pane layout, selected notes, preview visibility,
 and document readers after a normal exit. A vocabulary quiz reopens as a Vocab pane;

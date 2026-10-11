@@ -187,6 +187,9 @@ class MainWindow(QWidget):
         outer.addWidget(self.message)
         self.status = QLabel("", objectName="Muted")
         self.status.setContentsMargins(14, 4, 14, 8)
+        # The transient leader hint must not enlarge the whole workspace.
+        # Like messages, long status text remains available in its tooltip.
+        self.status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         outer.addWidget(self.status)
 
     # ---- shortcuts ------------------------------------------------------
@@ -261,6 +264,7 @@ class MainWindow(QWidget):
             self.status.setText("LEADER: press a key  (b sidebar · v/- split · z zoom · "
                                 "x close · h/j/k/l move · n/p cycle · r preview · w senses · "
                                 "/ help · Esc cancel)")
+            self.status.setToolTip(self.status.text())
         else:
             self._refresh_status()
 

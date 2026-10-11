@@ -304,10 +304,13 @@ js(viewer, """(() => {
 })()""")
 wait_for(lambda: viewer._web.selectedText().startswith("Unique legacy"))
 across = viewer._web.selectedText().strip()
-assert across == "Unique legacy sentence.\\n\\nUnique footnote.", repr(across)
+# Qt uses CRLF for native selections on Windows. Normalize only the assertion;
+# keep the selected text unchanged through saving, matching and Source below.
+assert across.replace("\\r\\n", "\\n") == "Unique legacy sentence.\\n\\nUnique footnote.", repr(across)
 js(viewer, "getSelection().removeAllRanges(); true;")
 legacy = {"kind": "epub", "filename": "book.epub", "chapter": 0, "scroll": 0.3}
 item = save_capture("Book", across, legacy)
+assert store.load("Book")[item["id"]]["quote"] == across
 expect_marks(viewer, [("legacy", "Unique legacy sentence.Unique footnote.")])
 
 # Source finds the passage instead of the saved position.

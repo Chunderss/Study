@@ -310,15 +310,25 @@ def test_backup_refuses_a_document_that_changes_while_copied(app, tmp_path, docu
 
 def deny(monkeypatch, path):
     """Make opening ``path`` fail as an unreadable or locked file does, for
-    open() and for zipfile, which calls io.open."""
+    open(), pathlib and zipfile, which calls io.open."""
     real_open = open
+    real_path_open = Path.open
 
     def guarded(file, *args, **kwargs):
         if isinstance(file, (str, os.PathLike)) and os.fspath(file) == os.fspath(path):
             raise PermissionError(errno.EACCES, "Permission denied", os.fspath(path))
         return real_open(file, *args, **kwargs)
+
+    def guarded_path(file, *args, **kwargs):
+        if file == path:
+            raise PermissionError(errno.EACCES, "Permission denied", os.fspath(path))
+        return real_path_open(file, *args, **kwargs)
+
     monkeypatch.setattr("builtins.open", guarded)
     monkeypatch.setattr(io, "open", guarded)
+    # Python 3.10's pathlib caches its opener; newer versions call io.open.
+    # Deny this route on both, including the test's own read_bytes() calls.
+    monkeypatch.setattr(Path, "open", guarded_path)
 
 
 def test_backup_names_a_document_it_cannot_read(app, tmp_path, documents_folder, monkeypatch):
@@ -575,8 +585,10 @@ class Restore:
         self.app = app
         self.names = app.storage.list_names()
 
-    def refused(self, archive, line=None):
-        before = archive.read_bytes() if archive.is_file() else None
+    def refused(self, archive, line=None, *, check_archive=True):
+        # An unreadable archive's bytes must be checked by the caller outside
+        # its injected access failure. All restore side-effect checks still run.
+        before = archive.read_bytes() if check_archive and archive.is_file() else None
         reply = run(self.app, line or f'RESTORE "{archive}" AS Copy')
         assert reply.startswith("! "), reply
         assert "nothing was restored" in reply.lower(), reply
@@ -744,12 +756,16 @@ def test_an_unreadable_backup_is_not_called_damaged(app, tmp_path, documents_fol
     archive = made_backup(app, tmp_path, documents_folder)
     restore = Restore(app)
     expected = f"! Could not restore {archive}: Permission denied. Nothing was restored."
+    before = archive.read_bytes()
     with monkeypatch.context() as patch:
         deny(patch, archive)  # no permission, or locked by another program
-        assert restore.refused(archive) == expected
+        with pytest.raises(PermissionError):
+            archive.read_bytes()
+        assert restore.refused(archive, check_archive=False) == expected
         with pytest.raises(ValueError) as refused:  # the desktop checks with backup_info
             app.backup_info(str(archive))
         assert f"! {refused.value}" == expected
+    assert archive.read_bytes() == before
     # A lock on part of the file shows once zipfile reads past the start.
     real_zipfile = zipfile.ZipFile
 

@@ -357,6 +357,11 @@ LONG_USE = " ".join(["He had walked since dawn through the hills above the town,
 def test_the_sense_list_keeps_its_rows_whatever_the_sentence_and_reply(
         window, qt, monkeypatch, no_dialogs, size):
     from PySide6.QtWidgets import QLabel
+    # Exercise a leader hint wider than either window on all platform fonts.
+    # The rest of the picker continues to use the native font metrics.
+    font = window.status.font()
+    font.setPixelSize(18)
+    window.status.setFont(font)
     window.resize(*size)
     qt.processEvents()
     mock_lookup(window, monkeypatch, SIX)
@@ -378,7 +383,18 @@ def test_the_sense_list_keeps_its_rows_whatever_the_sentence_and_reply(
         assert label.height() <= lines * label.fontMetrics().lineSpacing() + 2
     check(picker.context, f"“{LONG_USE}”", 3)
     before = picker.geometry()
-    leader(native, Qt.Key_W)
+    window_size = window.size()
+    QTest.keyClick(native, Qt.Key_B, Qt.ControlModifier)
+    # A real user pauses between the leader and its command. Let the long
+    # shortcut hint reach the layout: it must not push this overlay outside
+    # the original workspace by widening the whole window.
+    qt.processEvents()
+    assert window.status.text().startswith("LEADER:")
+    assert window.status.toolTip() == window.status.text()
+    assert window.minimumSizeHint().width() <= window_size.width()
+    assert window.size() == window_size
+    assert area.contains(picker.geometry())
+    QTest.keyClick(native, Qt.Key_W)
     for _ in range(3):
         QTest.keyClick(native, Qt.Key_Down)
         QTest.keyClick(native, Qt.Key_Space)

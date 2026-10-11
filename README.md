@@ -31,8 +31,8 @@ an already built Windows executable. The portable app is unsigned.
    replaces an existing entry; a dictionary lookup never replaces one. When the
    dictionary has several senses, a small panel lists them with the one studied in
    bold; press Ctrl+B, then `w`, to move into it, the arrow keys and Enter to study
-   another sense, and Esc to close it. Click a word in the Vocab list (or Tab to it
-   and press Enter) to see its senses later.
+   another sense, and Esc to close it. Click a word in the Vocab list (or move to it
+   with Up and Down and press Enter) to see its senses later.
 4. Click **Study** for this module, or **Study All** for all modules.
 5. Use **View → Split side by side** to keep notes open alongside your book or vocabulary.
 
@@ -190,8 +190,10 @@ In the desktop app, adding a word with several senses from Vocab or with **Add w
 an EPUB shows the sense picker in a corner of the workspace, away from the pane you are
 typing or reading in. It does not take keyboard focus or resize anything: Esc closes it
 from anywhere (before Esc does anything else), and Ctrl+B `w` moves into it, or reopens
-it for the last word looked up. Each word in the Vocab list is a link to its senses, the
-senses it studies are listed under it, and the list keeps its place when it updates. The
+it for the last word looked up. Each word in the Vocab list is a link to its senses, and
+the senses it studies are listed under it. In the list, Up and Down move between the
+words and Enter opens the highlighted one; one Tab leaves the list. The list keeps its
+scroll position and the highlighted word when it updates or you come back to it. The
 picker shows the module and dictionary, whether the first sense was chosen automatically
 or by you, and the sentence. Moving into it highlights the first studied sense, and
 Enter there keeps every sense the word studies, marking them as chosen by you. Once you

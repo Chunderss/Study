@@ -348,6 +348,16 @@ def test_the_picker_keeps_clear_of_the_help_panel_and_the_focused_pane(
 
 
 # ---- from the Vocab list -----------------------------------------------------
+def click_word(vocab, word):
+    cursor = vocab.words.document().find(word)
+    rect = vocab.words.cursorRect(cursor)
+    if not vocab.words.viewport().rect().contains(rect):
+        bar = vocab.words.verticalScrollBar()
+        bar.setValue(bar.value() + rect.top() - 20)
+        rect = vocab.words.cursorRect(cursor)
+    QTest.mouseClick(vocab.words.viewport(), Qt.LeftButton, pos=rect.center() - QPoint(8, 0))
+
+
 def two_words(window, monkeypatch):
     mock_lookup(window, monkeypatch)
     window.app.cmd_add("flag", target="Book")
@@ -360,8 +370,9 @@ def test_a_word_in_the_vocab_list_opens_its_senses_from_the_keyboard(
         window, qt, monkeypatch, no_dialogs):
     vocab = two_words(window, monkeypatch)
     native = focus(window, vocab.words, qt)
-    QTest.keyClick(native, Qt.Key_Tab)    # first word link: bank
-    QTest.keyClick(native, Qt.Key_Tab)    # second: flag
+    QTest.keyClick(native, Qt.Key_Down)   # first word: bank
+    QTest.keyClick(native, Qt.Key_Down)   # second: flag
+    assert vocab.words.textCursor().selectedText() == "flag"
     QTest.keyClick(native, Qt.Key_Return)
     picker = window.sense_picker
     assert picker.isVisible() and qt.focusWidget() is picker.list
@@ -373,13 +384,71 @@ def test_a_word_in_the_vocab_list_opens_its_senses_from_the_keyboard(
     assert qt.focusWidget() is vocab.words  # back in the list
 
 
+def test_one_tab_leaves_the_vocab_list(window, qt, monkeypatch):
+    for i in range(20):
+        window.app.cmd_add(f"word{i:02d}", target="Book", manual_def=f"meaning {i}")
+    window.ctx.changed.emit()
+    vocab = window.workspace.focused.component
+    native = focus(window, vocab.words, qt)
+    QTest.keyClick(native, Qt.Key_Tab)
+    assert qt.focusWidget() is vocab.add_input
+    QTest.keyClick(native, Qt.Key_Tab, Qt.ShiftModifier)
+    assert qt.focusWidget() is vocab.words
+    QTest.keyClick(native, Qt.Key_Tab, Qt.ShiftModifier)
+    assert qt.focusWidget() is not vocab.words
+    QTest.keyClick(native, Qt.Key_Tab)
+    assert qt.focusWidget() is vocab.words
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Down)  # a highlighted word does not hold Tab either
+    QTest.keyClick(native, Qt.Key_Tab)
+    assert qt.focusWidget() is vocab.add_input
+
+
+def test_the_vocab_list_keeps_the_keyboard_place(window, qt, monkeypatch, no_dialogs):
+    mock_lookup(window, monkeypatch)
+    for i in range(20):
+        window.app.cmd_add(f"a{i:02d}", target="Book", manual_def=f"meaning {i}")
+        window.app.cmd_add(f"z{i:02d}", target="Book", manual_def=f"meaning {i}")
+    window.app.cmd_add("flag", target="Book")  # the 21st word
+    window.ctx.changed.emit()
+    vocab = window.workspace.focused.component
+    words = vocab.words
+    native = focus(window, words, qt)
+    for _ in range(21):
+        QTest.keyClick(native, Qt.Key_Down)
+    assert words.textCursor().selectedText() == "flag"
+    scroll = words.verticalScrollBar()
+    assert scroll.value() > 0  # brought into view
+    QTest.keyClick(native, Qt.Key_Return)
+    picker = window.sense_picker
+    assert picker.title.text() == "flag" and qt.focusWidget() is picker.list
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Return)  # the choice updates the list
+    assert definitions(window, "flag")[0] == "become less intense"
+    QTest.keyClick(native, Qt.Key_Escape)
+    assert qt.focusWidget() is words and words.textCursor().selectedText() == "flag"
+    QTest.keyClick(native, Qt.Key_Down)
+    assert words.textCursor().selectedText() == "z00"  # the next word, not the first
+    window.app.cmd_add("b", target="Book", manual_def="m")  # a word above it
+    window.ctx.changed.emit()
+    assert words.textCursor().selectedText() == "z00"
+    QTest.keyClick(native, Qt.Key_Up)
+    assert words.textCursor().selectedText() == "flag"
+    focus(window, vocab.add_input, qt)
+    assert not words.textCursor().hasSelection()  # shown only while the list has focus
+    QTest.keyClick(native, Qt.Key_Tab, Qt.ShiftModifier)
+    assert qt.focusWidget() is words and words.textCursor().selectedText() == "flag"
+    click_word(vocab, "z05")
+    assert picker.title.text() == "z05"
+    QTest.keyClick(native, Qt.Key_Escape)
+    QTest.keyClick(native, Qt.Key_Down)
+    assert qt.focusWidget() is words and words.textCursor().selectedText() == "z06"
+
+
 def test_a_click_on_a_word_opens_its_senses_even_your_own(window, qt, monkeypatch, no_dialogs):
     vocab = two_words(window, monkeypatch)
     focus(window, vocab.add_input, qt)
-    document = vocab.words.document()
-    cursor = document.find("bank")
-    rect = vocab.words.cursorRect(cursor)
-    QTest.mouseClick(vocab.words.viewport(), Qt.LeftButton, pos=rect.center() - QPoint(8, 0))
+    click_word(vocab, "bank")
     picker = window.sense_picker
     assert picker.isVisible() and picker.title.text() == "bank"
     assert picker.state.text() == "Your own definition"
@@ -462,11 +531,6 @@ def test_space_checks_several_and_the_button_keeps_them(window, qt, monkeypatch,
     QTest.keyClick(picker.list, Qt.Key_Return)  # Enter: only the highlighted sense
     assert "kept" not in raw(window, "flag")
     assert definitions(window, "flag")[0] == "become less intense"
-
-
-def click_word(vocab, word):
-    rect = vocab.words.cursorRect(vocab.words.document().find(word))
-    QTest.mouseClick(vocab.words.viewport(), Qt.LeftButton, pos=rect.center() - QPoint(8, 0))
 
 
 def test_opening_then_enter_keeps_every_studied_sense(window, qt, monkeypatch, no_dialogs):

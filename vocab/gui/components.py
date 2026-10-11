@@ -12,6 +12,7 @@ from __future__ import annotations
 import html
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMessageBox,
                                QPushButton, QSplitter, QTextBrowser, QTextEdit,
@@ -42,6 +43,128 @@ class BaseComponent(QWidget):
 
 
 # --------------------------------------------------------------------------- #
+class WordList(QTextBrowser):
+    """The Vocab list, each word a link to its senses (``word_opened`` gets
+    its position). A click opens a word; from the keyboard, Up and Down move
+    between the words and Enter opens the highlighted one. One Tab leaves
+    the list, where QTextBrowser would first stop on every link. The
+    highlighted word is the keyboard's place: it is shown while the list
+    has focus and comes back after an update or a visit elsewhere."""
+
+    def __init__(self, word_opened):
+        super().__init__()
+        self.setOpenLinks(False)
+        self.setAccessibleDescription("Up and Down move between the words; Enter opens the "
+                                      "senses of the highlighted word.")
+        self._word_opened = word_opened
+        self._links = []    # (start, end) of each word's link in the text, by position
+        self.place = None   # the position of the highlighted word
+        self.anchorClicked.connect(self._clicked)
+
+    def set_links(self, place=None) -> None:
+        """After setHtml: find the links, and highlight ``place`` again."""
+        self._links, hrefs = [], []
+        block = self.document().begin()
+        while block.isValid():
+            fragments = block.begin()
+            while not fragments.atEnd():
+                fragment = fragments.fragment()
+                href = fragment.charFormat().anchorHref()
+                if href.startswith("sense:"):
+                    start = fragment.position()
+                    if hrefs and hrefs[-1] == href:  # one link in several fragments
+                        start = self._links.pop()[0]
+                        hrefs.pop()
+                    self._links.append((start, fragment.position() + fragment.length()))
+                    hrefs.append(href)
+                fragments += 1
+            block = block.next()
+        self.place = None if place is None or not self._links else min(place, len(self._links) - 1)
+        if self.hasFocus():
+            self._show_place()
+
+    def _highlighted(self):
+        cursor = self.textCursor()
+        span = (cursor.selectionStart(), cursor.selectionEnd())
+        return self._links.index(span) if cursor.hasSelection() and span in self._links else None
+
+    def _show_place(self) -> None:
+        """Highlight the place without scrolling the list."""
+        if self.place is None:
+            return
+        scroll = self.verticalScrollBar().value()
+        self._select(self.place)
+        self.verticalScrollBar().setValue(scroll)
+
+    def _select(self, index: int) -> None:
+        start, end = self._links[index]
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.KeepAnchor)
+        self.setTextCursor(cursor)  # scrolls the word into view
+        self.place = index
+
+    def _reveal(self, index: int) -> None:
+        """Highlight a word and scroll so the senses under it show too."""
+        self._select(index)
+        block = self.document().findBlock(self._links[index][0])
+        rect = self.document().documentLayout().blockBoundingRect(block)
+        scroll = self.verticalScrollBar()
+        height = self.viewport().height()
+        if rect.bottom() > scroll.value() + height:
+            scroll.setValue(int(rect.bottom()) - height + 1)
+        if rect.top() < scroll.value():
+            scroll.setValue(int(rect.top()))
+
+    def _clicked(self, url) -> None:
+        try:
+            index = int(url.toString().partition(":")[2])
+        except ValueError:
+            return
+        if 0 <= index < len(self._links):
+            self.place = index
+            self._word_opened(index)
+
+    def focusNextPrevChild(self, next):
+        return QTextEdit.focusNextPrevChild(self, next)  # not QTextBrowser's link stops
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        plain = not event.modifiers() & ~Qt.KeypadModifier
+        if plain and self._links and key in (Qt.Key_Down, Qt.Key_Up):
+            current = self._highlighted()
+            if current is None:
+                target = 0 if self.place is None else self.place
+            else:
+                target = current + (1 if key == Qt.Key_Down else -1)
+            if 0 <= target < len(self._links):
+                self._reveal(target)
+                event.accept()
+                return
+        elif plain and key in (Qt.Key_Return, Qt.Key_Enter):
+            current = self._highlighted()
+            if current is not None:
+                event.accept()
+                self._word_opened(current)
+                return
+        super().keyPressEvent(event)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        if self._highlighted() is None and event.reason() != Qt.MouseFocusReason:
+            self._show_place()
+
+    def focusOutEvent(self, event):
+        # Like a link Qt highlights, the place shows only while the list has
+        # focus; a selection made with the mouse is left alone.
+        if (self._highlighted() is not None
+                and event.reason() not in (Qt.ActiveWindowFocusReason, Qt.PopupFocusReason)):
+            cursor = self.textCursor()
+            cursor.clearSelection()
+            self.setTextCursor(cursor)
+        super().focusOutEvent(event)
+
+
 class VocabComponent(BaseComponent):
     TITLE = "Vocab"
 
@@ -49,10 +172,8 @@ class VocabComponent(BaseComponent):
         super().__init__(ctx, parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
-        # Each word is a link (click, or Tab to it and press Enter) to its senses.
-        self.words = QTextBrowser()
-        self.words.setOpenLinks(False)
-        self.words.anchorClicked.connect(self._open_senses)
+        # Each word is a link to its senses: a click, or Up/Down to it and Enter.
+        self.words = WordList(self._open_senses)
         self._linked = []           # the words the links name, by position
         self._linked_module = None  # the module those links belong to
         lay.addWidget(self.words, 1)
@@ -105,14 +226,12 @@ class VocabComponent(BaseComponent):
     def _show_text(self, text: str) -> None:
         self._linked, self._linked_module = [], None
         self.words.setPlainText(text)
+        self.words.set_links()
 
-    def _open_senses(self, url) -> None:
+    def _open_senses(self, index: int) -> None:
         """A word's link: show its senses in the sense picker."""
-        try:
-            word = self._linked[int(url.toString().partition(":")[2])]
-        except (ValueError, IndexError):
-            return
-        self.ctx.senses_requested.emit(self._linked_module, word)
+        if 0 <= index < len(self._linked):
+            self.ctx.senses_requested.emit(self._linked_module, self._linked[index])
 
     def refresh(self) -> None:
         name = self.app.current_module
@@ -130,9 +249,13 @@ class VocabComponent(BaseComponent):
         if not wl.words:
             self._show_text("(no vocab yet) — add your first word below.")
             return
-        # A refresh of the same module keeps the place in a long list.
+        # A refresh of the same module keeps the place in a long list: the
+        # scroll position, and the highlighted word (where it was, if it went).
         scroll = self.words.verticalScrollBar()
-        keep = scroll.value() if self._linked_module == name else 0
+        same = self._linked_module == name
+        keep = scroll.value() if same else 0
+        place = self.words.place if same else None
+        placed = self._linked[place].strip().lower() if place is not None else None
         blocks, linked = [], []
         for key in sorted(wl.words):
             w = wl.words[key]
@@ -147,6 +270,8 @@ class VocabComponent(BaseComponent):
         self._linked, self._linked_module = linked, name
         self.words.setHtml("".join(blocks))
         self.words.document().documentLayout().documentSize()  # lay out before scrolling
+        keys = [word.strip().lower() for word in linked]
+        self.words.set_links(keys.index(placed) if placed in keys else place)
         scroll.setValue(keep)
 
 

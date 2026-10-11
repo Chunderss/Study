@@ -86,3 +86,91 @@ def test_invalid_capture_or_review_never_changes_disk(learning):
     with pytest.raises(ValueError):
         learning.review("Book", item["id"], item["revision"], "", "good")
     assert path.read_bytes() == before
+
+
+def test_search_folds_case_and_latin_accents_as_grading_does():
+    import unicodedata
+    from vocab.core.learning import search_text
+    from vocab.study.judge import _plain
+    assert search_text("Café RÉSUMÉ Straße ŁÓDŹ ﬁne Æther") == "cafe resume strasse lodz fine aether"
+    assert search_text("col·legi COŀLEGI") == "collegi collegi"   # the middle dot, as in grading
+    assert search_text("हिन्दी йод") == "हिन्दी йод"               # other scripts keep their marks
+    for word in ("ǿre", "Ǣsir", "ǽther", "Øre", "naïve", "żółty", "Ħal", "ĳssel", "Đuro",
+                 "col·lecció", "Ŀlibre", "ðe", "þorn", "Dvořák", "Việt"):
+        assert search_text(word) == _plain(unicodedata.normalize("NFKC", word).casefold()), word
+
+
+def test_search_words_must_all_appear_in_question_passage_or_notes(learning):
+    from vocab.core.learning import CaptureFilter
+    item = capture(learning, prompt="Why does it work?", quote="Mitochondria supply energy.",
+                   explanation="Ask about the résumé.")
+    item = learning.review("Book", item["id"], item["revision"], "zebra answer", "good", now=100)
+    matches = lambda query: learning.matches(item, CaptureFilter(query=query))
+    assert matches("MITOCHONDRIA") and matches("resume why") and matches("chond") and matches("  ")
+    assert not matches("mitochondria zebra")  # earlier review answers are not searched
+    assert not matches("Mitochondria-supply")
+
+
+def test_status_filters_split_questions_and_concepts(learning):
+    from vocab.core.learning import CaptureFilter, STATUS_FILTERS
+    open_q = capture(learning, kind="question")
+    resolved = capture(learning, kind="question", resolved=True)
+    due = capture(learning)
+    later = capture(learning)
+    later = learning.review("Book", later["id"], later["revision"], "answer", "good", now=1000)
+    items = learning.load("Book")
+    wanted = {"all": list(items), "open": [open_q["id"]], "resolved": [resolved["id"]],
+              "questions": [open_q["id"], resolved["id"]], "due": [due["id"]],
+              "later": [later["id"]], "concepts": [due["id"], later["id"]]}
+    assert list(wanted) == list(STATUS_FILTERS)
+    for status, ids in wanted.items():
+        shown = [key for key, item in items.items()
+                 if learning.matches(item, CaptureFilter(status=status), now=2000)]
+        assert sorted(shown) == sorted(ids), status
+    # The status shown in the list agrees with the due filter.
+    assert learning.status(items[due["id"]], now=2000) == "Due now"
+    assert learning.status(items[later["id"]], now=2000).startswith("Review ")
+
+
+def test_source_filter_lists_documents_then_their_chapters_or_pages(learning):
+    from vocab.core.learning import CaptureFilter, source_choice_label, source_choices
+    sources = [{"kind": "epub", "filename": "b.epub", "chapter": 9},
+               {"kind": "epub", "filename": "b.epub", "chapter": 1},
+               {"kind": "pdf", "filename": "A.pdf", "page": 0},
+               {"kind": "pdf", "filename": "A.pdf", "page": True},     # damaged place
+               {"kind": "epub", "filename": "c.epub", "chapter": -1},  # damaged place
+               {"kind": "pdf", "filename": "d.pdf", "page": "2"},      # damaged place
+               {"filename": 7}, {}, {"label": "Old label"}]
+    made = [capture(learning, source=source) for source in sources]
+    items = learning.load("Book")
+    keys = source_choices(items)
+    assert [source_choice_label(key) for key in keys] == [
+        "A.pdf", "A.pdf · page 1", "b.epub", "b.epub · chapter 2", "b.epub · chapter 10",
+        "c.epub", "d.pdf", "Old label", "Manual captures"]
+    # A chosen source whose captures are gone stays listed, in its place.
+    kept = source_choices(items, keep=("file", "B2.pdf", "pdf", 2))
+    assert [source_choice_label(key) for key in kept][5:7] == ["B2.pdf", "B2.pdf · page 3"]
+    shown = lambda key: [index for index, item in enumerate(made)
+                         if learning.matches(items[item["id"]], CaptureFilter(source=key))]
+    assert shown(("file", "b.epub")) == [0, 1]
+    assert shown(("file", "b.epub", "epub", 1)) == [1]
+    assert shown(("file", "A.pdf")) == [2, 3]
+    assert shown(("file", "A.pdf", "pdf", 0)) == [2]
+    assert shown(("label", "Old label")) == [8]
+    assert shown(("manual",)) == [6, 7]
+
+
+def test_saved_filter_state_round_trips_and_drops_damaged_parts():
+    from vocab.core.learning import CaptureFilter
+    for chosen in (CaptureFilter("cell energy", ("file", "b.epub", "epub", 2), "due"),
+                   CaptureFilter("", ("label", "Old label"), "open"),
+                   CaptureFilter("x", ("manual",)), CaptureFilter()):
+        assert CaptureFilter.from_state(json.loads(json.dumps(chosen.state()))) == chosen
+    for damaged in ({"query": 5, "source": ["file", "b.epub", "epub", True], "status": "everything"},
+                    {"query": None, "source": ["file", "b.epub", ["epub"], 2], "status": ["due"]},
+                    {"source": ["file", ""]}, {"source": ["manual", "x"]}, {"source": "manual"},
+                    ["not", "a", "dict"], None):
+        assert CaptureFilter.from_state(damaged) == CaptureFilter(), damaged
+    partly = CaptureFilter.from_state({"query": "cell", "source": ["pdf", 3], "status": "later"})
+    assert partly == CaptureFilter("cell", None, "later")
+    assert not CaptureFilter(query="  ·  ").active and CaptureFilter(status="due").active

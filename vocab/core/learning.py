@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
+from functools import cached_property
 import math
 from datetime import datetime
 import time
+import unicodedata
 import uuid
 
 from .storage import DataFileError, _atomic_write, _read_json, ModuleNotFound, in_transaction
+from .text import drop_latin_accents
 from ..algorithms.base import Review
 from ..algorithms.leitner import LeitnerScheduler
 
@@ -19,6 +23,144 @@ def source_label(source):
     if source.get("kind") == "epub":
         return f"{label} · chapter {source.get('chapter', 0) + 1}"
     return label
+
+
+# ---- search and filters for the Learning list ---------------------------
+
+def search_text(text):
+    """text as the Learning search compares it: NFKC, case-folded, with
+    accents on Latin letters dropped as grading drops them ('Café' -> 'cafe',
+    'col·legi' -> 'collegi'); other scripts keep their marks."""
+    if text.isascii():
+        return text.lower()
+    text = unicodedata.normalize("NFKC", text).casefold()
+    return text if text.isascii() else drop_latin_accents(text)
+
+
+def search_fields(item):
+    """The capture text a search looks in: the question, the passage and the
+    notes, folded by search_text. Earlier review answers are not searched."""
+    return tuple(search_text(item[field]) for field in ("prompt", "quote", "explanation"))
+
+
+def _whole(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+_PLACE_FIELD = {"pdf": "page", "epub": "chapter"}
+
+
+def source_keys(source):
+    """(document, place) of a capture's source for the Source filter.
+
+    document is ("file", filename), ("label", label) for an older source with
+    only a label, or ("manual",). place is ("pdf", page) or ("epub", chapter)
+    within a file, or None, also when the stored number is unusable.
+    """
+    filename, label = source.get("filename"), source.get("label")
+    if not (isinstance(filename, str) and filename):
+        if isinstance(label, str) and label:
+            return ("label", label), None
+        return ("manual",), None
+    kind = source.get("kind")
+    number = source.get(_PLACE_FIELD[kind]) if kind in _PLACE_FIELD else None
+    return ("file", filename), ((kind, number) if _whole(number) else None)
+
+
+def source_choice_label(key):
+    """The Source filter's name for a document or one of its places."""
+    if key[0] == "manual":
+        return "Manual captures"
+    if len(key) == 4:
+        return source_label({"kind": key[2], "filename": key[1], _PLACE_FIELD[key[2]]: key[3]})
+    return key[1]
+
+
+def source_choices(items, keep=None):
+    """Source filter keys: documents sorted by name, each followed by its
+    pages or chapters in order, then manual captures. keep, the chosen key,
+    stays listed in its place after its last capture is gone."""
+    places = {}
+    for item in items.values():
+        document, place = source_keys(item["source"])
+        places.setdefault(document, set())
+        if place is not None:
+            places[document].add(place)
+    if keep is not None:
+        document = keep[:1] if keep[0] == "manual" else keep[:2]
+        places.setdefault(document, set())
+        if len(keep) == 4:
+            places[document].add(keep[2:])
+    keys = []
+    for document in sorted((d for d in places if d[0] != "manual"),
+                           key=lambda d: (d[1].casefold(), d)):
+        keys.append(document)
+        keys.extend(document + place for place in sorted(places[document]))
+    if ("manual",) in places:
+        keys.append(("manual",))
+    return keys
+
+
+# Status filter keys and their menu text, in menu order.
+STATUS_FILTERS = {
+    "all": "All captures",
+    "open": "Open questions",
+    "resolved": "Resolved questions",
+    "questions": "All questions",
+    "due": "Concepts due now",
+    "later": "Concepts not due yet",
+    "concepts": "All concepts",
+}
+
+
+def _saved_source_key(value):
+    """A Source filter key read back from saved state, or None."""
+    if not isinstance(value, (list, tuple)):
+        return None
+    key = tuple(value)
+    if key == ("manual",):
+        return key
+    if len(key) >= 2 and isinstance(key[1], str) and key[1]:
+        if len(key) == 2 and key[0] in ("file", "label"):
+            return key
+        if (len(key) == 4 and key[0] == "file" and isinstance(key[2], str)
+                and key[2] in _PLACE_FIELD and _whole(key[3])):
+            return key
+    return None
+
+
+@dataclass(frozen=True)
+class CaptureFilter:
+    """What the Learning list shows: captures that contain every word of
+    query, come from source (a source_choices key; None for any) and have
+    status (a STATUS_FILTERS key)."""
+    query: str = ""
+    source: tuple = None
+    status: str = "all"
+
+    @cached_property
+    def words(self):
+        return search_text(self.query).split()
+
+    @property
+    def active(self):
+        return bool(self.words) or self.source is not None or self.status != "all"
+
+    def state(self):
+        """JSON-ready form for the workspace file."""
+        return {"query": self.query, "source": None if self.source is None else list(self.source),
+                "status": self.status}
+
+    @classmethod
+    def from_state(cls, value):
+        """The filter saved by state(). Each unusable part falls back to its
+        default; this never raises."""
+        if not isinstance(value, dict):
+            return cls()
+        query, status = value.get("query"), value.get("status")
+        return cls(query=query if isinstance(query, str) else "",
+                   source=_saved_source_key(value.get("source")),
+                   status=status if isinstance(status, str) and status in STATUS_FILTERS else "all")
 
 
 def _is_time(value):
@@ -143,6 +285,31 @@ class LearningStore:
         now = time.time() if now is None else now
         return self.scheduler.due_order({key: item["card"] for key, item in items.items()
                                          if item["kind"] == "concept"}, now)
+
+    def matches(self, item, capture_filter, now=None, fields=None):
+        """Whether the Learning list shows item under capture_filter. fields
+        are search_fields(item), if already known. Due means what due() and
+        status() mean by it."""
+        status, kind = capture_filter.status, item["kind"]
+        if status in ("open", "resolved", "questions") and kind != "question":
+            return False
+        if status in ("due", "later", "concepts") and kind != "concept":
+            return False
+        if status in ("open", "resolved") and item["resolved"] != (status == "resolved"):
+            return False
+        if status in ("due", "later"):
+            now = time.time() if now is None else now
+            if self.scheduler.is_due(item["card"], now) != (status == "due"):
+                return False
+        wanted = capture_filter.source
+        if wanted is not None:
+            document, place = source_keys(item["source"])
+            if (document + place if place and len(wanted) == 4 else document) != wanted:
+                return False
+        if capture_filter.words:
+            fields = search_fields(item) if fields is None else fields
+            return all(any(word in field for field in fields) for word in capture_filter.words)
+        return True
 
     def status(self, item, now=None):
         if item["kind"] == "question":

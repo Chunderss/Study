@@ -383,8 +383,9 @@ reading positions.
   inside it; a file name without `.zip` gets `.zip` appended. The folder must exist.
 - An existing file is replaced only after you confirm.
 - The module is checked first with the rules a restore applies, so every archive
-  written can be restored. A module with a damaged file is refused, naming the file;
-  repair or move it, or copy the module's folder yourself.
+  written can be restored. A module with a damaged file, or a file it cannot read (no
+  permission, or held by another program), is refused, naming the file; repair or move
+  it, or copy the module's folder yourself.
 - The module is left exactly as it was. Its small files are read while other windows
   wait a moment; each document is copied afterwards and checked for changes, and a
   document that changed meanwhile refuses the backup (try again).
@@ -408,11 +409,12 @@ backup unless `AS` gives a name (several words are fine). It never replaces or m
 an existing module: when the name is taken, the reply shows the command to restore under
 another name.
 
-- Everything is checked before anything is written: that the file is a module backup
-  (an `EXPORT` file is restored with `IMPORT`), not made by a newer version, not
-  encrypted, with no links, no duplicate or unlisted files, no file outside the module
-  folder, and no name the computer cannot use; the checksums; every JSON file's
-  content, with the rules the app applies when it reads them; and free space.
+- Everything is checked before anything is written: that the file can be read (a file
+  without permission or locked by another program is reported as such, not as damaged),
+  that it is a module backup (an `EXPORT` file is restored with `IMPORT`), not made by a
+  newer version, not encrypted, with no links, no duplicate or unlisted files, no file
+  outside the module folder, and no name the computer cannot use; the checksums; every
+  JSON file's content, with the rules the app applies when it reads them; and free space.
 - The module is built in a hidden folder in the data folder, every file checked against
   its checksum, and then put in place in one step. A failure, a full disk, Ctrl-C, or the
   name being taken meanwhile by another window leaves nothing behind, and an immediate

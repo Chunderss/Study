@@ -289,6 +289,58 @@ def test_backup_refuses_a_document_that_changes_while_copied(app, tmp_path, docu
     assert list(documents_folder.iterdir()) == []
 
 
+def deny(monkeypatch, path):
+    """Make opening ``path`` fail as an unreadable or locked file does, for
+    open() and for zipfile, which calls io.open."""
+    real_open = open
+
+    def guarded(file, *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)) and os.fspath(file) == os.fspath(path):
+            raise PermissionError(errno.EACCES, "Permission denied", os.fspath(path))
+        return real_open(file, *args, **kwargs)
+    monkeypatch.setattr("builtins.open", guarded)
+    monkeypatch.setattr(io, "open", guarded)
+
+
+def test_backup_names_a_document_it_cannot_read(app, tmp_path, documents_folder, monkeypatch):
+    folder = make_module(app, tmp_path)
+    paper = folder / "documents" / "paper.pdf"
+    with monkeypatch.context() as patch:
+        deny(patch, paper)  # no permission, or opened without sharing by another program
+        assert run(app, "BACKUP Gatsby") == (f"! Could not back up 'Gatsby': Could not read "
+                                             f"{paper}: Permission denied. Nothing was written.")
+        assert run(app, "BACKUPALL").endswith(
+            f"! Not backed up: Gatsby: Could not back up 'Gatsby': Could not read {paper}: "
+            "Permission denied. Nothing was written.")
+    assert list(documents_folder.iterdir()) == []
+    # A read error part way through names the document too.
+    real_open = open
+
+    class FailingRead:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def read(self, size=-1):
+            raise OSError(errno.EIO, "Input/output error")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.stream.close()
+
+    def failing(file, *args, **kwargs):
+        stream = real_open(file, *args, **kwargs)
+        is_paper = isinstance(file, (str, os.PathLike)) and os.fspath(file) == os.fspath(paper)
+        return FailingRead(stream) if is_paper else stream
+    with monkeypatch.context() as patch:
+        patch.setattr("builtins.open", failing)
+        assert run(app, "BACKUP Gatsby") == (f"! Could not back up 'Gatsby': Could not read "
+                                             f"{paper}: Input/output error. Nothing was written.")
+    assert list(documents_folder.iterdir()) == []
+    assert run(app, "BACKUP Gatsby").startswith("Backed up 'Gatsby'")
+
+
 @pytest.mark.parametrize("stop", [backup.Cancelled, KeyboardInterrupt])
 def test_cancelled_backup_writes_nothing(app, tmp_path, documents_folder, stop):
     make_module(app, tmp_path)
@@ -632,6 +684,30 @@ def test_corrupt_archives_are_refused_and_create_nothing(app, tmp_path, document
     reply = Restore(app).refused(bad)
     assert reply.startswith(f"! Cannot restore {bad}: "), reply
     assert any(r in reply for r in ((reason,) if isinstance(reason, str) else reason)), reply
+
+
+def test_an_unreadable_backup_is_not_called_damaged(app, tmp_path, documents_folder,
+                                                    monkeypatch):
+    archive = made_backup(app, tmp_path, documents_folder)
+    restore = Restore(app)
+    expected = f"! Could not restore {archive}: Permission denied. Nothing was restored."
+    with monkeypatch.context() as patch:
+        deny(patch, archive)  # no permission, or locked by another program
+        assert restore.refused(archive) == expected
+        with pytest.raises(ValueError) as refused:  # the desktop checks with backup_info
+            app.backup_info(str(archive))
+        assert f"! {refused.value}" == expected
+    # A lock on part of the file shows once zipfile reads past the start.
+    real_zipfile = zipfile.ZipFile
+
+    def locked(file, *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)) and os.fspath(file) == os.fspath(archive):
+            raise PermissionError(errno.EACCES, "Permission denied", os.fspath(archive))
+        return real_zipfile(file, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(zipfile, "ZipFile", locked)
+        assert restore.refused(archive) == expected
+    assert run(app, f'RESTORE "{archive}" AS Copy').startswith("Restored module 'Copy'")
 
 
 def test_missing_files_and_folders_are_named(app, tmp_path, documents_folder):

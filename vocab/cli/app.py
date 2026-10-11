@@ -991,7 +991,8 @@ class App:
                     f"cannot be used: {error.reason}. Nothing was restored.")
         if isinstance(error, OSError) and not isinstance(error, _backup.BackupExists):
             reason = error.strerror or str(error)
-            where = f" ({error.filename})" if error.strerror and error.filename else ""
+            where = (f" ({error.filename})" if error.strerror and error.filename
+                     and Path(error.filename) != Path(path) else "")
             return f"Could not restore {path}: {reason}{where}. Nothing was restored."
         return f"Cannot restore {path}: {error}. Nothing was restored."
 
@@ -1001,7 +1002,7 @@ class App:
         path = self.user_path(src)
         try:
             return path, _backup.read_backup(path)
-        except (FileNotFoundError, _backup.ArchiveProblem) as error:
+        except (OSError, _backup.ArchiveProblem) as error:  # missing, unreadable or unusable
             raise ValueError(self._restore_problem(path, error)) from None
 
     def cmd_restore(self, src: str, new_name: Optional[str] = None, *, progress=None) -> str:

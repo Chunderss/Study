@@ -304,21 +304,21 @@ class BackupInfo:
 
 
 def open_archive(path) -> zipfile.ZipFile:
+    """Open a backup file. A file that cannot be opened or read (no
+    permission, locked by another program) raises its OSError, so it is not
+    called damaged; one that is not a usable ZIP file raises ArchiveProblem."""
     path = Path(path)
     if path.is_dir():
         raise ArchiveProblem("it is a folder, not a backup file")
+    with open(path, "rb") as stream:  # FileNotFoundError, PermissionError...
+        start = stream.read(64).lstrip(b"\xef\xbb\xbf \t\r\n")
     try:
         return zipfile.ZipFile(path)
-    except FileNotFoundError:
-        raise
+    except (FileNotFoundError, PermissionError):
+        raise  # removed meanwhile, or a lock on part of the file
     except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError,
             NotImplementedError, ValueError):
         pass
-    try:
-        with open(path, "rb") as stream:
-            start = stream.read(64).lstrip(b"\xef\xbb\xbf \t\r\n")
-    except OSError:
-        start = b""
     if start.startswith(b"{"):
         raise ArchiveProblem("it is a JSON file, not a module backup. A vocabulary file from "
                              "EXPORT is restored with IMPORT")
@@ -776,27 +776,38 @@ def write_backup(storage, name: str, dest, *, scheduler, replace: bool = False,
 
 def _copy_document(archive, name, document: _Document, done, total, label, progress) -> dict:
     """Stream one document into the archive; refuse one that changes or
-    disappears meanwhile."""
+    disappears meanwhile. A document that cannot be read is named, as an
+    unreadable note is; only errors writing the archive are about it."""
     changed = (f"Could not back up '{name}': the document '{document.path.name}' changed while "
                "it was being copied. Nothing was written; try again.")
+    removed = (f"Could not back up '{name}': the document '{document.path.name}' was removed "
+               "while it was being copied. Nothing was written; try again.")
+
+    def unreadable(error):
+        _refuse(name, f"Could not read {document.path}: {error.strerror or error}")
     digest = hashlib.sha256()
     count = 0
     info = _zip_info(document.member, document.mtime_ns / 1e9, zipfile.ZIP_STORED)
     info.file_size = document.size  # Zip64 only for documents that need it
     try:
-        with open(document.path, "rb") as source, archive.open(info, "w") as target:
+        source = open(document.path, "rb")
+    except FileNotFoundError:
+        raise BackupError(removed) from None
+    except OSError as error:  # no permission, or held by another program
+        unreadable(error)
+    try:
+        with source, archive.open(info, "w") as target:
             while True:
-                chunk = source.read(CHUNK)
+                try:
+                    chunk = source.read(CHUNK)
+                except OSError as error:
+                    unreadable(error)
                 if not chunk:
                     break
                 count += len(chunk)
                 digest.update(chunk)
                 _write_chunk(target, chunk)
                 progress(done + min(count, document.size), total, label)
-    except FileNotFoundError:
-        raise BackupError(f"Could not back up '{name}': the document '{document.path.name}' "
-                          "was removed while it was being copied. Nothing was written; try "
-                          "again.") from None
     except RuntimeError:  # it grew past the size zipfile was told
         raise BackupError(changed) from None
     try:

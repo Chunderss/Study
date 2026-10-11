@@ -66,7 +66,9 @@ opened. Messages are kept in memory only, until the app closes.
    To find captures, type in the search box above the list (**Ctrl+F** in a Learning
    pane). It shows the captures whose question, passage or notes contain every word you
    type, also inside longer words; case and accents on Latin letters do not matter
-   (`cafe` finds "Café"). The menus beside it show one document, chapter or page, and
+   (`cafe` finds "Café"), and the apostrophes, quotation marks and hyphens a keyboard
+   types find the curly and typeset ones books use (`don't` finds "don’t", `1914-1918`
+   finds "1914–1918"). The menus beside it show one document, chapter or page, and
    open, resolved or all questions, or concepts due now, not due yet or all. **Esc**
    clears the search, **Down** or **Enter** moves to the list and highlights the first
    match, and **Clear filters** shows everything again. A highlighted capture that the

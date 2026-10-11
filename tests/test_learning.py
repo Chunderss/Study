@@ -111,6 +111,25 @@ def test_search_words_must_all_appear_in_question_passage_or_notes(learning):
     assert not matches("Mitochondria-supply")
 
 
+def test_search_finds_typographic_punctuation_typed_on_a_keyboard(learning):
+    from vocab.core.learning import CaptureFilter, search_text
+    # As an EPUB or PDF selection gives it: curly apostrophes and quotes, a
+    # non-breaking hyphen, an em dash, an en dash and soft hyphens.
+    item = capture(learning, prompt="Who wrote \u201cSnow\u2011Bound\u201d?",
+                   quote="I don\u2019t know the author\u2018s name \u2014 a well\u2011known "
+                         "writer, 1866\u20131867.",
+                   explanation="O\u2019Neill\u02bcs view: hy\u00adphen\u00adated.")
+    assert search_text(item["quote"]) == "i don't know the author's name - a well-known writer, 1866-1867."
+    matches = lambda query: learning.matches(item, CaptureFilter(query=query))
+    for query in ("don't", "author's", "well-known", '"snow-bound"', "1866-1867", "o'neill's",
+                  "hyphenated", "DON\u2019T", "Well\u2010Known"):
+        assert matches(query), query
+    assert matches("don") and not matches("dont") and not matches("don't-know")
+    other = capture(learning, prompt="Plain", quote="I don't know a well-known \"name\".")
+    for query in ("don\u2019t", "well\u2014known", "\u201cname\u201d"):  # and the other way round
+        assert learning.matches(other, CaptureFilter(query=query)), query
+
+
 def test_status_filters_split_questions_and_concepts(learning):
     from vocab.core.learning import CaptureFilter, STATUS_FILTERS
     open_q = capture(learning, kind="question")

@@ -11,7 +11,7 @@ import unicodedata
 import uuid
 
 from .storage import DataFileError, _atomic_write, _read_json, ModuleNotFound, in_transaction
-from .text import drop_latin_accents
+from .text import drop_latin_accents, typed_punctuation
 from ..algorithms.base import Review
 from ..algorithms.leitner import LeitnerScheduler
 
@@ -30,10 +30,12 @@ def source_label(source):
 def search_text(text):
     """text as the Learning search compares it: NFKC, case-folded, with
     accents on Latin letters dropped as grading drops them ('Café' -> 'cafe',
-    'col·legi' -> 'collegi'); other scripts keep their marks."""
+    'col·legi' -> 'collegi'), other scripts keeping their marks, and typeset
+    apostrophes, quotes and hyphens written as typed ('don’t' -> "don't").
+    The query and the capture text are both folded, so either may have them."""
     if text.isascii():
         return text.lower()
-    text = unicodedata.normalize("NFKC", text).casefold()
+    text = typed_punctuation(unicodedata.normalize("NFKC", text).casefold())
     return text if text.isascii() else drop_latin_accents(text)
 
 

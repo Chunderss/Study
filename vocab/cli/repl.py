@@ -171,6 +171,12 @@ class Repl:
                         "(quote a name or path that contains spaces)")
             dest = a[1] if len(a) == 2 else None
             return (_path_problem(dest) if dest else None) or self._backup(a[0], dest)
+        if v == "BACKUPALL":
+            if len(a) > 1:
+                return ("Usage: BACKUPALL [<folder>]   "
+                        "(quote a path that contains spaces)")
+            return ((_path_problem(a[0]) if a else None)
+                    or app.cmd_backup_all(a[0] if a else None, progress=self.progress))
         if v == "RESTORE":
             parsed = _path_and_name(a)
             if parsed is None:

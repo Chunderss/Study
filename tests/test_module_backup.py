@@ -909,3 +909,99 @@ wait_for(lambda: js(copy, """(() => {
 })()"""))
 assert copy._pending_highlight is None
 ''')
+
+
+# ---- BACKUPALL --------------------------------------------------------------------
+FOLDER = f"Vocab Study backup {DATE}"
+
+
+def test_backupall_writes_one_restorable_archive_per_module(app, tmp_path, documents_folder):
+    for sources in ("a", "b", "c"):  # each module's source files
+        (tmp_path / sources).mkdir()
+    make_module(app, tmp_path / "a", "Alpha")
+    make_module(app, tmp_path / "b", "Beta")
+    folder_c = make_module(app, tmp_path / "c", "Gamma")
+    (folder_c / "learning.json").write_text('{"schema": 1, "items": {"x": 1}}', encoding="utf-8")
+    unsupported = os.name != "nt"
+    if unsupported:
+        bad = app.paths.modules_dir / "bad name?"
+        (bad / "vocab").mkdir(parents=True)
+        (bad / "vocab" / "words.json").write_text('{"words": {}}', encoding="utf-8")
+    reply = run(app, "BACKUPALL")
+    folder = documents_folder / FOLDER
+    lines = reply.splitlines()
+    assert lines[0] == f"Backed up 2 of {4 if unsupported else 3} modules -> {folder}"
+    assert lines[1].startswith("  Alpha.zip (2 words, 3 notes, 2 documents, 2 captures; ")
+    assert lines[2].startswith("  Beta.zip (2 words, 3 notes, 2 documents, 2 captures; ")
+    assert (f"! Not backed up: Gamma: Could not back up 'Gamma': Could not read "
+            f"{folder_c / 'learning.json'}: capture 'x': it is not an object.") in reply
+    if unsupported:
+        assert ("! Not backed up: bad name? (folder name not supported; rename it in the "
+                "modules folder)") in reply
+    assert sorted(p.name for p in folder.iterdir()) == ["Alpha.zip", "Beta.zip"]
+    for name in ("Alpha", "Beta"):
+        assert run(app, f'RESTORE "{folder / (name + ".zip")}" AS {name} again').startswith(
+            f"Restored module '{name} again'")
+    assert f"-> {documents_folder / (FOLDER + ' (2)')}" in run(app, "BACKUPALL")
+    shelf = tmp_path / "shelf"
+    shelf.mkdir()
+    assert f"-> {shelf / FOLDER}" in run(app, f"BACKUPALL {shelf}")
+
+
+def test_backupall_keeps_going_when_a_module_disappears(app, tmp_path, documents_folder):
+    for name in ("A", "B", "C"):
+        app.cmd_create(name)
+        app.cmd_use(name)
+        app.cmd_add("word", manual_def="a definition")
+    other = App(app.paths.root)  # another window
+
+    def delete_b(done, total, label):
+        if "'A'" in label and other.storage.exists("B"):
+            other.cmd_delete("B")
+    reply = app.cmd_backup_all(progress=delete_b)
+    assert reply.startswith(f"Backed up 2 of 3 modules -> {documents_folder / FOLDER}")
+    assert "! Not backed up: B: Module 'B' does not exist." in reply
+    assert sorted(p.name for p in (documents_folder / FOLDER).iterdir()) == ["A.zip", "C.zip"]
+
+
+@pytest.mark.parametrize("stop", [backup.Cancelled, KeyboardInterrupt])
+def test_backupall_cancel_keeps_complete_archives_only(app, tmp_path, documents_folder, stop):
+    for name in ("A", "B", "C"):
+        (tmp_path / name).mkdir()
+        make_module(app, tmp_path / name, name)
+
+    def cancel(done, total, label):
+        if "'B'" in label and done:
+            raise stop()
+    reply = app.cmd_backup_all(progress=cancel)
+    folder = documents_folder / FOLDER
+    assert reply.splitlines()[0] == (f"Cancelled after backing up 1 of 3 modules to {folder}; "
+                                     "the archives there are complete.")
+    assert [p.name for p in folder.iterdir()] == ["A.zip"]
+    assert backup.read_backup(folder / "A.zip").module == "A"
+
+    def cancel_first(done, total, label):
+        raise stop()
+    assert app.cmd_backup_all(progress=cancel_first) == "Backup cancelled; nothing was written."
+    assert sorted(p.name for p in documents_folder.iterdir()) == [FOLDER]
+
+
+def test_backupall_with_no_modules_or_all_failing_leaves_no_folder(app, tmp_path,
+                                                                   documents_folder):
+    assert run(app, "BACKUPALL") == "No modules to back up."
+    assert list(documents_folder.iterdir()) == []
+    app.cmd_create("Broken")
+    (app.paths.module_dir("Broken") / "reading.json").write_text("{bad", encoding="utf-8")
+    reply = run(app, "BACKUPALL")
+    assert reply.startswith("No module was backed up; nothing was written.\n! Not backed up: "
+                            "Broken: Could not back up 'Broken': Could not read ")
+    assert list(documents_folder.iterdir()) == []
+    assert run(app, f'BACKUPALL "{tmp_path / "missing"}"').startswith(
+        f"! Could not write to {tmp_path / 'missing'}: that folder does not exist.")
+
+
+def test_backupall_usage(app, tmp_path, documents_folder):
+    assert run(app, "BACKUPALL a b") == ("Usage: BACKUPALL [<folder>]   (quote a path that "
+                                         "contains spaces)")
+    assert "cannot start or end with a quote" in run(app, "BACKUPALL 'shelf'")
+    assert list(documents_folder.iterdir()) == []

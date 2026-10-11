@@ -825,6 +825,84 @@ def _verify(tmp, manifest, contents) -> None:
         raise OSError(f"the archive written could not be read back ({problem})") from None
 
 
+# ---- backing up every module ------------------------------------------------------
+@dataclass
+class AllResult:
+    folder: Optional[Path]                       # None when nothing was written
+    done: list = field(default_factory=list)     # [(name, BackupResult)]
+    failed: list = field(default_factory=list)   # [(name, reason)]
+    unsupported: list = field(default_factory=list)
+    cancelled: bool = False
+
+    @property
+    def total(self):
+        return len(self.done) + len(self.failed) + len(self.unsupported) + self.skipped
+
+    skipped: int = 0                             # not reached, after a cancel
+
+
+def _new_dated_folder(parent: Path) -> Path:
+    """A new folder 'Vocab Study backup <date>' (' (2)'... when taken), made
+    exclusively, so an existing folder is never reused."""
+    stem = f"Vocab Study backup {_today():%Y-%m-%d}"
+    number = 1
+    while True:
+        folder = parent / (stem if number == 1 else f"{stem} ({number})")
+        try:
+            folder.mkdir()
+            return folder
+        except FileExistsError:
+            number += 1
+
+
+def backup_all(storage, parent, *, scheduler, progress: Optional[Progress] = None,
+               now=None) -> AllResult:
+    """Back up every module into a new dated folder in ``parent``, one
+    archive per module, each exactly what write_backup writes. A module that
+    cannot be backed up is reported and does not stop the others. Cancelled
+    or KeyboardInterrupt stops after removing the current module's partial
+    file; the archives already written stay. A folder left empty is removed."""
+    parent = Path(parent)
+    progress = progress or (lambda done, total, label: None)
+    names = storage.list_names()
+    result = AllResult(None, unsupported=storage.unsupported_module_dirs())
+    if not names:
+        return result
+    if not parent.is_dir():
+        raise BackupError(f"Could not write to {parent}: that folder does not exist. Nothing "
+                          "was written.")
+    try:
+        folder = _new_dated_folder(parent)
+    except OSError as error:
+        raise BackupError(f"Could not create a folder in {parent}: {_reason(error)}. Nothing "
+                          "was written.") from error
+    result.folder = folder
+    try:
+        for index, name in enumerate(names, 1):
+            label = f"Backing up '{name}' ({index} of {len(names)})"
+            try:
+                done = write_backup(storage, name, folder / f"{name}.zip", scheduler=scheduler,
+                                    progress=lambda d, t, _l, label=label: progress(d, t, label),
+                                    now=now)
+            except Cancelled:
+                raise
+            except Exception as error:  # damage stays local to its module
+                result.failed.append((name, str(error)))
+                continue
+            result.done.append((name, done))
+    except (Cancelled, KeyboardInterrupt):
+        result.cancelled = True
+        result.skipped = len(names) - len(result.done) - len(result.failed)
+    finally:
+        if not result.done:
+            try:
+                folder.rmdir()
+                result.folder = None
+            except OSError:
+                pass
+    return result
+
+
 # ---- restoring a backup ---------------------------------------------------------
 @dataclass
 class RestoreResult:

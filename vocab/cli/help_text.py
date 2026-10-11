@@ -91,12 +91,15 @@ BACKUP & RESTORE  (a module's words, progress, notes, documents, captures and
                              if you confirm); drafts of unsaved notes and files
                              the app does not manage are left out, and the
                              reply says so. Ctrl-C cancels.
+  BACKUPALL [<folder>]       back up every module, one .zip each, into a new
+                             folder "Vocab Study backup <date>" in the folder
+                             for files (or in <folder>)
   RESTORE <file.zip> [as <name>]
                              restore a backup as a NEW module, named as in the
                              backup unless AS gives a name; an existing module
                              is never replaced or merged. Ctrl-C cancels.
 
-FILES  (where EXPORT, IMPORT, BACKUP and RESTORE look for a relative path)
+FILES  (relative paths in EXPORT, IMPORT, BACKUP, BACKUPALL and RESTORE)
   FOLDER                     show the folder for files: your Documents
                              folder unless you chose another
   FOLDER <full path>         use another (existing) folder for files

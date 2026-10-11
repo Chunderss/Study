@@ -300,6 +300,14 @@ reading positions.
   them first) and files in the module's folder that Vocab Study does not manage.
 - Large backups print a start line; Ctrl-C cancels.
 
+`BACKUPALL [<folder>]` backs up every module at once into a new folder,
+`Vocab Study backup <YYYY-MM-DD>` (` (2)`... when taken; an existing folder is never
+reused), in the folder for files or in the folder given. It holds one `<Module>.zip` per
+module, each exactly what `BACKUP` writes and restorable on its own. A module that cannot
+be backed up, and a module folder whose name the app cannot use, is listed with the
+reason without stopping the others. Ctrl-C stops after the current module; the archives
+already written are complete. A folder left empty is removed.
+
 `RESTORE <file.zip> [as <name>]` creates a NEW module from a backup, named as in the
 backup unless `AS` gives a name (several words are fine). It never replaces or merges into
 an existing module: when the name is taken, the reply shows the command to restore under

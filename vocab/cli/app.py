@@ -665,6 +665,33 @@ class App:
             return "Backup cancelled; nothing was written."
         return backup_reply(result)
 
+    def cmd_backup_all(self, folder: Optional[str] = None, *, progress=None) -> str:
+        """Back up every module into a new dated folder: one archive each."""
+        parent = self.user_path(folder) if folder else self.files_folder()
+        result = _backup.backup_all(self.storage, parent, scheduler=self.scheduler,
+                                    progress=progress)
+        problems = [f"! Not backed up: {name}: {reason}" for name, reason in result.failed]
+        problems += [f"! Not backed up: {name} (folder name not supported; rename it in the "
+                     "modules folder)" for name in result.unsupported]
+        if result.total == 0:
+            return "No modules to back up."
+        lines = []
+        if result.cancelled and result.done:
+            lines.append(f"Cancelled after backing up {len(result.done)} of {result.total} "
+                         f"modules to {result.folder}; the archives there are complete.")
+        elif result.cancelled:
+            lines.append("Backup cancelled; nothing was written.")
+        elif result.done:
+            lines.append(f"Backed up {len(result.done)} of {result.total} modules -> "
+                         f"{result.folder}")
+        else:
+            lines.append("No module was backed up; nothing was written.")
+        for name, done in result.done:
+            lines.append(f"  {done.path.name} ({backup_counts(done.summary)}; "
+                         f"{size_text(done.size)})")
+            lines += ["  " + line for line in backup_reply(done).splitlines()[1:]]
+        return "\n".join(lines + problems)
+
     def _restore_problem(self, path, error) -> str:
         """The message for a restore that did not happen."""
         try:

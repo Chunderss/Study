@@ -103,7 +103,8 @@ MANAGED = {"module.json", "vocab", "notes", "documents", "learning.json",
 MAX_ENTRIES = 100_000
 MAX_JSON_BYTES = 256 << 20      # one JSON file or note
 MAX_MANIFEST_BYTES = 32 << 20
-SPACE_MARGIN = 64 << 20         # left free on the destination
+SPACE_MARGIN = 64 << 20         # the most kept free beyond the data (space_needed)
+SPACE_PER_FILE = 4096           # file system blocks and zip headers, per file
 CHUNK = 1 << 20
 
 # The app's own temporary files: _atomic_write's tempfile names and
@@ -297,6 +298,13 @@ def check_contents(contents: Dict[str, bytes], scheduler) -> dict:
     if member in contents:
         _json(member, contents[member])  # any JSON; a non-object is ignored, as the app does
     return counts
+
+
+def space_needed(total: int, files: int) -> int:
+    """The free space writing ``total`` bytes in ``files`` files needs: the
+    bytes, SPACE_PER_FILE for each file, and a tenth more to spare, at most
+    SPACE_MARGIN. A small backup thus needs little more than its size."""
+    return total + files * SPACE_PER_FILE + min(SPACE_MARGIN, total // 10)
 
 
 # ---- reading an archive ---------------------------------------------------------
@@ -731,9 +739,12 @@ def write_backup(storage, name: str, dest, *, scheduler, replace: bool = False,
         free = shutil.disk_usage(dest.parent).free
     except OSError:
         free = None
-    if free is not None and free < total + SPACE_MARGIN:
-        raise BackupError(f"Could not write {dest}: the backup needs about {size_text(total)} "
-                          f"and {dest.parent} has {size_text(free)} free. Nothing was written.")
+    need = space_needed(total, len(snap.contents) + len(snap.documents) + 1)  # + manifest
+    if free is not None and free < need:
+        raise BackupError(f"Could not write {dest}: the backup needs about "
+                          f"{size_text(need, up=True)} of free space ({size_text(total)} of "
+                          f"data plus room to spare), and {dest.parent} has {size_text(free)} "
+                          "free. Nothing was written.")
     label = f"Backing up '{name}'"
     published = False
     result = None
@@ -1065,8 +1076,10 @@ def restore_backup(storage, path, new_name: Optional[str] = None, *, scheduler,
             free = shutil.disk_usage(modules).free
         except OSError:
             free = None
-        if free is not None and free < total + SPACE_MARGIN:
-            raise BackupError(f"it needs about {size_text(total)} free in {modules}, and "
+        need = space_needed(total, len(info.files) + 4)  # and the module's four folders
+        if free is not None and free < need:
+            raise BackupError(f"it needs about {size_text(need, up=True)} of free space in "
+                              f"{modules} ({size_text(total)} of data plus room to spare), and "
                               f"{size_text(free)} is free")
         summary = {"words": counts["words"], "captures": counts["captures"],
                    "notes": sum(1 for m in info.files if m.startswith("module/notes/")),

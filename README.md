@@ -389,6 +389,9 @@ reading positions.
 - The module is left exactly as it was. Its small files are read while other windows
   wait a moment; each document is copied afterwards and checked for changes, and a
   document that changed meanwhile refuses the backup (try again).
+- Free space is checked first. A backup needs its size, a few KB per file and a tenth
+  more to spare (at most 64 MB more), and the reply says how much that is; a restore
+  needs the same in the data folder.
 - The archive is written under a hidden temporary name beside its destination, read
   back and checked, and only then given its name, so a failure, a full disk or Ctrl-C
   leaves no file behind.

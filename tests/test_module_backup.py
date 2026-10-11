@@ -415,6 +415,39 @@ def test_backup_refuses_an_unrestorable_name(app, tmp_path, documents_folder, ra
     assert list(documents_folder.iterdir()) == []
 
 
+def test_free_space_needed_is_the_size_plus_a_little(app, tmp_path, documents_folder,
+                                                    monkeypatch):
+    import shutil
+    app.cmd_create("Book")
+    app.cmd_add("word", target="Book", manual_def="meaning")
+    usage = shutil.disk_usage(documents_folder)
+    free = {"bytes": 50 << 20}
+    monkeypatch.setattr(backup.shutil, "disk_usage",
+                        lambda path: usage._replace(free=free["bytes"]))
+    # A small module backs up and restores with 50 MB free (the 64 MB kept
+    # free refused it, saying it needed a few hundred bytes).
+    archive = documents_folder / f"Book {DATE}.zip"
+    assert run(app, "BACKUP Book").startswith(f"Backed up 'Book' -> {archive} (")
+    assert run(app, f'RESTORE "{archive}" AS Copy').startswith("Restored module 'Copy'")
+    assert run(app, "BACKUPALL").startswith("Backed up 2 of 2 modules")
+    # A tenth more to spare, at most 64 MB, and a block per file.
+    assert backup.space_needed(609, 3) == 609 + 3 * 4096 + 60
+    assert backup.space_needed(10 << 30, 2) == (10 << 30) + 2 * 4096 + (64 << 20)
+    # Refused only below what it needs, and the reply says so consistently.
+    snap = backup.snapshot(app.storage, "Book")
+    total = sum(map(len, snap.contents.values()))
+    need = backup.space_needed(total, len(snap.contents) + 1)
+    free["bytes"] = need - 1
+    dest = documents_folder / "small.zip"
+    assert run(app, "BACKUP Book small.zip") == (
+        f"! Could not write {dest}: the backup needs about {backup.size_text(need, up=True)} of "
+        f"free space ({backup.size_text(total)} of data plus room to spare), and "
+        f"{documents_folder} has {backup.size_text(need - 1)} free. Nothing was written.")
+    assert not dest.exists()
+    free["bytes"] = need
+    assert run(app, "BACKUP Book small.zip").startswith(f"Backed up 'Book' -> {dest} (")
+
+
 def test_backup_destination_inside_the_modules_folder_is_refused(app, tmp_path):
     folder = make_module(app, tmp_path)
     before = tree(app.paths.root)
@@ -834,12 +867,14 @@ def test_archive_limits_are_checked_before_writing(app, tmp_path, documents_fold
     with monkeypatch.context() as patch:
         import shutil
         usage = shutil.disk_usage(app.paths.modules_dir)
-        patch.setattr(backup.shutil, "disk_usage",
-                      lambda path: usage._replace(free=backup.SPACE_MARGIN + 1000))
+        files = backup.read_backup(archive).files
+        total = sum(f["size"] for f in files.values())
+        need = backup.space_needed(total, len(files) + 4)
+        patch.setattr(backup.shutil, "disk_usage", lambda path: usage._replace(free=need - 1))
         reply = restore.refused(archive)
-        total = sum(f["size"] for f in backup.read_backup(archive).files.values())
-        assert (f"it needs about {backup.size_text(total)} free in {app.paths.modules_dir}, and "
-                f"{backup.size_text(backup.SPACE_MARGIN + 1000)} is free") in reply
+        assert (f"it needs about {backup.size_text(need, up=True)} of free space in "
+                f"{app.paths.modules_dir} ({backup.size_text(total)} of data plus room to "
+                f"spare), and {backup.size_text(need - 1)} is free") in reply
 
     class Inflated(io.BytesIO):
         consumed = 0

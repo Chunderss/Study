@@ -126,16 +126,58 @@ class _UnreadableXml(Exception):
     problem and its position, never the book's own text."""
 
 
-def _parse_xml(path):
+def _parse_xml(path, entities=False):
     """The root element of a book's XML file. Errors reading the file
-    itself (OSError) are not caught."""
+    itself (OSError) are not caught. With ``entities``, HTML's named
+    entities resolve in a document with an external DTD, as Chromium shows
+    XHTML; without a DTD they remain errors."""
+    parser = ET.XMLParser()
+    if entities:
+        parser.entity.update(html.entities.entitydefs)
     try:
-        return ET.parse(path, ET.XMLParser()).getroot()
+        return ET.parse(path, parser).getroot()
     except ET.ParseError as error:
         line, column = error.position
         raise _UnreadableXml(f"markup error at line {line}, column {column}") from None
     except (LookupError, ValueError):  # unknown and multi-byte declared encodings
         raise _UnreadableXml("an unsupported character encoding") from None
+
+
+_OPS_TYPE = "{http://www.idpf.org/2007/ops}type"
+_NCX = "{http://www.daisy.org/z3986/2005/ncx/}"
+
+
+def _local_name(tag) -> str:
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _label_text(element) -> str:
+    """An element's text with nested markup flattened and whitespace collapsed."""
+    return " ".join("".join(element.itertext()).split())
+
+
+def _nav_entries(root):
+    """(label, href) of the links in an EPUB 3 navigation document's table of
+    contents, in document order. Landmarks and page lists are not used."""
+    navs = [element for element in root.iter() if _local_name(element.tag) == "nav"]
+    toc = next((nav for nav in navs if "toc" in (nav.get(_OPS_TYPE) or "").split()), None)
+    if toc is None:
+        toc = next((nav for nav in navs if "doc-toc" in (nav.get("role") or "").split()), None)
+    if toc is None:
+        return []
+    return [(_label_text(link), link.get("href")) for link in toc.iter()
+            if _local_name(link.tag) == "a" and link.get("href")]
+
+
+def _ncx_entries(root):
+    """(label, src) of an EPUB 2 NCX's navigation points, in document order."""
+    entries = []
+    for point in root.iter(_NCX + "navPoint"):
+        text = point.find(f"{_NCX}navLabel/{_NCX}text")
+        content = point.find(_NCX + "content")
+        if content is not None and content.get("src"):
+            entries.append((_label_text(text) if text is not None else "", content.get("src")))
+    return entries
 
 
 def _pages(count):
@@ -290,16 +332,16 @@ class EpubBook:
             if t is not None and t.text:
                 self.title = t.text.strip()
 
-            # 2) manifest: id -> href
-            manifest: dict[str, str] = {}
+            # 2) manifest: id -> item
+            manifest = {}
             for item in tree.findall(".//opf:manifest/opf:item", _OPF_NS):
-                manifest[item.get("id")] = item.get("href")
+                manifest[item.get("id")] = item
 
             # 3) spine: ordered idrefs -> files
             remote = missing = 0
             for it in tree.findall(".//opf:spine/opf:itemref", _OPF_NS):
-                idref = it.get("idref")
-                href = manifest.get(idref)
+                item = manifest.get(it.get("idref"))
+                href = item.get("href") if item is not None else None
                 if not href:
                     missing += 1  # it names no page of the book
                     continue
@@ -322,12 +364,48 @@ class EpubBook:
                 self.warnings.append(f"Skipped {_pages(missing)} of this book's reading order "
                                      "missing from the book.")
 
+            # 4) titles from the table of contents; the spine keeps the order
+            labels = self._toc_labels(tree, manifest, opf_dir)
+            self.chapters = [(labels.get(path, name), path) for name, path in self.chapters]
+
         if not self.chapters:
             # last resort: any xhtml/html, in file-name order
             for base, files in _walk_sorted(self.tmpdir):
                 for f in files:
                     if f.lower().endswith((".xhtml", ".html", ".htm")):
                         self.chapters.append((f, os.path.join(base, f)))
+
+    def _toc_labels(self, package, manifest, opf_dir) -> dict:
+        """Chapter titles by resolved file: from the EPUB 3 navigation
+        document's table of contents, else the NCX. The first entry naming a
+        file labels it, whatever its fragment. Entries for pages outside the
+        spine label nothing, and a damaged or missing table of contents
+        leaves file names: only labels depend on it, never the order."""
+        items = list(manifest.values())
+        navs = [item for item in items if "nav" in (item.get("properties") or "").split()]
+        spine = package.find(".//opf:spine", _OPF_NS)
+        toc_id = spine.get("toc") if spine is not None else None
+        ncxs = [manifest[toc_id]] if toc_id in manifest else [
+            item for item in items if item.get("media-type") == "application/x-dtbncx+xml"]
+        labels = {}
+        for entries, item in ((_nav_entries, navs[0] if navs else None),
+                              (_ncx_entries, ncxs[0] if ncxs else None)):
+            if item is None or not item.get("href"):
+                continue
+            try:
+                path = self._inside(opf_dir, item.get("href"))
+                root = _parse_xml(path, entities=True)
+            except (_UnreadableXml, ValueError, OSError):
+                continue
+            base = os.path.dirname(path)
+            for label, href in entries(root):
+                try:
+                    target = self._inside(base, href)  # drops the fragment
+                except ValueError:
+                    continue  # a web address or a path outside the book
+                if label:
+                    labels.setdefault(target, label)
+        return labels
 
     def _package_path(self):
         """The package file (OPF) that container.xml names, relative to the
@@ -724,8 +802,17 @@ class EpubViewer(QWidget):
         self._prev = QPushButton("‹ Prev"); self._prev.clicked.connect(lambda: self._go(-1))
         self._next = QPushButton("Next ›"); self._next.clicked.connect(lambda: self._go(1))
         self._picker = QComboBox()
+        # Size the picker by a few characters, not by its longest title, so
+        # a book with long titles does not keep its pane from narrowing.
+        self._picker.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._picker.setMinimumContentsLength(16)
         for i, (name, _p) in enumerate(self._book.chapters):
-            self._picker.addItem(f"{i + 1}. {name}")
+            # Long titles are shortened; the full one is the tooltip, escaped
+            # so that the book's text is never read as markup.
+            self._picker.addItem(f"{i + 1}. {name if len(name) <= 80 else name[:79] + '…'}")
+            if len(name) > 80:
+                tip = name if len(name) <= 1000 else name[:999] + "…"
+                self._picker.setItemData(i, f"<p>{html.escape(tip)}</p>", Qt.ToolTipRole)
         self._picker.currentIndexChanged.connect(self._jump)
         # Choosing the chapter already selected must still work: from a page
         # outside the reading order (a footnote) it returns to the chapter.

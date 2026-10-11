@@ -90,6 +90,11 @@ EPUB highlights live with the module's captures; the original EPUB file is uncha
 They also show in books whose pages forbid inline styles.
 An optional tutor has not been added yet; no model is downloaded or sent your passages.
 
+The EPUB reader's chapter list shows the titles from the book's table of contents
+(its EPUB 3 navigation document, else its NCX), numbered in reading order; pages the
+table of contents does not name show their file name. Long titles are shortened, with
+the full title on hover.
+
 The EPUB reader does not run a book's own JavaScript, because a script inside a
 downloaded book could otherwise read files on your computer. Books render with their
 own styles, images and fonts, and `<noscript>` fallback text is shown. Content that a

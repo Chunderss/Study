@@ -751,6 +751,7 @@ class EpubViewer(QWidget):
         # moment after a load; it is used once it has changed for this one.
         self._stale_scroll = 0.0
         self._scroll_fresh = False
+        self._restored_y = None
         self._loaded_path = None  # the last document that finished loading
         # Nothing is saved until a chapter was requested successfully, so a
         # reader whose first load failed keeps the previously saved place.
@@ -873,6 +874,7 @@ class EpubViewer(QWidget):
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         self._web.page().navigationRequested.connect(self._navigate)
         self._web.page().scrollPositionChanged.connect(self._scroll_changed)
+        self._web.page().contentsSizeChanged.connect(self._contents_changed)
         self._web.page().loadingChanged.connect(self._loading_changed)
         lay.addWidget(self._web, 1)
         self._web.installEventFilter(self)
@@ -939,10 +941,23 @@ class EpubViewer(QWidget):
         self._requested_scroll = scroll
         self._stale_scroll = self._web.page().scrollPosition().y()
         self._scroll_fresh = False
+        self._restored_y = None
 
     def _scroll_changed(self, _position):
         if self._document_loaded:
             self._scroll_fresh = True
+            self._restored_y = None
+
+    def _contents_changed(self, _size):
+        # The height notification can arrive last, with no further scroll
+        # signal after a same-position restore. Accept its live geometry only
+        # when Qt's y already agrees with the renderer's confirmed position.
+        if (self._document_loaded and self._pending_scroll is None and
+                not self._scroll_fresh and self._restored_y is not None and
+                abs(self._web.page().scrollPosition().y() / self._web.zoomFactor() -
+                    self._restored_y) <= 1):
+            self._scroll_fresh = True
+            self._restored_y = None
 
     def _on_loaded(self) -> None:
         self._document_loaded = True
@@ -1078,13 +1093,34 @@ class EpubViewer(QWidget):
         expected = json.dumps(self._requested_url.toString(QUrl.FullyEncoded))
         fraction = self._pending_scroll
 
-        def restored(applied):
+        def restored(result):
             if not isValid(self) or generation != self._load_generation or fraction != self._pending_scroll:
                 return
             if not self._web.isVisible():
                 return
-            if applied or attempt >= self.MAX_RESTORE_RETRIES:
-                # Once retries end, captures and saves must use the live position.
+            cache_current = False
+            applied = False
+            y = None
+            try:
+                report = json.loads(result)
+                y, height = float(report["y"]), float(report["height"])
+                applied = report["applied"]
+            except (TypeError, ValueError, KeyError):
+                pass
+            else:
+                page = self._web.page()
+                zoom = self._web.zoomFactor()
+                cache_current = (abs(page.scrollPosition().y() / zoom - y) <= 1 and
+                                 abs(page.contentsSize().height() / zoom - height) <= 1)
+                self._requested_scroll = max(0.0, min(1.0, y / max(1.0, height)))
+            if (applied and cache_current) or attempt >= self.MAX_RESTORE_RETRIES:
+                # Renderer completion can precede Qt's scroll notification. Do
+                # not expose the old cached position when releasing the target.
+                # If retries expire, retain the confirmed renderer fraction
+                # until a fresh notification arrives. An already matching cache
+                # needs no notification (a same-position restore may emit none).
+                self._scroll_fresh = cache_current
+                self._restored_y = None if cache_current else y
                 self._pending_scroll = None
             else:
                 QTimer.singleShot(16, self, lambda: self._restore_scroll(generation, attempt + 1))
@@ -1098,12 +1134,13 @@ class EpubViewer(QWidget):
                 const current = new URL(location.href);
                 expected.hash = current.hash = '';
                 if (current.href !== expected.href || document.readyState !== 'complete')
-                    return false;
+                    return '';
                 const root = document.scrollingElement || document.documentElement;
                 const target = Math.max(0, Math.min(root.scrollHeight * {fraction},
                                                    root.scrollHeight - innerHeight));
                 window.scrollTo(0, target);
-                return Math.abs(window.scrollY - target) <= 1;
+                return JSON.stringify({{applied: Math.abs(window.scrollY - target) <= 1,
+                                       y: window.scrollY, height: root.scrollHeight}});
             }})();
         """, restored)
 

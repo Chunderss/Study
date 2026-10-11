@@ -250,3 +250,85 @@ assert abs(viewer.source_location()["scroll"] - actual) < .002, (viewer.source_l
 viewer.save_position()
 assert abs(saved()["scroll"] - actual) < .002, saved()
 ''')
+
+
+@pytest.mark.parametrize("navigation", ["source", "link"])
+def test_restored_top_is_saved_while_qt_still_caches_the_previous_position(tmp_path, navigation):
+    run_reader(tmp_path, r'''
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                  '<item id="a" href="a.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>')
+    book.writestr("a.xhtml", page.format("A", "<p>Chapter text</p>" * 400 +
+                  '<a id="self" href="a.xhtml">Return to top</a>'))
+viewer = open_viewer()
+wait_for(lambda: settled(viewer, "A"), viewer)
+js(viewer, "window.scrollTo(0, document.scrollingElement.scrollHeight * .8); true;")
+wait_for(lambda: viewer.source_location()["scroll"] > .7, viewer)
+browser_page = viewer._web.page()
+live_position = browser_page.scrollPosition
+old_position = live_position()
+# Model delayed Chromium-to-Qt geometry delivery without delaying the actual
+# renderer, its JavaScript callback, or any of the restoration timers.
+browser_page.scrollPosition = lambda: old_position
+try:
+    if %r == "source":
+        viewer.go_to({"chapter": 0, "scroll": 0.0})
+    else:
+        js(viewer, 'document.getElementById("self").click(); true;')
+    wait_for(lambda: js(viewer, "window.scrollY") == 0, viewer)
+    assert viewer.source_location()["scroll"] == 0.0, viewer.source_location()
+    viewer.save_position()
+    assert saved()["scroll"] == 0.0, saved()
+    # Even a cache delayed longer than the bounded restoration retries cannot
+    # resurrect the outgoing 80%% bookmark when the pending target is released.
+    wait_for(lambda: viewer._pending_scroll is None, viewer)
+    assert viewer.source_location()["scroll"] == 0.0, viewer.source_location()
+    viewer.save_position()
+    assert saved()["scroll"] == 0.0, saved()
+finally:
+    browser_page.scrollPosition = live_position
+# Deliver the late notification, then ensure ordinary reading is tracked again.
+viewer._scroll_changed(live_position())
+js(viewer, "window.scrollTo(0, document.scrollingElement.scrollHeight * .3); true;")
+wait_for(lambda: .29 < viewer.source_location()["scroll"] < .31, viewer)
+viewer.save_position()
+assert .29 < saved()["scroll"] < .31, saved()
+''' % navigation)
+
+
+def test_restored_position_tracks_reflow_after_a_delayed_height_update(tmp_path):
+    run_reader(tmp_path, r'''
+from PySide6.QtCore import QSizeF
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                  '<item id="a" href="a.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>')
+    book.writestr("a.xhtml", page.format("A", '<style>body { overflow-anchor: none; }</style>' +
+                  ('<p>' + 'A sentence that wraps over several lines in a narrow window. ' * 10 + '</p>') * 80))
+viewer = open_viewer()
+viewer.resize(550, 650)
+wait_for(lambda: settled(viewer, "A"), viewer)
+js(viewer, 'window.scrollTo(0, document.scrollingElement.scrollHeight * .2); true;')
+wait_for(lambda: viewer.source_location()["scroll"] > .19, viewer)
+fraction = js(viewer, 'window.scrollY / document.scrollingElement.scrollHeight')
+browser_page = viewer._web.page()
+live_size = browser_page.contentsSize
+old_size = QSizeF(live_size().width(), live_size().height() + 500)
+browser_page.contentsSize = lambda: old_size
+try:
+    viewer.go_to({"chapter": 0, "scroll": fraction})
+    wait_for(lambda: settled(viewer, "A"), viewer)
+    assert abs(viewer.source_location()["scroll"] - fraction) < .0001
+finally:
+    browser_page.contentsSize = live_size
+# Only height was delayed: this same-position restore needs no scroll signal.
+browser_page.contentsSizeChanged.emit(live_size())
+viewer.resize(1000, 650)
+def renderer_fraction():
+    return js(viewer, 'window.scrollY / document.scrollingElement.scrollHeight')
+wait_for(lambda: renderer_fraction() > fraction + .05, viewer)
+actual = renderer_fraction()
+wait_for(lambda: abs(browser_page.scrollPosition().y() / live_size().height() - actual) < .002, viewer)
+assert abs(viewer.source_location()["scroll"] - actual) < .002, (viewer.source_location(), actual)
+viewer.save_position()
+assert abs(saved()["scroll"] - actual) < .002, saved()
+''')

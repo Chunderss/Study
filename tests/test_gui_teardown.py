@@ -12,17 +12,34 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PROBE = r'''
 import threading
+import pytest
 from PySide6.QtTest import QTest
 from shiboken6 import isValid
 from tests.test_gui_reliability import qt, window
 
 WINDOWS = []
+RELEASES = []
 
 
-def start_lookup(window, monkeypatch, release, wait=5):
+@pytest.fixture(scope="module", autouse=True)
+def release_workers_at_exit(qt):
+    try:
+        yield
+    finally:
+        # Assertion failures must not strand an indefinitely blocked worker
+        # when Qt destroys its thread pool at subprocess shutdown.
+        for release in RELEASES:
+            release.set()
+        for win in WINDOWS:
+            if isValid(win.ctx._pool):
+                assert win.ctx._pool.waitForDone(5000)
+
+
+def start_lookup(window, monkeypatch, release):
     from vocab.core.models import Sense
+    RELEASES.append(release)
     def lookup(*args):
-        release.wait(wait)
+        release.wait()
         return [Sense("definition")], "test", ""
     monkeypatch.setattr(window.app, "_lookup_senses", lookup)
     vc = window.workspace.focused.component
@@ -33,8 +50,12 @@ def start_lookup(window, monkeypatch, release, wait=5):
 
 
 def test_fails_while_worker_is_blocked(window, monkeypatch):
-    start_lookup(window, monkeypatch, threading.Event())
-    assert False, "INJECTED-WHILE-BLOCKED"
+    release = threading.Event()
+    try:
+        start_lookup(window, monkeypatch, release)
+        assert False, "INJECTED-WHILE-BLOCKED"
+    finally:
+        release.set()  # fixture teardown can drain after the injected failure
 
 
 def test_fails_before_completion_is_delivered(window, monkeypatch):
@@ -59,7 +80,8 @@ LONG = threading.Event()
 
 def test_worker_outliving_the_drain_is_reported(window, monkeypatch):
     # Passes itself; its teardown must fail explicitly instead of hanging.
-    start_lookup(window, monkeypatch, LONG, wait=12)
+    # Only the next test may release this worker, however slow fixture setup is.
+    start_lookup(window, monkeypatch, LONG)
     # An unsaved note makes closing this window ask Save/Discard later.
     window.ctx.notes.open("Book", "One").document.setPlainText("unsaved draft")
 

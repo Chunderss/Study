@@ -79,6 +79,9 @@ if action != "hidden":
     window.workspace.toggle_zoom()
     wait_for(lambda: viewer.isVisible() and viewer._web.page().contentsSize().height() > 0)
     wait_for(lambda: abs(cached_fraction() - 0.4) < 0.02)
+    # Geometry can arrive before the restore callback acknowledges completion.
+    # This programmatic scroll has no user-input event to cancel that restore.
+    wait_for(lambda: viewer._pending_scroll is None)
     expected = 0.7 if action == "scroll" else 0.0
     js(f'window.scrollTo(0, document.scrollingElement.scrollHeight * {expected}); true;')
     wait_for(lambda: abs(cached_fraction() - expected) < 0.02)

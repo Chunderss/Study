@@ -1071,6 +1071,23 @@ def test_an_interrupt_after_the_module_is_in_place_reports_it(app, tmp_path, doc
     assert staging(app) == []
 
 
+def test_import_of_a_backup_points_to_restore(app, tmp_path, documents_folder):
+    archive = made_backup(app, tmp_path, documents_folder)
+    names = app.storage.list_names()
+    assert run(app, f'IMPORT "{archive.name}"') == (
+        f"! Cannot import {archive}: it is a module backup, not a vocabulary file from EXPORT; "
+        f'nothing was imported. Restore it with:  RESTORE "{archive}"')
+    assert run(app, f'RESTORE "{archive}" AS Copy').startswith("Restored module 'Copy'")
+    write_epub(documents_folder / "book.epub")  # another ZIP file
+    assert run(app, "IMPORT book.epub AS Book") == (
+        f"! Cannot import {documents_folder / 'book.epub'}: it is a ZIP file, not a vocabulary "
+        "file from EXPORT. Nothing was imported.")
+    (documents_folder / "notes.txt").write_bytes(b"\xb9 not text")
+    assert run(app, "IMPORT notes.txt").startswith(
+        f"! Could not read {documents_folder / 'notes.txt'}: 'utf-8' codec can't decode")
+    assert app.storage.list_names() == sorted(names + ["Copy"])
+
+
 def test_restore_dispatch_parsing(app, tmp_path, documents_folder, monkeypatch):
     calls = []
     monkeypatch.setattr(app, "cmd_restore", lambda src, name=None, **kw: calls.append((src, name))

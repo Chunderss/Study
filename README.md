@@ -321,7 +321,8 @@ Errors in the packaged app appear in a dialog and are logged to `desktop.log` in
 
 Vocabulary sharing remains available through Console commands:
 `EXPORT Book book.json [--stats]` and `IMPORT book.json as NewBook [--stats]`.
-Without `--stats`, an import starts with fresh progress.
+Without `--stats`, an import starts with fresh progress. A module backup (`.zip`) is
+restored with `RESTORE`, not imported; `IMPORT` says so.
 Windows paths work as typed (backslashes are ordinary characters). Put double quotes
 around a name or path that contains spaces: `IMPORT "C:\Users\Pat Smith\book.json" as NewBook`.
 

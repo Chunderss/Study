@@ -470,6 +470,19 @@ def inspect_archive(archive: zipfile.ZipFile) -> BackupInfo:
                       files=files, entries=entries)
 
 
+def zip_kind(path) -> Optional[str]:
+    """'backup' for a ZIP file holding a backup manifest, 'zip' for another
+    ZIP file, None for anything else; for hints, so it never raises."""
+    if not zipfile.is_zipfile(path):
+        return None
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return "backup" if MANIFEST in archive.namelist() else "zip"
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError, NotImplementedError,
+            ValueError):
+        return "zip"
+
+
 def read_backup(path) -> BackupInfo:
     """Check a backup file's structure and manifest, extracting nothing."""
     with open_archive(path) as archive:

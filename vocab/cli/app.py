@@ -22,7 +22,8 @@ from ..core.paths import expand_home, get_paths, resolve_user_path, sanitize_lis
 from ..core.senses import (LookedUp, SenseListing, parse_sense_numbers, quoted_sentence,
                            reorder, saved_context)
 from ..core.locking import write_lock
-from ..core.storage import ListNotFound, Storage, full_path, in_transaction, size_text
+from ..core.storage import (DataFileError, ListNotFound, Storage, full_path, in_transaction,
+                            size_text)
 from ..dictionaries import LookupFailed, describe_all, get_dictionary
 from ..dictionaries.base import SENSE_LIMIT
 from .. import nltk_resources
@@ -907,8 +908,24 @@ class App:
     @in_transaction
     def cmd_import(self, src: str, new_name: Optional[str], with_stats: bool) -> str:
         src = self.user_path(src)
-        name = self.storage.import_list(src, new_name=new_name, with_stats=with_stats,
-                                        card_problem=self.scheduler.card_problem)
+        try:
+            name = self.storage.import_list(src, new_name=new_name, with_stats=with_stats,
+                                            card_problem=self.scheduler.card_problem)
+        except DataFileError:  # not JSON: a module backup is an easy mistake
+            kind = _backup.zip_kind(src)
+            if kind is None:
+                raise
+            path = full_path(src)
+            if kind == "zip":
+                raise ValueError(f"Cannot import {path}: it is a ZIP file, not a vocabulary file "
+                                 "from EXPORT. Nothing was imported.") from None
+            try:
+                again = f"RESTORE {quote_arg(str(path))}"
+            except CommandSyntaxError:
+                again = "RESTORE <file>"
+            raise ValueError(f"Cannot import {path}: it is a module backup, not a vocabulary "
+                             f"file from EXPORT; nothing was imported. Restore it with:  "
+                             f"{again}") from None
         prog = "imported progress" if with_stats else "fresh progress"
         return f"Imported module '{name}' from {full_path(src)} ({prog}). USE it to start."
 

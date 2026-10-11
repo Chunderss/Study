@@ -79,6 +79,9 @@ class MarkdownEditor(QWidget):
         self._timer.setInterval(120)
         self._timer.timeout.connect(self.render)
         self.editor.textChanged.connect(self._timer.start)
+        # A render skipped while the preview was switched off asked to start
+        # at the top (another note was selected); the next render does.
+        self._reset_pending = False
 
     @staticmethod
     def _panel(title, content):
@@ -108,6 +111,13 @@ class MarkdownEditor(QWidget):
 
     def render(self, reset_scroll=False):
         self._timer.stop()
+        if self._preview_panel.isHidden():
+            # Switched off: rendering a long note after every typing pause
+            # costs time nobody sees. toggle_preview renders on showing it.
+            self._reset_pending = self._reset_pending or reset_scroll
+            return
+        reset_scroll = reset_scroll or self._reset_pending
+        self._reset_pending = False
         bar = self.preview.verticalScrollBar()
         old_scroll = 0 if reset_scroll else bar.value()
         horizontal = self.preview.horizontalScrollBar()

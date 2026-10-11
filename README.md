@@ -97,6 +97,8 @@ its completed reviews are already saved. Reader positions remain saved per docum
 Notes have a plain-text Markdown editor and a local Qt preview. Headings, emphasis,
 lists, tables, and fenced code update after a short pause. Narrow panes stack the
 preview below the source. Tab moves between source and preview; use spaces for indentation.
+While the preview is hidden it is not updated, so long notes stay quick to type in;
+showing it renders the current text where you left it.
 
 - Adding vocabulary or refreshing the workspace preserves text, cursor, selection, and undo.
 - Drafts remain in memory when switching notes, modules, or components, or closing a pane.

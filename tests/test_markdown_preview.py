@@ -251,3 +251,52 @@ def test_preview_does_not_probe_hidpi_image_variants(tmp_path):
     assert line, result.stdout + result.stderr
     _, ratio, requests, painted = line.split()
     assert float(ratio) == 2.0 and requests == "0" and painted == "0", line
+
+
+def _scrolled_long_note(notes, qt):
+    notes.app.storage.save_note("Book", "Long", "# Long\n\n" + "\n\n".join(
+        f"Paragraph {i}" for i in range(200)))
+    notes.refresh()
+    notes.note_list.setCurrentItem(notes.note_list.findItems("Long", Qt.MatchExactly)[0])
+    qt.processEvents()
+    bar = notes.markdown.preview.verticalScrollBar()
+    bar.setValue(bar.maximum() // 2)
+    assert bar.value() > 0
+    return bar
+
+
+def test_hidden_preview_renders_on_reveal_and_keeps_its_place(notes, qt):
+    preview = notes.markdown.preview
+    bar = _scrolled_long_note(notes, qt)
+    before = bar.value()
+    rendered = []
+    preview.document().contentsChanged.connect(lambda: rendered.append(True))
+    notes.toggle_preview()
+    notes.editor.setFocus()
+    notes.editor.moveCursor(QTextCursor.End)
+    for word in ("one", "two", "three"):
+        QTest.keyClicks(notes.editor, f" {word}")
+        QTest.qWait(200)  # longer than the preview's typing pause
+    assert rendered == [] and "one" not in preview.toPlainText()
+    notes.toggle_preview()
+    assert preview.toPlainText().endswith("Paragraph 199 one two three")
+    QTest.qWait(20)
+    assert bar.value() == before
+    assert notes.editor.toPlainText().endswith("Paragraph 199 one two three")
+
+
+def test_hidden_preview_shows_another_note_from_its_top(notes, qt):
+    preview = notes.markdown.preview
+    bar = _scrolled_long_note(notes, qt)
+    notes.app.storage.save_note("Book", "Second", "## Second\n\n" + "\n\n".join(
+        f"Item {i}" for i in range(200)))
+    notes.refresh()
+    rendered = []
+    preview.document().contentsChanged.connect(lambda: rendered.append(True))
+    notes.toggle_preview()
+    notes.note_list.setCurrentItem(notes.note_list.findItems("Second", Qt.MatchExactly)[0])
+    QTest.qWait(200)
+    assert rendered == [] and "Item 0" not in preview.toPlainText()
+    notes.toggle_preview()
+    QTest.qWait(20)
+    assert preview.toPlainText().startswith("Second\nItem 0") and bar.value() == 0

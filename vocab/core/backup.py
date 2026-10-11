@@ -62,6 +62,7 @@ import shutil
 import stat
 import tempfile
 import time
+import uuid
 import zipfile
 import zlib
 from dataclasses import dataclass, field
@@ -71,7 +72,9 @@ from typing import Callable, Dict, List, Optional
 from ..version import __version__
 from .learning import learning_problem
 from .module import MODULE_SCHEMA_VERSION, Module
-from .storage import _leftover_kind, _publish_file, parse_import, size_text
+from .paths import InvalidListName, sanitize_module_name
+from .storage import (STAGING_PREFIX, _leftover_kind, _publish_file, _remove_tree, parse_import,
+                      size_text)
 
 FORMAT = "vocab-study-module-backup"
 VERSION = 1
@@ -132,6 +135,25 @@ class Cancelled(Exception):
 
 class ArchiveProblem(ValueError):
     """Why a file is not a usable module backup (without the file's name)."""
+
+
+class NameProblem(BackupError):
+    """The module name a restore would use cannot be used."""
+
+    def __init__(self, name, reason):
+        super().__init__(f"{shown(name)} cannot be used as a module name: {reason}")
+        self.name = name
+        self.reason = reason
+
+
+class NameTaken(BackupError):
+    """A module, or a folder that is not one, already has the name."""
+
+    def __init__(self, name, folder=None, meanwhile=False):
+        super().__init__(f"Module '{name}' already exists.")
+        self.name = name
+        self.folder = folder        # the modules folder, when a non-module folder is in the way
+        self.meanwhile = meanwhile  # created by another window or process during the restore
 
 
 class ContentProblem(ValueError):
@@ -291,7 +313,16 @@ def open_archive(path) -> zipfile.ZipFile:
         raise
     except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError,
             NotImplementedError, ValueError):
-        raise ArchiveProblem("it is not a ZIP file, or it is damaged") from None
+        pass
+    try:
+        with open(path, "rb") as stream:
+            start = stream.read(64).lstrip(b"\xef\xbb\xbf \t\r\n")
+    except OSError:
+        start = b""
+    if start.startswith(b"{"):
+        raise ArchiveProblem("it is a JSON file, not a module backup. A vocabulary file from "
+                             "EXPORT is restored with IMPORT")
+    raise ArchiveProblem("it is not a ZIP file, or it is damaged")
 
 
 def _damaged(member):
@@ -792,3 +823,186 @@ def _verify(tmp, manifest, contents) -> None:
                 read_member(archive, info.entries[member], info.files[member])
     except ArchiveProblem as problem:
         raise OSError(f"the archive written could not be read back ({problem})") from None
+
+
+# ---- restoring a backup ---------------------------------------------------------
+@dataclass
+class RestoreResult:
+    name: str
+    path: Path
+    summary: dict
+
+
+def _write_chunk_to(stream):
+    return lambda data: _write_chunk(stream, data)
+
+
+def _restore_name(storage, info: BackupInfo, new_name) -> str:
+    raw = new_name if new_name is not None else info.module
+    if not isinstance(raw, str):
+        raise NameProblem(raw, "the backup names no module")
+    try:
+        name = sanitize_module_name(raw)
+    except InvalidListName as error:
+        raise NameProblem(raw, error) from None
+    if _leftover_kind(name):
+        raise NameProblem(name, "Vocab Study reserves it for its temporary folders")
+    _refuse_taken(storage, name)
+    return name
+
+
+def _refuse_taken(storage, name, meanwhile=False):
+    # exists() follows the file system's case rules, so on Windows "gatsby"
+    # is taken by "Gatsby".
+    if storage.exists(name):
+        raise NameTaken(name, meanwhile=meanwhile)
+    if os.path.lexists(storage.paths.module_dir(name)):
+        raise NameTaken(name, folder=storage.paths.modules_dir, meanwhile=meanwhile)
+
+
+def _restored_manifest(data: bytes, name: str):
+    """The backup's module.json for the new module: its name, and a new id so
+    the app tells it apart from the original; 'created' and other keys are
+    kept. A legacy migration record belongs to the data folder it ran in."""
+    raw = json.loads(data.decode("utf-8-sig"))
+    metadata = dict(raw.get("metadata") or {})
+    metadata.pop("legacy_migration", None)
+    metadata["id"] = uuid.uuid4().hex
+    raw["name"] = name
+    raw["metadata"] = metadata
+    return json.dumps(raw, ensure_ascii=False, indent=2).encode("utf-8"), metadata["id"]
+
+
+def _create(path: Path):
+    try:
+        return open(path, "xb")
+    except FileExistsError:
+        raise ArchiveProblem(
+            f"it holds two files whose names this computer's file system treats as the same "
+            f"(such as {shown(path.name)} in another case)") from None
+
+
+def _write_new(path: Path, data: bytes) -> None:
+    with _create(path) as stream:
+        _write_chunk(stream, data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _rename_into_place(staging: Path, final: Path) -> None:
+    """One rename publishes the module. On Windows an antivirus scanning the
+    new files can refuse it for a moment, so it is retried briefly."""
+    for attempt in range(10):
+        try:
+            staging.rename(final)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 9:
+                raise
+            time.sleep(0.2)
+
+
+def _restored_id(final: Path):
+    try:
+        with open(final / "module.json", encoding="utf-8") as stream:
+            return json.load(stream)["metadata"]["id"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def restore_backup(storage, path, new_name: Optional[str] = None, *, scheduler,
+                   progress: Optional[Progress] = None) -> RestoreResult:
+    """Restore a backup as a NEW module, never replacing or merging.
+
+    Everything that can be checked is checked before anything is written:
+    the archive's structure and manifest, the name, every JSON file's
+    checksum and content, and free space. The module is then built in a
+    hidden staging folder in modules/, every file checked against its
+    checksum as it is written, and renamed into place in one step under the
+    write lock. Any failure, Cancelled or KeyboardInterrupt leaves nothing;
+    once the module is in place, the result is returned even if an
+    interrupt arrives.
+
+    Raises FileNotFoundError, ArchiveProblem, NameProblem, NameTaken,
+    ContentProblem, BackupError (space) and OSError.
+    """
+    path = Path(path)
+    progress = progress or (lambda done, total, label: None)
+    with open_archive(path) as archive:
+        info = inspect_archive(archive)
+        name = _restore_name(storage, info, new_name)
+        contents = {member: read_member(archive, info.entries[member], info.files[member])
+                    for member in FIXED if member in info.files}
+        counts = check_contents(contents, scheduler)
+        manifest, new_id = _restored_manifest(contents[MODULE_JSON], name)
+        modules = storage.paths.modules_dir
+        modules.mkdir(parents=True, exist_ok=True)
+        total = sum(item["size"] for item in info.files.values())
+        try:
+            free = shutil.disk_usage(modules).free
+        except OSError:
+            free = None
+        if free is not None and free < total + SPACE_MARGIN:
+            raise BackupError(f"it needs about {size_text(total)} free in {modules}, and "
+                              f"{size_text(free)} is free")
+        summary = {"words": counts["words"], "captures": counts["captures"],
+                   "notes": sum(1 for m in info.files if m.startswith("module/notes/")),
+                   "documents": sum(1 for m in info.files if m.startswith("module/documents/"))}
+        result = RestoreResult(name, path, summary)
+        label = f"Restoring '{name}'"
+        # The staging folder is the module folder itself, so paths inside it
+        # are no longer than the final ones (Windows' path limit).
+        staging = modules / f"{STAGING_PREFIX}{uuid.uuid4().hex}"
+        final = storage.paths.module_dir(name)
+        published = False
+        try:
+            try:
+                staging.mkdir()
+                for folder in ("vocab", "notes", "documents"):
+                    (staging / folder).mkdir()
+                for member, data in contents.items():
+                    _write_new(staging.joinpath(*FIXED[member]),
+                               manifest if member == MODULE_JSON else data)
+                done = sum(map(len, contents.values()))
+                progress(0, total, label)
+                progress(done, total, label)
+                for member in sorted(info.files):
+                    kind, file_name = member_kind(member)
+                    if kind == "fixed":
+                        continue
+                    folder = staging / kind
+                    target = folder / file_name  # one validated path component
+                    if target.parent != folder:
+                        raise ArchiveProblem(f"it holds {shown(member)}, which leaves its folder")
+
+                    def step(size):
+                        nonlocal done
+                        done += size
+                        progress(done, total, label)
+                    with _create(target) as stream:
+                        stream_member(archive, info.entries[member], info.files[member],
+                                      _write_chunk_to(stream), step)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                # No progress call from here on: the dialog's Cancel no longer applies.
+                with storage.transaction():
+                    _refuse_taken(storage, name, meanwhile=True)
+                    _rename_into_place(staging, final)
+                published = True
+            finally:
+                if not published and not os.path.lexists(staging):
+                    published = _restored_id(final) == new_id  # renamed, then interrupted
+                if os.path.lexists(staging):
+                    try:
+                        _remove_tree(staging)
+                    except OSError:
+                        pass  # hidden, and purged by purge_leftovers()
+        except (KeyboardInterrupt, Cancelled):
+            if published:
+                return result
+            raise
+        except OSError:
+            if published:
+                return result
+            raise
+    return result

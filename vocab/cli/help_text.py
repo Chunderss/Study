@@ -83,15 +83,20 @@ SHARING
       Windows paths work as typed; quote a path that contains spaces:
         IMPORT "C:\Users\Pat Smith\book.json" as The Great Gatsby
 
-BACKUP  (a module's words, progress, notes, documents, captures and reading places)
+BACKUP & RESTORE  (a module's words, progress, notes, documents, captures and
+                  reading places, in one .zip file)
   BACKUP <module>            write "<module> <date>.zip" in the folder for files
   BACKUP <module> <file.zip>|<folder>
                              write it there (an existing file is replaced only
                              if you confirm); drafts of unsaved notes and files
                              the app does not manage are left out, and the
                              reply says so. Ctrl-C cancels.
+  RESTORE <file.zip> [as <name>]
+                             restore a backup as a NEW module, named as in the
+                             backup unless AS gives a name; an existing module
+                             is never replaced or merged. Ctrl-C cancels.
 
-FILES  (where EXPORT, IMPORT and BACKUP look for a relative path)
+FILES  (where EXPORT, IMPORT, BACKUP and RESTORE look for a relative path)
   FOLDER                     show the folder for files: your Documents
                              folder unless you chose another
   FOLDER <full path>         use another (existing) folder for files

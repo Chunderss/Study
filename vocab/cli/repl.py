@@ -29,6 +29,18 @@ def _without_flag(args: List[str], flag: str) -> tuple[List[str], bool]:
     return kept, len(kept) != len(args)
 
 
+def _path_and_name(rest: List[str]):
+    """(path, name or None) from 'PATH [AS NAME...]', or None when the words
+    after the path are not AS and a name. The name may be several words."""
+    if not rest:
+        return None
+    if len(rest) == 1:
+        return rest[0], None
+    if rest[1].lower() != "as" or len(rest) < 3:
+        return None
+    return rest[0], " ".join(rest[2:])
+
+
 def _path_problem(path: str) -> Optional[str]:
     """A message when a file path starts or ends with a quote character, else None."""
     if path and (path[0] in "\"'" or path[-1] in "\"'"):
@@ -47,7 +59,7 @@ class Repl:
         self.app = app
         self.inp = in_stream or sys.stdin
         self.out = out_stream or sys.stdout
-        # Called as progress(done, total, label) during BACKUP; the desktop
+        # Called as progress(done, total, label) during BACKUP and RESTORE; the desktop
         # Console replaces it with a progress dialog, as it replaces _confirm.
         self.progress = self._announce
 
@@ -159,6 +171,13 @@ class Repl:
                         "(quote a name or path that contains spaces)")
             dest = a[1] if len(a) == 2 else None
             return (_path_problem(dest) if dest else None) or self._backup(a[0], dest)
+        if v == "RESTORE":
+            parsed = _path_and_name(a)
+            if parsed is None:
+                return ("Usage: RESTORE <file.zip> [as <name>]   "
+                        "(quote a path that contains spaces)")
+            src, new_name = parsed
+            return _path_problem(src) or app.cmd_restore(src, new_name, progress=self.progress)
         if v == "FOLDER":
             if len(a) > 1:
                 return ("Usage: FOLDER [<full path> | DEFAULT]   "
@@ -236,14 +255,10 @@ class Repl:
         usage = ("Usage: IMPORT <file.json> [as <name>] [--stats]   "
                  "(quote a path that contains spaces)")
         rest, stats = _without_flag(a, "--stats")
-        if not rest:
+        parsed = _path_and_name(rest)
+        if parsed is None:
             return usage
-        src, new_name = rest[0], None
-        if len(rest) > 1:
-            # Anything after the path must be AS <name>; the name may be several words.
-            if rest[1].lower() != "as" or len(rest) < 3:
-                return usage
-            new_name = " ".join(rest[2:])
+        src, new_name = parsed
         return _path_problem(src) or self.app.cmd_import(src, new_name, with_stats=stats)
 
     # ---- loop -----------------------------------------------------------

@@ -433,3 +433,479 @@ def test_backup_covers_every_file_the_app_writes(app, tmp_path, documents_folder
     for path in files:
         path = path.replace(os.sep, "/")
         assert path in archived or path.split("/")[0] in backup.EXCLUDED, path
+
+
+# ---- RESTORE ----------------------------------------------------------------------
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def made_backup(app, tmp_path, documents_folder, name="Gatsby"):
+    make_module(app, tmp_path, name)
+    assert run(app, f"BACKUP {name}").startswith("Backed up")
+    return documents_folder / f"{name} {DATE}.zip"
+
+
+def rewrite(src, dest, edit=None, recompute=True):
+    """A copy of the archive ``src`` with ``edit(files, manifest)`` applied;
+    with ``recompute`` the manifest's file list matches the new files."""
+    with zipfile.ZipFile(src) as archive:
+        files = {info.filename: archive.read(info) for info in archive.infolist()}
+    manifest = json.loads(files.pop(backup.MANIFEST))
+    if edit:
+        edit(files, manifest)
+    if recompute:
+        manifest["files"] = [{"path": p, "size": len(d), "sha256": sha(d)}
+                             for p, d in files.items()]
+    with zipfile.ZipFile(dest, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+        archive.writestr(backup.MANIFEST, json.dumps(manifest))
+    return dest
+
+
+class Restore:
+    """Run RESTORE and check that a refusal left nothing behind."""
+
+    def __init__(self, app):
+        self.app = app
+        self.names = app.storage.list_names()
+
+    def refused(self, archive, line=None):
+        before = archive.read_bytes() if archive.is_file() else None
+        reply = run(self.app, line or f'RESTORE "{archive}" AS Copy')
+        assert reply.startswith("! "), reply
+        assert "nothing was restored" in reply.lower(), reply
+        assert self.app.storage.list_names() == self.names
+        assert self.app.storage.unsupported_module_dirs() == []
+        assert staging(self.app) == []
+        if before is not None:
+            assert archive.read_bytes() == before
+        return reply
+
+
+def staging(app):
+    return [p.name for p in app.paths.modules_dir.iterdir()
+            if p.name.startswith(".vocab-staging-")]
+
+
+def test_round_trip_restores_every_kind_of_study_data(app, tmp_path, documents_folder):
+    folder = make_module(app, tmp_path)
+    manifest_path = folder / "module.json"
+    original = json.loads(manifest_path.read_text(encoding="utf-8"))
+    original["extra"] = {"kept": True}  # a key this version does not know
+    original["metadata"]["legacy_migration"] = {"source": "lists/Gatsby"}
+    manifest_path.write_text(json.dumps(original), encoding="utf-8")
+    run(app, "BACKUP Gatsby")
+    source_tree = tree(app.paths.root)
+    reply = run(app, f'RESTORE "Gatsby {DATE}.zip" as Copy')
+    archive = documents_folder / f"Gatsby {DATE}.zip"
+    assert reply == (f"Restored module 'Copy' from {archive} (2 words, 3 notes, 2 documents, "
+                     "2 captures). USE it to start.")
+    copy = app.paths.module_dir("Copy")
+    files, folders = tree(folder)
+    restored, restored_folders = tree(copy)
+    assert set(restored) == set(files) and restored_folders == folders
+    for path, data in files.items():
+        if path != "module.json":
+            assert restored[path] == data, path
+    manifest = json.loads(restored["module.json"])
+    assert manifest["name"] == "Copy" and manifest["created"] == original["created"]
+    assert manifest["extra"] == {"kept": True}
+    assert manifest["metadata"]["id"] != original["metadata"]["id"]
+    assert "legacy_migration" not in manifest["metadata"]
+    storage = app.storage
+    assert storage.load_words("Copy").to_dict()["words"] == \
+        storage.load_words("Gatsby").to_dict()["words"]
+    assert storage.load_stats("Copy") == storage.load_stats("Gatsby")
+    assert LearningStore(storage).load("Copy") == LearningStore(storage).load("Gatsby")
+    for document in ("book.epub", "paper.pdf"):
+        assert storage.load_reading_pos("Copy", document) == \
+            storage.load_reading_pos("Gatsby", document)
+    assert storage.note_names("Copy") == storage.note_names("Gatsby")
+    assert storage.document_names("Copy") == storage.document_names("Gatsby")
+    after = tree(app.paths.root)
+    assert {k: v for k, v in after[0].items() if not k.startswith(os.path.join("modules", "Copy"))} \
+        == source_tree[0]  # the original and the archive are unchanged
+
+
+def test_restore_never_replaces_or_merges(app, tmp_path, documents_folder):
+    archive = made_backup(app, tmp_path, documents_folder)
+    app.cmd_create("Other")
+    original = tree(app.paths.modules_dir)
+    restore = Restore(app)
+    reply = restore.refused(archive, f'RESTORE "{archive}"')
+    assert reply == (f"! Module 'Gatsby' already exists; nothing was restored. Restore the "
+                     f'backup under another name:  RESTORE "{archive}" AS <new name>')
+    assert "Module 'Other' already exists" in restore.refused(archive, f'RESTORE "{archive}" as Other')
+    probe = app.paths.modules_dir / "CaseProbe"
+    probe.mkdir()
+    insensitive = (app.paths.modules_dir / "caseprobe").exists()
+    probe.rmdir()
+    if insensitive:
+        assert "already exists" in restore.refused(archive, f'RESTORE "{archive}" AS gatsby')
+    (app.paths.modules_dir / "X").mkdir()
+    (app.paths.modules_dir / "X" / "mine.txt").write_text("not a module", encoding="utf-8")
+    restore.names = app.storage.list_names()
+    reply = restore.refused(archive, f'RESTORE "{archive}" AS X')
+    assert f"A folder named 'X' already exists in {app.paths.modules_dir} but is not a module" in reply
+    assert (app.paths.modules_dir / "X" / "mine.txt").read_text(encoding="utf-8") == "not a module"
+    for line, reason in ((f'RESTORE "{archive}" AS studyall', "reserved"),
+                         (f'RESTORE "{archive}" AS a/b', "may only contain"),
+                         (f'RESTORE "{archive}" AS .vocab-staging-{"0" * 32}',
+                          "temporary folders")):
+        assert reason in restore.refused(archive, line)
+    current = tree(app.paths.modules_dir)
+    assert {k: v for k, v in current[0].items() if not k.startswith("X")} == original[0]
+
+
+def test_restored_module_is_a_new_module(app, tmp_path, documents_folder):
+    archive = made_backup(app, tmp_path, documents_folder)
+    run(app, f'RESTORE "{archive}" AS One')
+    run(app, f'RESTORE "{archive}" AS Two')
+    identities = {app.storage.module_identity(n) for n in ("Gatsby", "One", "Two")}
+    assert len(identities) == 3
+    assert len({created for created, _ in identities}) == 1  # 'created' is kept
+
+
+def _flip_document_byte(src, dest):
+    data = bytearray(src.read_bytes())
+    with zipfile.ZipFile(src) as archive:
+        info = archive.getinfo("module/documents/paper.pdf")
+    start = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+    data[start + info.file_size // 2] ^= 0xFF
+    dest.write_bytes(bytes(data))
+
+
+CORRUPT = {
+    "random bytes": (lambda src, dest: dest.write_bytes(os.urandom(4000)),
+                     "it is not a ZIP file, or it is damaged"),
+    "empty": (lambda src, dest: dest.write_bytes(b""), "it is not a ZIP file, or it is damaged"),
+    # zipfile may then find the end record of the EPUB stored inside instead.
+    "truncated": (lambda src, dest: dest.write_bytes(src.read_bytes()[:len(src.read_bytes()) // 2]),
+                  ("it is not a ZIP file, or it is damaged", "no vocab-study-backup.json")),
+    "an export": (lambda src, dest: dest.write_text('{"words": {"words": {}}}', encoding="utf-8"),
+                  "restored with IMPORT"),
+    "an epub": (lambda src, dest: write_epub(dest), "no vocab-study-backup.json). A vocabulary "
+                                                    "file from EXPORT is restored with IMPORT"),
+    "manifest not json": (lambda src, dest: rewrite(src, dest, recompute=False) and _replace_member(
+        dest, backup.MANIFEST, b"{not json"), "vocab-study-backup.json is not valid JSON"),
+    "wrong format": (lambda src, dest: rewrite(src, dest, lambda f, m: m.update(format="other")),
+                     "does not describe a Vocab Study module backup"),
+    "version 2": (lambda src, dest: rewrite(src, dest, lambda f, m: m.update(version=2)),
+                  "made by a newer version of Vocab Study (backup format 2; this version reads "
+                  "format 1). Update Vocab Study, then restore it"),
+    "version 0": (lambda src, dest: rewrite(src, dest, lambda f, m: m.update(version=0)),
+                  "backup format version 0 is not one Vocab Study knows"),
+    "version x": (lambda src, dest: rewrite(src, dest, lambda f, m: m.update(version="x")),
+                  "backup format version 'x' is not one"),
+    "flipped byte": (_flip_document_byte, "'module/documents/paper.pdf' is damaged (its "
+                                          "contents do not match the checksum"),
+    "listed file missing": (lambda src, dest: rewrite(src, dest, lambda f, m: f.pop(
+        "module/documents/paper.pdf"), recompute=False), "'module/documents/paper.pdf' is "
+                                                         "missing from it"),
+    "size mismatch": (lambda src, dest: rewrite(src, dest, lambda f, m: [
+        e.update(size=e["size"] + 1) for e in m["files"] if e["path"].endswith("words.json")],
+        recompute=False), "'module/vocab/words.json' is damaged"),
+    "deep nesting": (lambda src, dest: rewrite(src, dest, lambda f, m: f.update(
+        {"module/learning.json": b"[" * 100_000})),
+        "learning.json in the backup cannot be used: it is nested too deeply to read"),
+}
+
+
+def _replace_member(path, member, data):
+    with zipfile.ZipFile(path) as archive:
+        files = {i.filename: archive.read(i) for i in archive.infolist()}
+    files[member] = data
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return path
+
+
+@pytest.mark.parametrize("case", sorted(CORRUPT))
+def test_corrupt_archives_are_refused_and_create_nothing(app, tmp_path, documents_folder, case):
+    archive = made_backup(app, tmp_path, documents_folder)
+    damage, reason = CORRUPT[case]
+    bad = tmp_path / "bad.zip"
+    damage(archive, bad)
+    reply = Restore(app).refused(bad)
+    assert reply.startswith(f"! Cannot restore {bad}: "), reply
+    assert any(r in reply for r in ((reason,) if isinstance(reason, str) else reason)), reply
+
+
+def test_missing_files_and_folders_are_named(app, tmp_path, documents_folder):
+    restore = Restore(app)
+    assert restore.refused(documents_folder / "gone.zip") == \
+        f"! Backup file not found: {documents_folder / 'gone.zip'}. Nothing was restored."
+    assert restore.refused(tmp_path, f'RESTORE "{tmp_path}" AS Copy') == \
+        f"! Cannot restore {tmp_path}: it is a folder, not a backup file. Nothing was restored."
+
+
+def _set_central_flag(path, member, bit):
+    data = bytearray(path.read_bytes())
+    offset = 0
+    while True:
+        offset = data.find(b"PK\x01\x02", offset)
+        assert offset != -1, member
+        length = int.from_bytes(data[offset + 28:offset + 30], "little")
+        if data[offset + 46:offset + 46 + length].decode() == member:
+            data[offset + 8] |= bit
+            break
+        offset += 4
+    path.write_bytes(bytes(data))
+
+
+def test_tampered_archives_are_refused(app, tmp_path, documents_folder):
+    archive = made_backup(app, tmp_path, documents_folder)
+    restore = Restore(app)
+    bad = tmp_path / "bad.zip"
+
+    def check(reason):
+        reply = restore.refused(bad)
+        assert reply.startswith(f"! Cannot restore {bad}: "), reply
+        assert reason in reply, reply
+    rewrite(archive, bad, lambda f, m: f.update({"module/notes/Ch1.md": b"changed"}),
+            recompute=False)
+    check("'module/notes/Ch1.md' is damaged")
+    rewrite(archive, bad, lambda f, m: f.update({"module/notes/extra.md": b"x"}), recompute=False)
+    check("'module/notes/extra.md', which its vocab-study-backup.json does not list")
+    for member, content, reason in (
+            ("module/learning.json", b'{"schema": 1, "items": {"a": {"id": "a"}}}',
+             "learning.json in the backup cannot be used: capture 'a': 'kind' must be concept"),
+            ("module/vocab/stats.json", b'{"ephemeral": {"due": "tomorrow"}}',
+             "vocab/stats.json in the backup cannot be used: progress for 'ephemeral': 'due'"),
+            ("module/vocab/words.json",
+             b'{"schema": 1, "words": {"x": {"senses": [{"definition": ""}]}}}',
+             "vocab/words.json in the backup cannot be used: word 'x': a definition is empty"),
+            ("module/module.json", b"[]",
+             "module.json in the backup cannot be used: expected a JSON object")):
+        rewrite(archive, bad, lambda f, m: f.update({member: content}))
+        check(reason)
+    import warnings
+    rewrite(archive, bad)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with zipfile.ZipFile(bad, "a") as zipped:
+            zipped.writestr("module/notes/Ch1.md", b"a second copy")
+    check("'module/notes/Ch1.md' twice")
+    rewrite(archive, bad)
+    _set_central_flag(bad, "module/notes/Ch1.md", 0x1)
+    check("it is encrypted")
+
+    def add_link(files, manifest):
+        files["module/documents/link.pdf"] = b"/etc/passwd"
+    rewrite(archive, bad, add_link)
+    with zipfile.ZipFile(bad) as zipped:
+        files = {i.filename: zipped.read(i) for i in zipped.infolist()}
+    with zipfile.ZipFile(bad, "w") as zipped:
+        for name, data in files.items():
+            info = zipfile.ZipInfo(name)
+            if name.endswith("link.pdf"):
+                info.external_attr = (0o120777) << 16  # a symbolic link
+            zipped.writestr(info, data)
+    check("'module/documents/link.pdf' is a link")
+
+
+TRAVERSAL = [
+    "../evil.txt",
+    "module/documents/../../evil.txt",
+    "/tmp/vocab-evil-absolute.txt",
+    "module/documents/sub/evil.pdf",
+    "module/notes/x.txt",
+    f"module/documents/.vocab-staging-{'a' * 32}",
+    "module/documents/nul\x00evil.pdf",
+    "module/documents/ctl\x01evil.pdf",
+    "module/extra.json",
+    pytest.param("module/documents/CON.pdf", marks=pytest.mark.skipif(
+        sys.platform != "win32", reason="a Windows device name")),
+    pytest.param("module/documents/a:b.pdf", marks=pytest.mark.skipif(
+        sys.platform != "win32", reason="a Windows-only invalid name")),
+    pytest.param("module/documents/a\\b.pdf", marks=pytest.mark.skipif(
+        sys.platform != "win32", reason="a Windows separator")),
+    pytest.param("module/documents/trailing.", marks=pytest.mark.skipif(
+        sys.platform != "win32", reason="a Windows-only invalid name")),
+]
+
+
+@pytest.mark.parametrize("member", TRAVERSAL)
+def test_path_traversal_and_unsafe_names_are_refused(app, tmp_path, documents_folder, member):
+    archive = made_backup(app, tmp_path, documents_folder)
+    bad = tmp_path / "bad.zip"
+    rewrite(archive, bad, lambda f, m: f.update({member: b"evil"}))
+    before = tree(tmp_path)
+    reply = Restore(app).refused(bad)
+    assert reply.startswith(f"! Cannot restore {bad}: it holds "), reply
+    assert tree(tmp_path) == before  # nothing written anywhere
+    assert not os.path.exists("/tmp/vocab-evil-absolute.txt")
+
+
+def test_archive_limits_are_checked_before_writing(app, tmp_path, documents_folder,
+                                                   monkeypatch):
+    archive = made_backup(app, tmp_path, documents_folder)
+    restore = Restore(app)
+    with monkeypatch.context() as patch:
+        patch.setattr(backup, "MAX_ENTRIES", 5)
+        assert "it holds 11 files; a backup holds at most 5" in restore.refused(archive)
+    with monkeypatch.context() as patch:
+        patch.setattr(backup, "MAX_MANIFEST_BYTES", 100)
+        assert "vocab-study-backup.json is larger than 100 bytes" in restore.refused(archive)
+    with monkeypatch.context() as patch:
+        patch.setattr(backup, "MAX_JSON_BYTES", 150)
+        assert "is larger than 150 bytes, the most a backup holds" in restore.refused(archive)
+    with monkeypatch.context() as patch:
+        import shutil
+        usage = shutil.disk_usage(app.paths.modules_dir)
+        patch.setattr(backup.shutil, "disk_usage",
+                      lambda path: usage._replace(free=backup.SPACE_MARGIN + 1000))
+        reply = restore.refused(archive)
+        total = sum(f["size"] for f in backup.read_backup(archive).files.values())
+        assert (f"it needs about {backup.size_text(total)} free in {app.paths.modules_dir}, and "
+                f"{backup.size_text(backup.SPACE_MARGIN + 1000)} is free") in reply
+
+    class Inflated(io.BytesIO):
+        consumed = 0
+
+        def read(self, size=-1):
+            data = super().read(size)
+            self.consumed += len(data)
+            return data
+    inflated = Inflated(b"\0" * 1_000_000)
+    real_open = zipfile.ZipFile.open
+
+    def lying_open(self, name, mode="r", *args, **kwargs):
+        if getattr(name, "filename", name) == "module/documents/paper.pdf":
+            return inflated
+        return real_open(self, name, mode, *args, **kwargs)
+    monkeypatch.setattr(zipfile.ZipFile, "open", lying_open)
+    assert "'module/documents/paper.pdf' is damaged" in restore.refused(archive)
+    assert inflated.consumed == (256 * 64) + 1  # stopped at the first byte too many
+
+
+def test_failed_restore_leaves_nothing_and_a_retry_succeeds(app, tmp_path, documents_folder,
+                                                            monkeypatch):
+    archive = made_backup(app, tmp_path, documents_folder)
+    restore = Restore(app)
+    monkeypatch.setattr(backup, "CHUNK", 1024)
+    real_write = backup._write_chunk
+    documents = []
+
+    def full_disk(stream, data):
+        name = getattr(stream, "name", "")
+        if "documents" in str(name) and name not in documents:
+            documents.append(name)
+        if len(documents) == 2:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_write(stream, data)
+    monkeypatch.setattr(backup, "_write_chunk", full_disk)
+    assert restore.refused(archive) == \
+        f"! Could not restore {archive}: No space left on device. Nothing was restored."
+    monkeypatch.setattr(backup, "_write_chunk", real_write)
+
+    def no_rename(staging, final):
+        raise PermissionError(errno.EACCES, "Access is denied", str(staging))
+    monkeypatch.setattr(backup, "_rename_into_place", no_rename)
+    assert "Could not restore" in restore.refused(archive)
+    monkeypatch.undo()
+
+    other = App(app.paths.root)  # another window or process
+
+    def created_meanwhile(done, total, label):
+        if done and not other.storage.exists("Copy"):
+            other.cmd_create("Copy")
+    reply = run_restore(app, archive, "Copy", created_meanwhile)
+    assert reply.startswith("! Module 'Copy' was created while the backup was being restored; "
+                            "nothing was restored."), reply
+    assert app.storage.load_words("Copy").words == {}  # the other window's module is intact
+    assert staging(app) == []
+    assert run(app, f'RESTORE "{archive}" AS Copy2').startswith("Restored module 'Copy2'")
+
+
+def run_restore(app, archive, name, progress):
+    try:
+        return app.cmd_restore(str(archive), name, progress=progress)
+    except ValueError as error:
+        return f"! {error}"
+
+
+@pytest.mark.parametrize("stop", [backup.Cancelled, KeyboardInterrupt])
+def test_cancelled_restore_leaves_nothing(app, tmp_path, documents_folder, stop):
+    archive = made_backup(app, tmp_path, documents_folder)
+    names = app.storage.list_names()
+
+    def cancel(done, total, label):
+        if done:
+            raise stop()
+    assert run_restore(app, archive, "Copy", cancel) == "Restore cancelled; nothing was restored."
+    assert app.storage.list_names() == names and staging(app) == []
+    assert run_restore(app, archive, "Copy", None).startswith("Restored module 'Copy'")
+
+
+def test_an_interrupt_after_the_module_is_in_place_reports_it(app, tmp_path, documents_folder,
+                                                               monkeypatch):
+    archive = made_backup(app, tmp_path, documents_folder)
+    real = backup._rename_into_place
+
+    def renamed_then_interrupted(staging_folder, final):
+        real(staging_folder, final)
+        raise KeyboardInterrupt
+    monkeypatch.setattr(backup, "_rename_into_place", renamed_then_interrupted)
+    assert run_restore(app, archive, "Copy", None).startswith("Restored module 'Copy' from ")
+    assert app.storage.module_identity("Copy") != app.storage.module_identity("Gatsby")
+    assert staging(app) == []
+
+
+def test_restore_dispatch_parsing(app, tmp_path, documents_folder, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "cmd_restore", lambda src, name=None, **kw: calls.append((src, name))
+                        or "ran")
+    usage = "Usage: RESTORE <file.zip> [as <name>]   (quote a path that contains spaces)"
+    for line in ("RESTORE", "RESTORE a.zip as", "RESTORE a.zip to Copy", "RESTORE a b"):
+        assert run(app, line) == usage, line
+    assert "cannot start or end with a quote" in run(app, "RESTORE 'a.zip'")
+    run(app, 'RESTORE "My Backups/Gatsby 2026.zip" As The Great Gatsby')
+    run(app, r"RESTORE C:\Backups\x.zip")
+    assert calls == [("My Backups/Gatsby 2026.zip", "The Great Gatsby"),
+                     (r"C:\Backups\x.zip", None)]
+
+
+def test_large_restores_announce_themselves_in_the_terminal(app, tmp_path, documents_folder,
+                                                            monkeypatch):
+    archive = made_backup(app, tmp_path, documents_folder)
+    import vocab.cli.repl as repl_module
+    monkeypatch.setattr(repl_module, "PROGRESS_THRESHOLD", 1000)
+    out = io.StringIO()
+    reply = Repl(app, in_stream=io.StringIO(), out_stream=out).dispatch(
+        parse(f'RESTORE "{archive}" AS Copy'))
+    assert reply.startswith("Restored module 'Copy'")
+    assert out.getvalue().startswith("Restoring 'Copy' (")
+    assert out.getvalue().rstrip().endswith("... Ctrl-C cancels.")
+
+
+def test_restored_epub_capture_still_highlights_its_passage(tmp_path):
+    # Real data end to end: a capture made from a selection in a real reader,
+    # backed up, restored under another name, and opened from the copy.
+    pytest.importorskip("PySide6")
+    from .test_epub_highlights import run_browser
+    run_browser(tmp_path, r'''
+from pathlib import Path
+viewer = open_viewer()
+source = capture_source(viewer)
+item = save_capture("Book", quote, source)
+expect_marks(viewer, [("second", quote)])
+archive = Path(sys.argv[1]) / "Book backup.zip"
+reply = data.cmd_backup("Book", str(archive))
+assert reply.startswith("Backed up 'Book'"), reply
+reply = data.cmd_restore(str(archive), "Copy")
+assert reply.startswith("Restored module 'Copy'"), reply
+restored = store.load("Copy")[item["id"]]
+assert restored["source"] == source and restored["source"]["anchor"] == source["anchor"]
+copy = open_viewer("Copy", "book.epub", source=dict(restored["source"], capture_id=item["id"]))
+expect_marks(copy, [("second", quote)])
+wait_for(lambda: js(copy, """(() => {
+    const ranges = Array.from(CSS.highlights.get('vocab-study-active') || []);
+    return ranges.length === 1 &&
+        ranges[0].startContainer.parentElement.closest('p').id === 'second';
+})()"""))
+assert copy._pending_highlight is None
+''')

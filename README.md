@@ -300,6 +300,30 @@ reading positions.
   them first) and files in the module's folder that Vocab Study does not manage.
 - Large backups print a start line; Ctrl-C cancels.
 
+`RESTORE <file.zip> [as <name>]` creates a NEW module from a backup, named as in the
+backup unless `AS` gives a name (several words are fine). It never replaces or merges into
+an existing module: when the name is taken, the reply shows the command to restore under
+another name.
+
+- Everything is checked before anything is written: that the file is a module backup
+  (an `EXPORT` file is restored with `IMPORT`), not made by a newer version, not
+  encrypted, with no links, no duplicate or unlisted files, no file outside the module
+  folder, and no name the computer cannot use; the checksums; every JSON file's
+  content, with the rules the app applies when it reads them; and free space.
+- The module is built in a hidden folder in the data folder, every file checked against
+  its checksum, and then put in place in one step. A failure, a full disk, Ctrl-C, or the
+  name being taken meanwhile by another window leaves nothing behind, and an immediate
+  retry works.
+- The restored module keeps the backup's files byte for byte, so captures still open
+  their source passage and EPUB highlights and reading positions return. Its
+  `module.json` gets the new name and a new identity, so the app treats it as a
+  different module from the original; its creation time is kept.
+- A document or note name that the computer making the backup allowed but this one
+  does not (such as `a:b.pdf`, made on Linux, restored on Windows) is refused; rename it
+  where the backup was made.
+- A backup holds at most 100,000 files; each JSON file or note at most 256 MB.
+- Large restores print a start line; Ctrl-C cancels.
+
 The archive is a standard ZIP file. A manifest, `vocab-study-backup.json`, records the
 format (`vocab-study-module-backup`, version 1), the app version, the time, the module and,
 for every file, its size and SHA-256; `module/` mirrors the module's folder. The

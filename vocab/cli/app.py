@@ -665,6 +665,57 @@ class App:
             return "Backup cancelled; nothing was written."
         return backup_reply(result)
 
+    def _restore_problem(self, path, error) -> str:
+        """The message for a restore that did not happen."""
+        try:
+            again = f"RESTORE {quote_arg(str(path))} AS <new name>"
+        except CommandSyntaxError:
+            again = "RESTORE <file> AS <new name>"
+        if isinstance(error, _backup.NameProblem):
+            return (f"Cannot restore {path}: {error}; nothing was restored. Restore the backup "
+                    f"under another name:  {again}")
+        if isinstance(error, _backup.NameTaken):
+            if error.folder is not None:
+                taken = (f"A folder named '{error.name}' already exists in {error.folder} but is "
+                         "not a module")
+            elif error.meanwhile:
+                taken = f"Module '{error.name}' was created while the backup was being restored"
+            else:
+                taken = f"Module '{error.name}' already exists"
+            return f"{taken}; nothing was restored. Restore the backup under another name:  {again}"
+        if isinstance(error, FileNotFoundError):
+            return f"Backup file not found: {path}. Nothing was restored."
+        if isinstance(error, _backup.ContentProblem):
+            return (f"Cannot restore {path}: {_backup.relative(error.member)} in the backup "
+                    f"cannot be used: {error.reason}. Nothing was restored.")
+        if isinstance(error, OSError) and not isinstance(error, _backup.BackupExists):
+            reason = error.strerror or str(error)
+            where = f" ({error.filename})" if error.strerror and error.filename else ""
+            return f"Could not restore {path}: {reason}{where}. Nothing was restored."
+        return f"Cannot restore {path}: {error}. Nothing was restored."
+
+    def backup_info(self, src: str):
+        """(path, BackupInfo) for a backup file, checking its structure only;
+        raises ValueError with the message RESTORE would give."""
+        path = self.user_path(src)
+        try:
+            return path, _backup.read_backup(path)
+        except (FileNotFoundError, _backup.ArchiveProblem) as error:
+            raise ValueError(self._restore_problem(path, error)) from None
+
+    def cmd_restore(self, src: str, new_name: Optional[str] = None, *, progress=None) -> str:
+        """Restore a backup as a new module (never replacing or merging)."""
+        path = self.user_path(src)
+        try:
+            result = _backup.restore_backup(self.storage, path, new_name,
+                                            scheduler=self.scheduler, progress=progress)
+        except (_backup.Cancelled, KeyboardInterrupt):
+            return "Restore cancelled; nothing was restored."
+        except Exception as error:  # every failure says that nothing was restored
+            raise ValueError(self._restore_problem(path, error)) from error
+        return (f"Restored module '{result.name}' from {path} "
+                f"({backup_counts(result.summary)}). USE it to start.")
+
     # ---- stats ----------------------------------------------------------
     def vocabulary_cards(self, name: str):
         """Return words and their current cards, including unstudied imports."""

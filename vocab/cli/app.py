@@ -435,13 +435,16 @@ class App:
 
     @in_transaction
     def word_state(self, target: str, word: str):
-        """Snapshot the module's identity and the word's entry before a lookup.
+        """Snapshot the module, word revision and entry before a lookup.
 
         add_resolved_word compares it at commit time, so a slow lookup cannot
-        overwrite a newer edit or land in a module recreated under the same name.
+        overwrite a newer edit, undo an add-then-delete, or land in a module
+        recreated under the same name.
         """
         self.storage.load_words(target)  # reports a missing or damaged module
-        return (self.storage.module_identity(target), self.storage.raw_word_entry(target, word))
+        identity = self.storage.module_identity(target)
+        revision, entry = self.storage.raw_word_state(target, word)
+        return identity, entry, revision
 
     def peek_word_state(self, target: str, word: str):
         """word_state() read without the write lock and without writing, for a
@@ -451,7 +454,9 @@ class App:
             name = sanitize_list_name(target)
             if not self.paths.manifest_file(name).is_file():
                 return None  # module_identity would write one
-            return (self.storage.module_identity(name), self.storage.raw_word_entry(name, word))
+            identity = self.storage.module_identity(name)
+            revision, entry = self.storage.raw_word_state(name, word)
+            return identity, entry, revision
         except Exception:
             return None
 

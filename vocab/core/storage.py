@@ -194,6 +194,20 @@ def _read_json_object(path: Path, default):
     return data
 
 
+def _word_revisions(raw, path=None):
+    """Per-word mutation tokens, including entries retained after deletion."""
+    revisions = raw.get("word_revisions", {})
+    if (not isinstance(revisions, dict)
+            or any(not isinstance(key, str) or not key or key != key.strip().lower()
+                   or not isinstance(value, str) or not value
+                   for key, value in revisions.items())):
+        reason = "'word_revisions' must map normalized words to nonempty text tokens"
+        if path is not None:
+            raise DataFileError(path, reason)
+        raise ValueError(reason)
+    return revisions
+
+
 def size_text(size, *, up=False):
     """A byte count as people read it: 4.0 GB, 12.5 MB, 900 bytes. A size
     that broke a limit rounds up and the limit rounds down, so the first
@@ -278,6 +292,7 @@ def parse_import(raw, *, with_stats=False, card_problem=None):
         document, progress = inner, raw.get("stats")
     else:
         document, progress = raw, None
+    _word_revisions(document)
     schema = document.get("schema", SCHEMA_VERSION)
     if isinstance(schema, bool) or not isinstance(schema, int) or not 1 <= schema <= SCHEMA_VERSION:
         raise ValueError(f"its format version {schema!r} is not supported by this version of the app")
@@ -420,17 +435,26 @@ class Storage:
         metadata = raw.get("metadata")
         return (raw.get("created"), metadata.get("id") if isinstance(metadata, dict) else None)
 
-    def raw_word_entry(self, module: str, word: str):
-        """A word's entry exactly as stored, without defaults filled in by
-        parsing (a legacy entry without "added" would differ on every load)."""
-        raw = _read_json_object(self.paths.words_file(sanitize_module_name(module)), {})
+    def raw_word_state(self, module: str, word: str):
+        """A mutation token and raw entry from the same file snapshot.
+
+        Tokens survive deletion, so absent -> added -> deleted is different
+        from a word that never existed. Legacy files have no tokens yet.
+        """
+        path = self.paths.words_file(sanitize_module_name(module))
+        raw = _read_json_object(path, {})
+        revisions = _word_revisions(raw, path)
         words = raw.get("words")
         key = word.strip().lower()
         if isinstance(words, dict):
             for stored, entry in words.items():
                 if str(stored).strip().lower() == key:
-                    return entry
-        return None
+                    return revisions.get(key), entry
+        return revisions.get(key), None
+
+    def raw_word_entry(self, module: str, word: str):
+        """The entry as stored, without generated parsing defaults."""
+        return self.raw_word_state(module, word)[1]
 
     def save_module(self, mod: Module) -> None:
         _atomic_write(self.paths.manifest_file(mod.name), mod.to_dict())
@@ -484,7 +508,13 @@ class Storage:
         stale = time.time() - _STALE_STAGING
         folders = [self.paths.modules_dir]
         try:
-            folders += [self.paths.documents_dir(name) for name in self.list_names()]
+            for name in self.list_names():
+                module = self.paths.module_dir(name)
+                documents = self.paths.documents_dir(name)
+                # The top-level modules folder may be deliberately relocated,
+                # but individual links do not make their targets app-owned.
+                if not _is_link(module) and not _is_link(documents):
+                    folders.append(documents)
         except OSError:
             pass
         for folder in folders:
@@ -517,6 +547,7 @@ class Storage:
             raise ModuleNotFound(f"Module '{name}' does not exist.")
         path = self.paths.words_file(name)
         raw = _read_json_object(path, {"name": name, "words": {}})
+        _word_revisions(raw, path)
         try:
             wl = WordList.from_dict(raw, fallback_name=name)
         except (AttributeError, KeyError, TypeError, ValueError) as error:
@@ -524,8 +555,25 @@ class Storage:
         wl.name = name
         return wl
 
+    @in_transaction
     def save_words(self, wl: WordList) -> None:
-        _atomic_write(self.paths.words_file(wl.name), wl.to_dict())
+        path = self.paths.words_file(wl.name)
+        previous = _read_json_object(path, {"words": {}})
+        revisions = dict(_word_revisions(previous, path))
+        previous_words = previous.get("words", {})
+        if not isinstance(previous_words, dict):
+            raise DataFileError(path, "expected a 'words' object")
+        before = {str(key).strip().lower(): entry for key, entry in previous_words.items()}
+        payload = wl.to_dict()
+        after = payload["words"]
+        missing = object()
+        for key in before.keys() | after.keys():
+            if before.get(key, missing) != after.get(key, missing):
+                revisions[key] = uuid.uuid4().hex
+        payload["word_revisions"] = revisions
+        # Tokens and entries commit together, and save_words_and_stats restores
+        # both when its progress write fails. Independent words keep their tokens.
+        _atomic_write(path, payload)
 
     @in_transaction
     def save_words_and_stats(self, wl: WordList, stats: Dict[str, dict]) -> None:
@@ -681,8 +729,6 @@ class Storage:
         a long copy.
         """
         module = sanitize_module_name(module)
-        if not self.exists(module):
-            raise ModuleNotFound(f"Module '{module}' does not exist.")
         src = Path(src)
         if not src.is_file():
             raise ModuleNotFound(f"File not found: {src}")
@@ -690,11 +736,15 @@ class Storage:
             raise ValueError(f"'{src.name}' is a name Vocab Study reserves for its temporary "
                              "files; rename the file and add it again.")
         dest_dir = self.paths.documents_dir(module)
-        dest_dir.mkdir(exist_ok=True)  # never recreates a module deleted meanwhile
         dest = dest_dir / src.name
         exists = f"Document '{src.name}' already exists in '{module}'."
-        if dest.exists():
-            raise FileExistsError(exists)
+        with self.transaction():
+            if not self.exists(module):
+                raise ModuleNotFound(f"Module '{module}' does not exist.")
+            dest_dir.mkdir(exist_ok=True)  # never recreates a module deleted meanwhile
+            identity = self.module_identity(module)
+            if dest.exists():
+                raise FileExistsError(exists)
         staging = dest_dir / f"{STAGING_PREFIX}{uuid.uuid4().hex}"
         try:
             # Contents only: a read-only source must not make the copy read-only.
@@ -704,6 +754,9 @@ class Storage:
             with self.transaction():
                 if not self.exists(module):
                     raise ModuleNotFound(f"Module '{module}' does not exist.")
+                if self.module_identity(module) != identity:
+                    raise ValueError(f"Module '{module}' was replaced while the document was "
+                                     "being copied. Add it again to the new module.")
                 if dest.exists():
                     raise FileExistsError(exists)
                 _publish_file(staging, dest, exists)

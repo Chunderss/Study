@@ -111,11 +111,15 @@ def _renders_as_xhtml(source: Path) -> bool:
         return False
     # Undeclared named entities, attribute values included (expat does not
     # report those), must be ones Chromium resolves for the doctype.
-    names = (set(_ENTITY_REFERENCE.findall(_NOT_REFERENCES.sub("", text)))
+    markup = _NOT_REFERENCES.sub("", text)
+    names = (set(_ENTITY_REFERENCE.findall(markup))
              - _XML_ENTITIES - found["declared"])
     if not names:
         return True
-    public = _PUBLIC_ID.search(text)
+    # In well-formed XML the doctype, if present, starts the prolog after
+    # whitespace, comments and processing instructions. Do not mistake an
+    # obsolete declaration in a comment (or an entity's text) for that doctype.
+    public = _PUBLIC_ID.match(markup.lstrip())
     return (public is not None and public.group(1)[1:-1] in _XHTML_PUBLIC_IDS
             and names <= set(html.entities.name2codepoint))
 
@@ -577,17 +581,22 @@ class PdfViewer(QWidget):
         self._show_page(page)
 
     def _show_page(self, page):
-        from PySide6.QtCore import QPointF
+        from PySide6.QtCore import QPointF, QSignalBlocker
         nav = self._view.pageNavigator()
-        # QPdfView scrolls only when the page changes: step away first, so the
-        # page is shown from its top after a relayout too. A short previous
-        # page can leave this page current (its 40% line), so then try the next.
-        for other in (page - 1, page + 1):
-            if nav.currentPage() != page:
-                break
-            if 0 <= other < self._doc.pageCount():
-                nav.jump(other, QPointF(0, 0))
-        nav.jump(page, QPointF(0, 0))
+        if nav.currentPage() != page:
+            nav.jump(page, QPointF(0, 0))
+        elif self._doc.pageCount() > 1:
+            # QPdfView realigns only on a page-change notification. Physically
+            # jumping away is unreliable: its 40%-viewport line can still be
+            # on this page after jumping to a short neighbor. Change and
+            # restore the current destination without showing the intermediate
+            # page or adding fake jumps to the navigation history.
+            zoom = nav.currentZoom()
+            with QSignalBlocker(nav):
+                nav.update(0 if page else 1, nav.currentLocation(), zoom)
+            nav.update(page, QPointF(0, 0), zoom)
+        else:
+            self._view.verticalScrollBar().setValue(self._view.documentMargins().top())
 
     def _reapply_page(self, *_):
         if self._pending_page is not None:
@@ -1148,7 +1157,7 @@ class EpubViewer(QWidget):
         self._prev.setEnabled(i > 0)
         self._next.setEnabled(i < len(self._book.chapters) - 1)
 
-    def _load(self, i: int, fragment="", href=None):
+    def _load(self, i: int, fragment="", href=None, *, scroll_to_top=False):
         if not (0 <= i < len(self._book.chapters)):
             return
         try:
@@ -1169,6 +1178,8 @@ class EpubViewer(QWidget):
         self._error.hide()
         self._requested_url = url
         self._load_generation += 1
+        if scroll_to_top:
+            self._pending_scroll = 0.0  # an explicit link, including a.xhtml or a.xhtml#
         requested = self._pending_scroll if self._pending_scroll is not None else 0.0
         if same_document:
             # Chromium treats the page it shows as an in-page jump, with no
@@ -1179,8 +1190,9 @@ class EpubViewer(QWidget):
                 self._scroll_fresh = True  # Qt's cached scroll is this document's
             else:
                 self._requested_scroll = requested
-                self._stale_scroll = self._web.page().scrollPosition().y()
-                self._scroll_fresh = False
+                # The cache still belongs to this document. The pending target
+                # overrides it until restoration finishes; invalidating it here
+                # would strand a no-movement restore at the requested fraction.
             if fragment or in_flight:
                 self._web.load(url)
             generation = self._load_generation
@@ -1226,7 +1238,8 @@ class EpubViewer(QWidget):
             request.reject()
             self._pending_scroll = None
             self._set_highlight_source(None)
-            QTimer.singleShot(0, self, lambda: self._load(i, url.fragment(), href))
+            QTimer.singleShot(0, self, lambda: self._load(
+                i, url.fragment(), href, scroll_to_top=not url.fragment()))
             return
         if i != self._idx:
             self._pending_scroll = None

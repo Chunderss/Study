@@ -17,11 +17,14 @@ from ..algorithms.leitner import LeitnerScheduler
 
 
 def source_label(source):
-    label = source.get("filename") or source.get("label") or "Manual capture"
-    if source.get("kind") == "pdf":
-        return f"{label} · page {source.get('page', 0) + 1}"
-    if source.get("kind") == "epub":
-        return f"{label} · chapter {source.get('chapter', 0) + 1}"
+    label = next((source[key] for key in ("filename", "label")
+                  if isinstance(source.get(key), str) and source[key]), "Manual capture")
+    kind = source.get("kind")
+    if isinstance(kind, str) and kind in _PLACE_FIELD:
+        field = _PLACE_FIELD[kind]
+        number = source.get(field, 0)
+        if _whole(number):
+            return f"{label} · {field} {number + 1}"
     return label
 
 
@@ -69,7 +72,8 @@ def source_keys(source):
             return ("label", label), None
         return ("manual",), None
     kind = source.get("kind")
-    number = source.get(_PLACE_FIELD[kind]) if kind in _PLACE_FIELD else None
+    number = (source.get(_PLACE_FIELD[kind])
+              if isinstance(kind, str) and kind in _PLACE_FIELD else None)
     return ("file", filename), ((kind, number) if _whole(number) else None)
 
 
@@ -170,7 +174,12 @@ class CaptureFilter:
 
 
 def _is_time(value):
-    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False  # a JSON integer can be too large to convert to seconds
 
 
 def _capture_problem(key, item, scheduler):
@@ -201,6 +210,10 @@ def _capture_problem(key, item, scheduler):
                 not isinstance(attempt.get("answer"), str) or not isinstance(attempt.get("rating"), str)):
             return "an attempt is incomplete"
     card = item.get("card")
+    if isinstance(card, dict):
+        for field in ("due", "last"):
+            if field in card and not _is_time(card[field]):
+                return f"'{field}' must be a time in seconds"
     problem = scheduler.card_problem(card)
     if problem:
         return problem

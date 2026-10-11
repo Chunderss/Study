@@ -199,3 +199,54 @@ js(viewer, 'var r = document.createRange(); r.selectNodeContents(document.body.l
 viewer._capture()
 wait_for(lambda: bool(captures))
 ''')
+
+
+@pytest.mark.parametrize("href", ["#", "a.xhtml#", "a.xhtml"])
+def test_explicit_links_to_the_current_chapter_top(tmp_path, href):
+    run_reader(tmp_path, r'''
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                  '<item id="a" href="a.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>')
+    book.writestr("a.xhtml", page.format("A", "<p>Chapter text</p>" * 400 +
+                  '<a id="self" href="%s">Return to top</a>'))
+viewer = open_viewer()
+wait_for(lambda: settled(viewer, "A"), viewer)
+js(viewer, "window.scrollTo(0, document.documentElement.scrollHeight * .8); true;")
+wait_for(lambda: viewer.source_location()["scroll"] > .7, viewer)
+js(viewer, 'document.getElementById("self").click(); true;')
+wait_for(lambda: js(viewer, "window.scrollY") == 0, viewer)
+wait_for(lambda: settled(viewer, "A"), viewer)
+viewer.save_position()
+assert saved()["scroll"] == 0.0, saved()
+''' % href)
+
+
+def test_restoring_the_current_position_keeps_tracking_reflow(tmp_path):
+    run_reader(tmp_path, r'''
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                  '<item id="a" href="a.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>')
+    book.writestr("a.xhtml", page.format("A", '<style>body { overflow-anchor: none; }</style>' +
+                  ('<p>' + 'A sentence that wraps over several lines in a narrow window. ' * 10 + '</p>') * 80))
+viewer = open_viewer()
+viewer.resize(550, 650)
+wait_for(lambda: settled(viewer, "A"), viewer)
+js(viewer, 'window.scrollTo(0, document.scrollingElement.scrollHeight * .2); true;')
+wait_for(lambda: viewer.source_location()["scroll"] > .19, viewer)
+fraction = js(viewer, 'window.scrollY / document.scrollingElement.scrollHeight')
+viewer.go_to({"chapter": 0, "scroll": fraction})
+wait_for(lambda: settled(viewer, "A"), viewer)
+viewer.resize(1000, 650)
+
+def renderer_fraction():
+    return js(viewer, 'window.scrollY / document.scrollingElement.scrollHeight')
+
+wait_for(lambda: renderer_fraction() > fraction + .05, viewer)
+actual = renderer_fraction()
+# Wait for Qt's cache independently: a late cache is a different scenario.
+wait_for(lambda: abs(viewer._web.page().scrollPosition().y() /
+                    viewer._web.page().contentsSize().height() - actual) < .002, viewer)
+assert abs(viewer.source_location()["scroll"] - actual) < .002, (viewer.source_location(), actual)
+viewer.save_position()
+assert abs(saved()["scroll"] - actual) < .002, saved()
+''')

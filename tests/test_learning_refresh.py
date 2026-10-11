@@ -66,3 +66,40 @@ def test_another_module_starts_at_the_top(window, learning):
     window.ctx.changed.emit()
     settle()
     assert place(pane) == (None, 0, 0)
+
+
+@pytest.mark.parametrize("return_to_book", [False, True])
+@pytest.mark.parametrize("origin", ["refresh", "saved navigation"])
+def test_queued_restore_does_not_scroll_a_new_module_view(window, learning, return_to_book, origin):
+    pane, store, _ = learning
+    window.app.cmd_create("Other")
+    for number in range(60):
+        store.save_capture("Other", kind="question", prompt=f"Other question {number}", quote="Passage")
+    pane.entries.setCurrentItem(None)
+    pane.entries.verticalScrollBar().setValue(30)
+    assert pane.entries.verticalScrollBar().value() == 30
+    # Queue a scroll restore for the old Book view, either after a data refresh
+    # or while restoring the workspace/returning from a reader.
+    if origin == "refresh":
+        window.ctx.changed.emit()
+    else:
+        pane.restore_navigation_state(pane.navigation_state())
+    modules = ("Other", "Book") if return_to_book else ("Other",)
+    for module in modules:
+        window.app.cmd_use(module)
+        window.ctx.module_changed.emit(module)
+    assert pane.entries.verticalScrollBar().value() <= 1
+    settle()
+    assert pane.module == modules[-1] and pane.selected() is None
+    assert pane.entries.verticalScrollBar().value() <= 1
+
+
+def test_queued_refresh_does_not_scroll_a_new_filter(window, learning):
+    pane, _, _ = learning
+    pane.entries.setCurrentItem(None)
+    pane.entries.verticalScrollBar().setValue(30)
+    window.ctx.changed.emit()
+    pane.search.setText("question")  # all rows still match, starting at the top
+    assert pane.entries.count() == 60 and pane.entries.verticalScrollBar().value() == 0
+    settle()
+    assert pane.entries.verticalScrollBar().value() == 0

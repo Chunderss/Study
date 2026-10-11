@@ -79,11 +79,20 @@ def _verified_backup(legacy: Path):
     """
     listing, digest = _listing(legacy), None
     for candidate in sorted(legacy.parent.glob("lists.backup-*"), reverse=True):
-        if not candidate.is_dir() or _listing(candidate) != listing:
+        try:
+            matches = candidate.is_dir() and _listing(candidate) == listing
+        except OSError:
+            continue  # an unreadable old backup does not block readable originals
+        if not matches:
             continue
-        digest = digest or _tree_digest(legacy)
+        if digest is None:
+            digest = _tree_digest(legacy)  # live-source failures must still surface
         known = {}
-        if _tree_digest(candidate, known) == digest:
+        try:
+            candidate_digest = _tree_digest(candidate, known)
+        except OSError:
+            continue
+        if candidate_digest == digest:
             return candidate, known
     return None, {}
 

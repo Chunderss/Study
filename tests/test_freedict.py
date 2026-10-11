@@ -119,4 +119,3 @@ def test_fields_of_the_wrong_type_are_skipped(server):
     senses = FreeDictionary().lookup("laconic")
     assert [(s.pos, s.definition, s.example) for s in senses] == [("", "using very few words", "")]
     assert len(attempts) == 1
-

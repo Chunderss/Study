@@ -1,6 +1,12 @@
 """Closing finishes recovery work, so outdated drafts are not "recovered"."""
+from pathlib import Path
+import subprocess
+import sys
+import time
+
 import pytest
 pytest.importorskip("PySide6")
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMessageBox
 
 from .test_gui_reliability import qt, window, select
@@ -48,6 +54,57 @@ def test_failed_recovery_cleanup_asks_before_quitting(window, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
     assert window.close() is True  # an explicit "quit anyway"
     monkeypatch.setattr(storage, "clear_note_draft", clear)
+
+
+def test_busy_recovery_cleanup_keeps_retrying_after_cancelled_close(window, qt, monkeypatch, tmp_path):
+    buffer = edit_then_undo(window)
+    storage = window.app.storage
+    ready = tmp_path / "writer-ready"
+    script = """
+import sys
+from pathlib import Path
+from vocab.core.locking import write_lock
+with write_lock(sys.argv[1]).hold():
+    Path(sys.argv[2]).touch()
+    sys.stdin.readline()
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", script, str(window.app.paths.root), str(ready)],
+        cwd=Path(__file__).resolve().parents[1], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda parent, title, text, *args: asked.append((title, text)) or QMessageBox.No)
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and holder.poll() is None and time.monotonic() < deadline:
+            QTest.qWait(10)
+        assert ready.exists(), "writer did not acquire the data-folder lock"
+        assert window.close() is False
+        assert asked[-1][0] == "Recovery copy not updated" and "Book/One" in asked[-1][1]
+        assert buffer._active and buffer.recovery_pending and buffer._timer.isActive()
+        assert not buffer.dirty and buffer.recovery_error == ""
+        assert storage.load_note_draft("Book", "One")["content"] == "originalX"
+    finally:
+        if holder.poll() is None:
+            try:
+                holder.communicate("\n", timeout=5)
+            except subprocess.TimeoutExpired:
+                holder.kill()
+                holder.communicate(timeout=5)
+                raise
+    assert holder.returncode == 0
+    assert window.close() is True  # lock released: finish the pending cleanup
+    assert not buffer.recovery_pending and not buffer._timer.isActive()
+    assert storage.load_note_draft("Book", "One") is None
+    reopened = MainWindow(root=window.app.paths.root)
+    try:
+        assert reopened.ctx.notes.dirty_buffers() == []
+        assert reopened.ctx.notes.open("Book", "One").document.toPlainText() == "original"
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+        qt.processEvents()
 
 
 def test_declining_to_quit_never_leaves_discarded_notes_untracked(window, monkeypatch):

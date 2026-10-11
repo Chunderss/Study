@@ -31,9 +31,17 @@ def _takes_body(cmd: Command) -> bool:
 
 
 def _without_flag(args: List[str], flag: str) -> tuple[List[str], bool]:
-    """Remove ``flag`` (any case, any position); report whether it was there."""
-    kept = [arg for arg in args if arg.lower() != flag]
-    return kept, len(kept) != len(args)
+    """Remove ``flag`` before ``--``; arguments after it are literal operands."""
+    kept, found = [], False
+    for index, arg in enumerate(args):
+        if arg == "--":
+            kept.extend(args[index + 1:])
+            break
+        if arg.lower() == flag:
+            found = True
+        else:
+            kept.append(arg)
+    return kept, found
 
 
 def _path_and_name(rest: List[str]):

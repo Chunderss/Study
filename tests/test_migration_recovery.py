@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -268,3 +269,53 @@ def test_a_partial_migration_says_what_to_fix_and_where(tmp_path):
     assert app.migration_note.startswith("Legacy lists were not fully migrated:")
     assert "Migrated: Zebra" in app.migration_note and str(paths.legacy_lists_dir) in app.migration_note
     assert "skipped" not in app.migration_note and app.migration_problem
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs POSIX permissions enforced for this user")
+@pytest.mark.parametrize("usable_backup", [False, True])
+def test_unreadable_old_backup_does_not_block_readable_live_lists(tmp_path, usable_backup):
+    paths = get_paths(tmp_path)
+    legacy_list(paths)
+    bad = tmp_path / "lists.backup-99999999-unreadable"
+    migrate.shutil.copytree(paths.legacy_lists_dir, bad)
+    good = tmp_path / "lists.backup-00000000-readable"
+    if usable_backup:
+        migrate.shutil.copytree(paths.legacy_lists_dir, good)
+    blocked = bad / "Book" / "words.json"
+    original = blocked.read_bytes()
+    blocked.chmod(0)
+    try:
+        assert migrate.migrate(paths) == ["Book"]
+        assert Storage(paths).load_words("Book").has("word")
+        assert Storage(paths).load_stats("Book")["word"]["box"] == 4
+        assert len(backups(tmp_path)) == 2  # reuse good, or create one beside bad
+        if usable_backup:
+            assert backups(tmp_path) == [good, bad]
+    finally:
+        blocked.chmod(0o600)
+    assert blocked.read_bytes() == original
+
+
+@pytest.mark.parametrize("phase", ["listing", "hashing"])
+def test_candidate_io_error_is_ignored_but_live_io_error_is_reported(tmp_path, monkeypatch, phase):
+    paths = get_paths(tmp_path)
+    legacy_list(paths)
+    candidate = tmp_path / "lists.backup-older"
+    migrate.shutil.copytree(paths.legacy_lists_dir, candidate)
+    name = "_listing" if phase == "listing" else "_tree_digest"
+    inspect = getattr(migrate, name)
+    def cannot_read_backup(folder, *args):
+        if folder == candidate:
+            raise PermissionError("old backup is unreadable")
+        return inspect(folder, *args)
+    monkeypatch.setattr(migrate, name, cannot_read_backup)
+    assert migrate._verified_backup(paths.legacy_lists_dir) == (None, {})
+    def cannot_read_live(folder, *args):
+        if folder == paths.legacy_lists_dir:
+            raise PermissionError("live lists are unreadable")
+        return inspect(folder, *args)
+    monkeypatch.setattr(migrate, name, cannot_read_live)
+    with pytest.raises(PermissionError, match="live lists"):
+        migrate._verified_backup(paths.legacy_lists_dir)
+    assert paths.legacy_lists_dir.exists() and candidate.exists()

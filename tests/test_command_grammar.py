@@ -124,6 +124,36 @@ def test_stats_flag_anywhere_and_as_in_any_case(app, tmp_path, monkeypatch, docu
     assert {"My Copy", "Second Copy"} <= set(app.storage.list_names())
 
 
+@pytest.mark.parametrize("module", ["--stats", "--"])
+@pytest.mark.parametrize("with_stats", [False, True])
+def test_option_shaped_module_exports_with_end_of_options(app, documents_folder,
+                                                         module, with_stats):
+    run(app, f'CREATE "{module}"')
+    app.cmd_add("ephemeral", target=module, manual_def="brief")
+    stats = app.storage.load_stats(module)
+    stats["ephemeral"]["box"] = 4
+    app.storage.save_stats(module, stats)
+    flag = "--STATS " if with_stats else ""
+    assert "Exported" in run(app, f'EXPORT {flag}-- "{module}" literal.json')
+    payload = json.loads((documents_folder / "literal.json").read_text(encoding="utf-8"))
+    assert set(payload["words"]["words"]) == {"ephemeral"}
+    assert ("stats" in payload) is with_stats
+    if with_stats:
+        assert payload["stats"]["ephemeral"]["box"] == 4
+    assert "Imported" in run(app, f'IMPORT {flag}-- literal.json AS Copy')
+    assert definition(app, "ephemeral", "Copy") == "brief"
+    if with_stats:
+        assert app.storage.load_stats("Copy")["ephemeral"]["box"] == 4
+
+
+def test_end_of_options_preserves_flag_shaped_path_and_import_name(app, documents_folder):
+    app.cmd_add("ephemeral", manual_def="brief")
+    assert "Exported" in run(app, "EXPORT Book -- --stats")
+    assert (documents_folder / "--stats").is_file()
+    assert "fresh progress" in run(app, 'IMPORT -- --stats AS --stats')
+    assert definition(app, "ephemeral", "--stats") == "brief"
+
+
 def test_extra_words_and_missing_names_are_rejected(app, monkeypatch):
     calls = []
     monkeypatch.setattr(app, "cmd_export", lambda *args, **kw: calls.append(args) or "ran")

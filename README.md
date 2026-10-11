@@ -325,6 +325,9 @@ Vocabulary sharing remains available through Console commands:
 `EXPORT Book book.json [--stats]` and `IMPORT book.json as NewBook [--stats]`.
 Without `--stats`, an import starts with fresh progress. A module backup (`.zip`) is
 restored with `RESTORE`, not imported; `IMPORT` says so.
+Use `--` before names or paths that look like flags: `EXPORT -- --stats book.json`
+exports a module named `--stats`; `EXPORT --stats -- --stats book.json` includes its
+progress. Flags are recognized anywhere before `--`, and arguments after it are literal.
 Windows paths work as typed (backslashes are ordinary characters). Put double quotes
 around a name or path that contains spaces: `IMPORT "C:\Users\Pat Smith\book.json" as NewBook`.
 

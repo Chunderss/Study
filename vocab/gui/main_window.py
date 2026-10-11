@@ -864,10 +864,13 @@ class MainWindow(QWidget):
         for buffer in self.ctx.notes.buffers.values():
             if buffer not in drafts and (buffer.recovery_pending or buffer._timer.isActive()):
                 buffer.flush_recovery()
-                if buffer.recovery_error:
+                if buffer.recovery_error or buffer.recovery_pending:
                     failed.append(buffer)
         if failed:
-            names = "\n".join(f"• {b.module}/{b.note}: {b.recovery_error}" for b in failed)
+            names = "\n".join(
+                f"• {b.module}/{b.note}: " + (b.recovery_error or
+                    "recovery update is still pending; another process may be saving")
+                for b in failed)
             if QMessageBox.question(
                     self, "Recovery copy not updated",
                     f"Could not update the recovery copy for:\n\n{names}\n\n"

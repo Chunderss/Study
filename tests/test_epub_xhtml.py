@@ -99,6 +99,9 @@ def test_only_well_formed_xhtml_is_read_as_xml(tmp_path):
         f'<html {NS}><body>&nbsp;</body></html>': False,         # Chromium compares it as written
         '<!DOCTYPE html SYSTEM "custom.dtd">'
         f'<html {NS}><body>&custom;</body></html>': False,       # unknown to Chromium
+        '<!DOCTYPE html SYSTEM "custom.dtd" [<!ENTITY previous \'<!DOCTYPE html PUBLIC '
+        '"-//W3C//DTD XHTML 1.1//EN" "x.dtd">\'>]>'
+        f'<html {NS}><body>&nbsp;</body></html>': False,        # a declaration inside entity text
         '<html><body><p/></body></html>': False,                 # no XHTML namespace
         f'<html {NS}><body><p>unclosed</body></html>': False,    # not well formed
         f'<svg xmlns="http://www.w3.org/2000/svg"/>': False,
@@ -107,6 +110,38 @@ def test_only_well_formed_xhtml_is_read_as_xml(tmp_path):
         page = tmp_path / f"page{index}.xhtml"
         page.write_text(text, encoding="utf-8")
         assert _renders_as_xhtml(page) is expected, text
+
+
+@pytest.mark.parametrize("real, commented, expected", [
+    ("-//W3C//DTD XHTML 1.1//EN", "-//UNKNOWN//DTD Example//EN", True),
+    ("-//UNKNOWN//DTD Example//EN", "-//W3C//DTD XHTML 1.1//EN", False),
+])
+@pytest.mark.parametrize("inert", ["<!-- Previous: %s -->", "<?previous %s?>"])
+def test_only_the_actual_doctype_selects_xhtml_entities(tmp_path, real, commented, expected, inert):
+    from vocab.gui.viewers import _renders_as_xhtml
+
+    chapter = tmp_path / "chapter.xhtml"
+    chapter.write_text(inert % f'<!DOCTYPE html PUBLIC "{commented}" "x.dtd">' +
+                       f'<!DOCTYPE html PUBLIC "{real}" "x.dtd">'
+                       f'<html {NS}><head><title/></head><body>A&nbsp;B</body></html>',
+                       encoding="utf-8")
+    assert _renders_as_xhtml(chapter) is expected
+
+
+def test_a_commented_old_doctype_does_not_hide_the_chapter(tmp_path):
+    run_reader(tmp_path, r'''
+with zipfile.ZipFile(path, "w") as book:
+    book.writestr("book.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                  '<item id="a" href="a.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>')
+    book.writestr("a.xhtml", '<!-- Previous: <!DOCTYPE html PUBLIC "-//UNKNOWN//DTD Example//EN" "x.dtd"> -->'
+                  '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "x.dtd">'
+                  '<html xmlns="http://www.w3.org/1999/xhtml"><head><title/></head>'
+                  '<body><p id="text">A&nbsp;B</p></body></html>')
+viewer = open_viewer()
+wait_for(lambda: viewer._document_loaded and not viewer._web.page().isLoading(), viewer)
+assert js(viewer, "document.body.textContent") == "A B"
+assert js(viewer, 'document.getElementsByTagName("parsererror").length') == 0
+''')
 
 
 # ISO-8859-2 crashes QtWebEngine 6.11's renderer; Chromium does not know

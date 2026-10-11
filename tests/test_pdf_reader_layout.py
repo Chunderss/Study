@@ -160,12 +160,12 @@ def aligned(viewer, page_index=None):
     return value == top
 
 
-def make_pdf_with_short_page(window):
-    """Four pages; the second is only 60 points tall."""
+def make_pdf_with_short_page(window, sizes=(792, 60, 792, 792)):
+    """A small real PDF with variable page heights."""
     path = window.app.paths.documents_dir("Book") / "short.pdf"
-    sizes = [792, 60, 792, 792]
     objects = [b"<< /Type /Catalog /Pages 2 0 R >>",
-               b"<< /Type /Pages /Kids [" + b" ".join(b"%d 0 R" % (3 + i) for i in range(4)) + b"] /Count 4 >>"]
+               b"<< /Type /Pages /Kids [" + b" ".join(b"%d 0 R" % (3 + i) for i in range(len(sizes)))
+               + b"] /Count %d >>" % len(sizes)]
     objects += [b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 %d] >>" % height for height in sizes]
     pdf = bytearray(b"%PDF-1.4\n")
     offsets = []
@@ -180,16 +180,50 @@ def make_pdf_with_short_page(window):
     return path
 
 
-def test_a_short_page_before_the_target_does_not_misalign_it(window, qt):
+@pytest.mark.parametrize("sizes, target", [((792, 60, 792, 792), 2),
+                                          ((792, 60, 792), 2),
+                                          ((792, 60, 60, 792), 3)])
+def test_a_short_page_before_the_target_does_not_misalign_it(window, qt, sizes, target):
     window.resize(1000, 800)
-    path = make_pdf_with_short_page(window)
-    window._open_source("Book", {"filename": "short.pdf", "kind": "pdf", "page": 2})
+    make_pdf_with_short_page(window, sizes)
+    window._open_source("Book", {"filename": "short.pdf", "kind": "pdf", "page": target})
     viewer = window.workspace.focused.component
     settle(qt)
-    assert viewer._doc.pageCount() == 4 and aligned(viewer, 2)
+    assert viewer._doc.pageCount() == len(sizes) and aligned(viewer, target)
     window.resize(800, 800)
     settle(qt)
-    assert aligned(viewer, 2)
+    assert aligned(viewer, target)
+    viewer._zoom(1.25)
+    settle(qt)
+    assert aligned(viewer, target)
+    # Reapplying a laid-out target should not add neighboring pages to history.
+    jumps = []
+    nav = viewer._view.pageNavigator()
+    history = (nav.backAvailable(), nav.forwardAvailable())
+    nav.jumped.connect(jumps.append)
+    for _ in range(5):
+        viewer._apply_pending_page()
+    assert jumps == []
+    assert (nav.backAvailable(), nav.forwardAvailable()) == history
+
+
+def test_a_single_page_source_returns_to_its_top_and_stays_aligned(window, qt):
+    window.resize(1000, 600)
+    path = make_pdf_with_short_page(window, (792,))
+    viewer = window._open_viewer(str(path))
+    settle(qt)
+    bar = viewer._view.verticalScrollBar()
+    top = viewer._view.documentMargins().top()
+    assert bar.maximum() > top + 20
+    bar.setValue(bar.maximum())
+    viewer.go_to({"page": 0})
+    assert bar.value() == top
+    window.resize(800, 600)
+    settle(qt)
+    assert bar.value() == top
+    viewer._zoom(1.25)
+    settle(qt)
+    assert bar.value() == top and viewer.source_location()["page"] == 0
 
 
 def test_the_requested_page_is_shown_from_its_top_after_relayout(window, qt):

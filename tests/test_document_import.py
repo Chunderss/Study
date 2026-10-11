@@ -135,3 +135,40 @@ def test_the_write_lock_is_free_while_copying(setup, monkeypatch):
 def _try_lock(app):
     with write_lock(app.paths.root).hold(timeout=0.5):
         return True
+
+
+def test_copy_rejects_a_replacement_module_at_the_same_path(setup, monkeypatch):
+    app, source = setup
+    original = app.storage.module_identity("Book")
+    started, resume = threading.Event(), threading.Event()
+    copy = shutil.copyfile
+    outcome = []
+    def paused_copy(src, dst, *args, **kwargs):
+        started.set()  # before opening the staging file
+        assert resume.wait(10), "test did not release the document copy"
+        return copy(src, dst, *args, **kwargs)
+    def add():
+        try:
+            outcome.append(app.storage.add_document("Book", source))
+        except Exception as error:
+            outcome.append(error)
+    monkeypatch.setattr(storage_module.shutil, "copyfile", paused_copy)
+    worker = threading.Thread(target=add)
+    worker.start()
+    try:
+        assert started.wait(10)
+        app.cmd_delete("Book")
+        app.cmd_create("Book")
+        assert app.storage.module_identity("Book") != original
+        replacement = app.paths.module_dir("Book")
+        before = {p.relative_to(replacement): p.read_bytes()
+                  for p in replacement.rglob("*") if p.is_file()}
+    finally:
+        resume.set()
+        worker.join(10)
+    assert not worker.is_alive()
+    assert len(outcome) == 1 and isinstance(outcome[0], ValueError)
+    assert "was replaced" in str(outcome[0])
+    assert documents(app) == []
+    assert {p.relative_to(replacement): p.read_bytes()
+            for p in replacement.rglob("*") if p.is_file()} == before

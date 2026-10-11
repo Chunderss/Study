@@ -200,6 +200,7 @@ class LearningComponent(BaseComponent):
         self.store = LearningStore(self.app.storage)
         self.items = {}
         self.module = None
+        self._list_generation = 0  # deferred scrolls belong to one version of the list
         self.filter = CaptureFilter()
         self._source_keys = [None]   # source_filter index -> source_choices key
         self._counts = (0, 0)        # concepts due, open questions
@@ -320,10 +321,11 @@ class LearningComponent(BaseComponent):
             if row.data(Qt.UserRole) == capture_id:
                 self.entries.setCurrentItem(row)
                 break
+        generation = self._list_generation
 
         def restore_scroll():
             selected = self.selected()
-            if (self.module != state.get("module") or
+            if (generation != self._list_generation or self.module != state.get("module") or
                     (selected["id"] if selected else None) != capture_id):
                 return
             for key, widget in (("entries_scroll", self.entries), ("details_scroll", self.details)):
@@ -351,12 +353,18 @@ class LearningComponent(BaseComponent):
             self.entries.setAutoScroll(True)
         if scroll is not None:
             self._keep_scroll(old_id, *scroll)
+        else:
+            self.entries.scrollToTop()  # a different module has its own list
 
     def _keep_scroll(self, capture_id, entries, details):
         """A refresh in the same module (a note saved, a word added, another
         capture changed) keeps the list where it was, and the passage too
         while the same capture is selected. entries None leaves the list."""
+        module, generation = self.module, self._list_generation
+
         def apply():
+            if self.module != module or self._list_generation != generation:
+                return
             if entries is not None:
                 self.entries.doItemsLayout()  # the list lays out its rows lazily
                 self.entries.verticalScrollBar().setValue(entries)
@@ -367,6 +375,7 @@ class LearningComponent(BaseComponent):
         QTimer.singleShot(0, self, apply)  # scroll ranges can settle a moment later
 
     def _rebuild(self, old_id):
+        self._list_generation += 1
         self.module = self.app.current_module
         self.entries.clear()
         self.items = {}
@@ -399,6 +408,7 @@ class LearningComponent(BaseComponent):
     def _populate(self, old_id):
         """List the captures the search and filters show, and highlight
         old_id again if it is among them."""
+        self._list_generation += 1
         self.entries.clear()
         now = time.time()
         searching = bool(self.filter.words)

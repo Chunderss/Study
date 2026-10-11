@@ -37,9 +37,18 @@ class Config:
         except OSError as error:
             return cls._unreadable(p, error)
         if not present:
-            cfg = cls()
-            cfg.save(paths)  # a failed first write is reported as a write error
-            return cfg
+            from .locking import write_lock
+            with write_lock(paths.root).hold():
+                # Another process may have initialized and changed its settings
+                # since the first check. Only the first writer creates defaults.
+                try:
+                    present = p.exists()
+                except OSError as error:
+                    return cls._unreadable(p, error)
+                if not present:
+                    cfg = cls()
+                    cfg.save(paths)  # a failed first write remains a write error
+                    return cfg
         try:
             # Windows editors often save UTF-8 with a BOM; accept it on read.
             with open(p, encoding="utf-8-sig") as f:

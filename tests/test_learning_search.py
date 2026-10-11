@@ -350,3 +350,61 @@ def test_a_capture_saved_where_the_filters_hide_it_is_reported(window, learning,
     monkeypatch.setattr(CaptureDialog, "exec", lambda dialog: fill(dialog, "Renamed"))
     pane.edit()                                          # edited out of the search
     assert len(logged) == 2 and pane.selected() is None and "Renamed" not in shown(pane)
+
+
+def test_a_restored_pane_keeps_saying_why_nothing_is_listed(window, qt, tmp_path):
+    from .test_learning_gui import make_pdf
+    make_pdf(window)
+    many_captures(window, source={"kind": "pdf", "filename": "book.pdf", "page": 1})
+    path = window.app.paths.module_dir("Book") / "learning.json"
+    readable = path.read_bytes()
+    window.workspace.set_focused_component("learning")
+    pane = window.workspace.focused.component
+    QTest.keyClicks(pane.search, "long passage")
+    pane.entries.setCurrentRow(3)
+    # ‹ Learning after learning.json became unreadable (a sync conflict, say).
+    pane.open_source()
+    viewer = window.workspace.focused.component
+    path.write_text("{ not json", encoding="utf-8")
+    next(b for b in viewer.findChildren(QPushButton) if b.text() == "‹ Learning").click()
+    settle()
+    pane = window.workspace.focused.component
+    assert pane.summary.text().startswith(f"Could not read {path}")
+    assert pane.entries.count() == 0 and not pane.search.isEnabled()
+    # A restart over the unreadable file.
+    assert window.close()
+    reopened = MainWindow(window.app.paths.root)
+    reopened.show()
+    settle()
+    try:
+        pane = reopened.workspace.focused.component
+        assert isinstance(pane, LearningComponent)
+        assert pane.summary.text().startswith(f"Could not read {path}")
+        assert pane.entries.count() == 0 and not pane.search.isEnabled()
+        # Readable again: the saved search still applies.
+        path.write_bytes(readable)
+        reopened.ctx.learning_changed.emit()
+        assert pane.search.isEnabled() and pane.search.text() == "long passage"
+        assert pane.summary.text().endswith("Showing 60 of 120 captures.")
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+        qt.processEvents()
+    # A pane restored with no module selected keeps its hint.
+    empty = MainWindow(tmp_path / "empty")
+    empty.show()
+    empty.workspace.set_focused_component("learning")
+    assert empty.close()
+    empty.deleteLater()
+    reopened = MainWindow(tmp_path / "empty")
+    reopened.show()
+    settle()
+    try:
+        pane = reopened.workspace.focused.component
+        assert isinstance(pane, LearningComponent)
+        assert pane.summary.text() == ("Select a module, then capture a passage from a reader "
+                                       "or paste one here.")
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+        qt.processEvents()

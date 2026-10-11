@@ -204,6 +204,7 @@ class LearningComponent(BaseComponent):
         self._source_keys = [None]   # source_filter index -> source_choices key
         self._counts = (0, 0)        # concepts due, open questions
         self._fields = {}            # capture id -> (revision, search_fields)
+        self._problem = None         # why nothing is listed: no module, an unreadable file
         self.ctx.learning_changed.connect(self.refresh)
         layout = QVBoxLayout(self)
         self.summary = plain_label("")
@@ -384,8 +385,9 @@ class LearningComponent(BaseComponent):
         # the focused search box would move the focus while the user types.
         self._set_filters_enabled(problem is None)
         self._fill_source_filter()
+        self._problem = problem
         if problem is not None:
-            self.summary.setText(problem)
+            self._show_summary()
             return
         self._counts = (len(due), sum(i["kind"] == "question" and not i["resolved"]
                                       for i in self.items.values()))
@@ -420,6 +422,10 @@ class LearningComponent(BaseComponent):
         return cached[1]
 
     def _show_summary(self):
+        if self._problem is not None:
+            # Restoring the saved filters lists nothing; the reason stays.
+            self.summary.setText(self._problem)
+            return
         total, shown = len(self.items), self.entries.count()
         if not (self.filter.active and total):
             hint = _HINT

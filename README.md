@@ -195,11 +195,13 @@ the senses it studies are listed under it. In the list, Up and Down move between
 words and Enter opens the highlighted one; one Tab leaves the list. The list keeps its
 scroll position and the highlighted word when it updates or you come back to it. The
 picker shows the module and dictionary, whether the first sense was chosen automatically
-or by you, and the sentence. Moving into it highlights the first studied sense, and
-Enter there keeps every sense the word studies, marking them as chosen by you. Once you
-move the highlight or click a sense, Enter (or a double click) studies only the
-highlighted sense at once; Space checks several and **Study checked** studies those, in
-list order.
+or by you, and the sentence. A sentence longer than three lines, or a reply longer than
+two, is cut, and its tooltip shows all of it. The panel grows when it must, so its list
+shows at least five senses wherever the workspace has room. Moving into it highlights
+the first studied sense, and Enter there keeps every sense the word studies, marking
+them as chosen by you. Once you move the highlight or click a sense, Enter (or a double
+click) studies only the highlighted sense at once; Space checks several and
+**Study checked** studies those, in list order.
 Either keeps the word's progress unless you tick **Start its reviews over** first (it
 unticks itself after each choice); choosing again undoes the choice. **All senses**
 looks up the dictionary's other senses in the background; one is saved only if you

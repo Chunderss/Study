@@ -15,7 +15,7 @@ to the wrong sense.
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QFontMetrics, QTextLayout, QTextOption
 from PySide6.QtWidgets import (QCheckBox, QFrame, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QPushButton, QVBoxLayout)
 
@@ -26,6 +26,80 @@ from . import theme
 PANEL_WIDTH = 460
 MARGIN = 8
 BOTTOM_MARGIN = 44   # keeps a bottom-corner panel above a pane's input row
+LIST_ROWS = 5        # sense rows the list keeps however long the texts above and below
+CONTEXT_LINES = 3    # the sentence, then '…'
+STATUS_LINES = 2     # the reply, then '…' (the message line and the Console have it all)
+
+
+def clip_lines(text: str, font, width: int, lines: int) -> str:
+    """``text`` as a word-wrapped label ``width`` pixels wide shows it, cut to
+    ``lines`` lines with '…' ending the last when it needs more."""
+    if not text or width <= 0:
+        return text
+    option = QTextOption()
+    option.setWrapMode(QTextOption.WordWrap)  # as a label wraps
+    layout = QTextLayout(text.replace("\n", "\u2028"), font)  # a label's line breaks
+    layout.setTextOption(option)
+    starts = []
+    layout.beginLayout()
+    while len(starts) <= lines:
+        line = layout.createLine()
+        if not line.isValid():
+            break
+        line.setLineWidth(width)
+        starts.append(line.textStart())
+    layout.endLayout()
+    if len(starts) <= lines:
+        return text
+    start = starts[lines - 1]
+    last = text[start:starts[lines]].rstrip() + "…"
+    return text[:start] + QFontMetrics(font).elidedText(last, Qt.ElideRight, width)
+
+
+class _ClippedLabel(QLabel):
+    """A wrapped plain-text label of at most ``lines`` lines, so a long text
+    cannot take the sense list's room: the rest is cut with '…', and the
+    tooltip and accessible name have it in full. text() is the full text."""
+
+    def __init__(self, lines: int, object_name: str = ""):
+        super().__init__("")
+        if object_name:
+            self.setObjectName(object_name)
+        self._lines, self._full = lines, ""
+        self.setTextFormat(Qt.PlainText)
+        self.setWordWrap(True)
+
+    def text(self) -> str:
+        return self._full
+
+    def setText(self, text: str) -> None:
+        self._full = text
+        self._fit()
+
+    def _shown(self, width: int) -> str:
+        return clip_lines(self._full, self.font(), width, self._lines)
+
+    def _fit(self) -> None:
+        shown = self._shown(self.contentsRect().width())
+        super().setText(shown)
+        whole = self._full if shown != self._full else ""
+        self.setToolTip(whole)
+        self.setAccessibleName(whole)  # empty: the text shown
+
+    def heightForWidth(self, width: int) -> int:
+        margins = self.contentsMargins()
+        inner = width - margins.left() - margins.right()
+        if not self._full or inner <= 0:
+            return super().heightForWidth(width)
+        box = self.fontMetrics().boundingRect(QRect(0, 0, inner, 1 << 20),
+                                              Qt.AlignLeft | Qt.TextWordWrap,
+                                              self._shown(inner))
+        return box.height() + margins.top() + margins.bottom()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if event.size().width() != event.oldSize().width():
+            self._fit()
 
 
 class _SenseList(QListWidget):
@@ -62,6 +136,7 @@ class SensePicker(QFrame):
         self._more_token = None   # the All senses lookup still wanted
         self._return_to = None    # where Esc puts keyboard focus back
         self._opened_row = None   # the row focus_list highlighted, until the user moves
+        self._corner = 0          # the corner place() chose, kept while the content changes
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
@@ -77,9 +152,7 @@ class SensePicker(QFrame):
         self.state = QLabel("")
         self.state.setTextFormat(Qt.PlainText)
         root.addWidget(self.state)
-        self.context = QLabel("", objectName="Muted")
-        self.context.setTextFormat(Qt.PlainText)
-        self.context.setWordWrap(True)
+        self.context = _ClippedLabel(CONTEXT_LINES, "Muted")
         root.addWidget(self.context)
         self.list = _SenseList(self)
         self.list.itemDoubleClicked.connect(lambda _item: self.use_current())
@@ -87,9 +160,7 @@ class SensePicker(QFrame):
         self.list.currentRowChanged.connect(self._forget_opened_row)
         self.list.itemPressed.connect(self._forget_opened_row)
         root.addWidget(self.list, 1)
-        self.status = QLabel("")
-        self.status.setTextFormat(Qt.PlainText)
-        self.status.setWordWrap(True)
+        self.status = _ClippedLabel(STATUS_LINES)
         root.addWidget(self.status)
         self.restart = QCheckBox("Start its reviews over")
         self.restart.setToolTip("Unchecked, the word keeps its progress when you choose a sense.")
@@ -211,7 +282,7 @@ class SensePicker(QFrame):
         self.use_btn.setEnabled(usable)
         self.restart.setEnabled(usable)
         self.more_btn.setEnabled(usable and not listing.extra)
-        self.status.setText(status)
+        self._say(status)
 
     def _add_row(self, sense, index, studied, choosable):
         text = f"{sense.pos} · {sense.definition}" if sense.pos else sense.definition
@@ -244,6 +315,10 @@ class SensePicker(QFrame):
         self._load(status=f"'{self._target[1].strip()}' changed elsewhere; this is its "
                           "current list.")
 
+    def _say(self, status: str) -> None:
+        self.status.setText(status)
+        self.fit_contents()
+
     # ---- actions ----------------------------------------------------------
     def _forget_opened_row(self, *_args) -> None:
         self._opened_row = None
@@ -258,7 +333,7 @@ class SensePicker(QFrame):
             return
         item = self.list.currentItem()
         if item is None or not item.flags() & Qt.ItemIsSelectable:
-            self.status.setText("Highlight a sense with the arrow keys, then press Enter.")
+            self._say("Highlight a sense with the arrow keys, then press Enter.")
             return
         if self._opened_row is not None and self.list.currentRow() == self._opened_row:
             self._choose(list(range(listing.kept)))
@@ -274,7 +349,7 @@ class SensePicker(QFrame):
                    (self.list.item(row) for row in range(self.list.count()))
                    if item.flags() & Qt.ItemIsUserCheckable and item.checkState() == Qt.Checked]
         if not checked:
-            self.status.setText("Check at least one sense (Space), then Study checked.")
+            self._say("Check at least one sense (Space), then Study checked.")
             return
         self._choose(checked)
 
@@ -298,7 +373,7 @@ class SensePicker(QFrame):
             return
         self._more_token = self.ctx.find_more_senses(listing)
         self.more_btn.setEnabled(False)
-        self.status.setText(f"Looking up the other senses in {listing.dictionary}…")
+        self._say(f"Looking up the other senses in {listing.dictionary}…")
 
     def _more_done(self, token, result) -> None:
         if token != self._more_token:
@@ -350,23 +425,60 @@ class SensePicker(QFrame):
         if pane is not None and pane.component is not None:
             pane.component.focus_default()
 
-    def place(self) -> None:
-        """Put the panel in a corner of the workspace, left of the help panel,
-        avoiding the focused pane where it can and the text cursor."""
+    def _area(self):
+        """The part of the window the panel may cover: the workspace, left of
+        the help panel. None without a workspace."""
         window = self.window()
         workspace = getattr(window, "workspace", None)
         if workspace is None:
-            return
+            return None
         area = QRect(workspace.mapTo(window, QPoint(0, 0)), workspace.size())
         help_panel = getattr(window, "_help", None)
         if help_panel is not None and help_panel.isVisible():
             area.setRight(min(area.right(), help_panel.geometry().left() - 1))
+        return area
+
+    def _corners(self, area):
+        """Where the panel may go, in place()'s order of preference: bottom
+        right, bottom left, top right, top left."""
         width = max(min(PANEL_WIDTH, int(area.width() * 0.45)), min(280, area.width()))
-        height = max(min(self.sizeHint().height(), int(area.height() * 0.55)),
-                     min(180, area.height()))
+        # As tall as the content wants up to 55% of the workspace, and taller
+        # when the sense list would show fewer than LIST_ROWS rows.
+        wanted = self.heightForWidth(width)
+        if wanted < 0:
+            wanted = self.sizeHint().height()
+        rows = min(LIST_ROWS, max(self.list.count(), 1))
+        row = self.list.sizeHintForRow(0) if self.list.count() else self.list.fontMetrics().height()
+        floor = rows * row + 2 * self.list.frameWidth()
+        margins, inner = self.layout().contentsMargins(), self.contentsMargins()
+        across = (width - margins.left() - margins.right() - inner.left() - inner.right()
+                  - 2 * self.list.frameWidth())
+        if self.list.count() and self.list.sizeHintForColumn(0) > across:
+            floor += self.list.horizontalScrollBar().sizeHint().height()  # long rows scroll
+        floor += wanted - self.list.sizeHint().height()
+        room = area.height() - MARGIN - BOTTOM_MARGIN
+        height = max(min(wanted, int(area.height() * 0.55)), floor)
+        height = max(min(height, room), min(180, area.height()))
         left, right = area.left() + MARGIN, area.right() - MARGIN - width
         top, bottom = area.top() + MARGIN, area.bottom() - BOTTOM_MARGIN - height
-        corners = [QRect(x, y, width, height) for y in (bottom, top) for x in (right, left)]
+        return [QRect(x, y, width, height) for y in (bottom, top) for x in (right, left)]
+
+    def fit_contents(self) -> None:
+        """The content changed (a reply, a reloaded list): give the panel the
+        height it needs now, in the corner place() chose."""
+        area = self._area() if self.isVisible() else None
+        if area is not None:
+            self.setGeometry(self._corners(area)[self._corner])
+
+    def place(self) -> None:
+        """Put the panel in a corner of the workspace, left of the help panel,
+        avoiding the focused pane where it can and the text cursor."""
+        area = self._area()
+        if area is None:
+            return
+        window = self.window()
+        workspace = window.workspace
+        corners = self._corners(area)
         avoid = []
         focus = window.focusWidget()
         if focus is not None and not self.isAncestorOf(focus):
@@ -385,4 +497,5 @@ class SensePicker(QFrame):
             if free:
                 choice = free[0]
                 break
+        self._corner = corners.index(choice)
         self.setGeometry(choice)

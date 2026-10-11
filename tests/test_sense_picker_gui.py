@@ -347,6 +347,50 @@ def test_the_picker_keeps_clear_of_the_help_panel_and_the_focused_pane(
     assert not picker.geometry().intersects(pane)
 
 
+SIX = [Sense(f"sense {i}: a definition long enough to need most of a row", "noun")
+       for i in range(6)]
+LONG_USE = " ".join(["He had walked since dawn through the hills above the town, and by noon "
+                     "his energy began to flag, so he sat in the shade of an old oak."] * 3)
+
+
+@pytest.mark.parametrize("size", [(1040, 700), (800, 560)])
+def test_the_sense_list_keeps_its_rows_whatever_the_sentence_and_reply(
+        window, qt, monkeypatch, no_dialogs, size):
+    from PySide6.QtWidgets import QLabel
+    window.resize(*size)
+    qt.processEvents()
+    mock_lookup(window, monkeypatch, SIX)
+    vocab = window.workspace.focused.component
+    native = focus(window, vocab.add_input, qt)
+    window._add_highlighted_word("flag", LONG_USE, "Book")
+    settle(window)
+    picker = window.sense_picker
+    area = QRect(window.workspace.mapTo(window, QPoint(0, 0)), window.workspace.size())
+
+    def check(label, text, lines):
+        qt.processEvents()
+        assert picker.list.viewport().height() >= 5 * picker.list.sizeHintForRow(0)
+        assert area.contains(picker.geometry())
+        assert label.text() == text  # the full text, for the code and the tooltip
+        shown = QLabel.text(label)
+        assert shown.endswith("…") and text.startswith(shown[:-1].rstrip())
+        assert label.toolTip() == text
+        assert label.height() <= lines * label.fontMetrics().lineSpacing() + 2
+    check(picker.context, f"“{LONG_USE}”", 3)
+    before = picker.geometry()
+    leader(native, Qt.Key_W)
+    for _ in range(3):
+        QTest.keyClick(native, Qt.Key_Down)
+        QTest.keyClick(native, Qt.Key_Space)
+    QTest.mouseClick(picker.use_btn, Qt.LeftButton)  # four senses: a long reply
+    assert raw(window, "flag")["kept"] == 4
+    assert picker.status.text().startswith("'flag' in 'Book' now studies 4 senses")
+    check(picker.status, picker.status.text(), 2)
+    check(picker.context, f"“{LONG_USE}”", 3)
+    after = picker.geometry()  # the same corner, as tall as it needs now
+    assert after.right() == before.right() and after.bottom() == before.bottom()
+
+
 # ---- from the Vocab list -----------------------------------------------------
 def click_word(vocab, word):
     cursor = vocab.words.document().find(word)

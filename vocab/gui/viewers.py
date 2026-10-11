@@ -311,6 +311,8 @@ class PdfViewer(QWidget):
     """Native paged PDF viewer via QtPdf."""
 
     back_requested = Signal()
+    used = Signal()  # the user scrolled or zoomed this reader
+    position_saved = Signal()  # save_position() wrote the document's place
     ZOOM_MIN = 0.1
     ZOOM_MAX = 5.0
 
@@ -450,6 +452,7 @@ class PdfViewer(QWidget):
 
     def _user_scrolled(self, _action):
         self._pending_page = None
+        self.used.emit()
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.ContextMenu and watched is self._view.verticalScrollBar():
@@ -457,6 +460,7 @@ class PdfViewer(QWidget):
             watched.event(event)  # the scrollbar's menu; it returns once closed
             if watched.value() != before:
                 self._pending_page = None  # "Scroll here" moved it
+                self.used.emit()
             return True
         return False
 
@@ -484,6 +488,7 @@ class PdfViewer(QWidget):
             return
         # A failure is the caller's to report: the reader stays open to retry.
         self._storage.save_reading_pos(self._module, self._fname, self.reading_position())
+        self.position_saved.emit()
 
     def set_back_label(self, text):
         self._back.setText(text)
@@ -532,6 +537,7 @@ class PdfViewer(QWidget):
         return available / width if width > 0 and available > 0 else view.zoomFactor()
 
     def _zoom(self, factor: float):
+        self.used.emit()
         current = self._effective_zoom()
         # Fit width can show a page beyond the limits: a step that would go
         # further out does nothing (never the other way), and keeps the mode.
@@ -542,6 +548,7 @@ class PdfViewer(QWidget):
 
     def _fit(self):
         from PySide6.QtPdfWidgets import QPdfView
+        self.used.emit()
         self._view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
 
     def _open_ext(self):
@@ -559,6 +566,8 @@ class EpubViewer(QWidget):
     """EPUB reader: QtWebEngine per-chapter with prev/next + chapter picker."""
 
     back_requested = Signal()
+    used = Signal()  # the user scrolled, navigated or zoomed this reader
+    position_saved = Signal()  # save_position() wrote the document's place
     ZOOM_STEP = 1.15
     ZOOM_MIN = 0.5
     ZOOM_MAX = 3.0
@@ -733,11 +742,13 @@ class EpubViewer(QWidget):
                 return False
             if modifiers & Qt.ControlModifier and event.key() not in (Qt.Key_Home, Qt.Key_End):
                 return False
-        if (self._document_loaded and isValid(self._web) and isinstance(watched, QWidget) and
+        if (isValid(self._web) and isinstance(watched, QWidget) and
                 (watched is self._web or self._web.isAncestorOf(watched))):
-            # Explicit reader interaction takes precedence over saved-position retries.
-            self._pending_scroll = None
-            self._pending_highlight = None
+            self.used.emit()
+            if self._document_loaded:
+                # Explicit reader interaction takes precedence over saved-position retries.
+                self._pending_scroll = None
+                self._pending_highlight = None
         return False
 
     def showEvent(self, event):
@@ -922,6 +933,7 @@ class EpubViewer(QWidget):
         """, restored)
 
     def _bump(self, factor: float) -> None:
+        self.used.emit()
         self._zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom * factor))
         self._apply_zoom()
 
@@ -1083,11 +1095,13 @@ class EpubViewer(QWidget):
             self._document_loaded = False
 
     def _go(self, delta: int):
+        self.used.emit()
         self._pending_scroll = None
         self._set_highlight_source(None)
         self._load(self._idx + delta)
 
     def _jump(self, i: int):
+        self.used.emit()
         if not 0 <= i < len(self._book.chapters):
             return
         if i != self._idx or self._current_path != str(Path(self._book.chapters[i][1]).resolve()):
@@ -1233,6 +1247,7 @@ class EpubViewer(QWidget):
         if not (self._storage and self._module) or not self._position_known:
             return
         self._storage.save_reading_pos(self._module, self._fname, self.reading_position())
+        self.position_saved.emit()
 
     def refresh(self) -> None:
         pass

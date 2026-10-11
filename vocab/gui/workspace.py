@@ -37,6 +37,8 @@ class Pane(QFrame):
         self.factory_key = factory_key
         self.setObjectName("Pane")
         self._focused = False
+        # When this pane was last used (Workspace.mark_used); 0: not yet.
+        self.last_used = 0
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(0)
@@ -124,6 +126,7 @@ class Workspace(QWidget):
         self._order = component_order
         self._panes: List[Pane] = []
         self._focused: Optional[Pane] = None
+        self._uses = 0  # counts uses, to order panes by their last use
         self._zoom_saved = None   # (root_splitter) while zoomed
         # confirm_unsaved(component, error, action) -> bool: whether to go on
         # when a component's state could not be saved. None: report and stay.
@@ -164,14 +167,28 @@ class Workspace(QWidget):
         return pane
 
     # ---- focus ----------------------------------------------------------
-    def focus_pane(self, pane: Pane) -> None:
+    def focus_pane(self, pane: Pane, used: bool = True) -> None:
+        """Focus a pane. ``used=False`` when the user did not pick it, so it
+        does not count as used (see mark_used)."""
         if pane is None or pane not in self._panes:
             return
         for p in self._panes:
             if p is not pane and p._focused:
                 p.set_focused(False)
         self._focused = pane
+        if used:
+            self.mark_used(pane)
         pane.set_focused(True)
+
+    def mark_used(self, pane: Pane) -> None:
+        """Record that the user turned to or worked in a pane just now."""
+        self._uses += 1
+        pane.last_used = self._uses
+
+    def panes_by_use(self) -> List[Pane]:
+        """Panes from the least to the most recently used. Panes not used
+        since they were created or restored come first, in layout order."""
+        return sorted(self._panes, key=lambda pane: pane.last_used)
 
     @property
     def focused(self) -> Optional[Pane]:
@@ -202,6 +219,7 @@ class Workspace(QWidget):
             if p._focused and p is not pane:
                 p.set_focused_highlight(False)
         self._focused = pane
+        self.mark_used(pane)
         pane.set_focused_highlight(True)
 
     def focus_index(self, n: int) -> None:
@@ -330,10 +348,14 @@ class Workspace(QWidget):
             if 0 <= neighbor_idx < parent.count():
                 w = parent.widget(neighbor_idx)
                 neighbor = self._first_pane_in(w)
+        # Focus moves to the neighbour before the pane goes, so Qt does not
+        # move it on its own. The neighbour was not picked: it is not "used".
+        neighbor = neighbor or (self._panes[0] if self._panes else None)
+        self.focus_pane(neighbor, used=False)
         cur.setParent(None)
         cur.deleteLater()
         self._collapse_empty_splitters()
-        self.focus_pane(neighbor or (self._panes[0] if self._panes else None))
+        self.focus_pane(neighbor, used=False)
 
     def _first_pane_in(self, w) -> Optional[Pane]:
         if isinstance(w, Pane):
@@ -380,7 +402,7 @@ class Workspace(QWidget):
             self._zoom_lay.addWidget(cur)   # reparents cur into the zoom page
             self._zoomed_pane = cur
             self._stack.setCurrentWidget(self._zoom_page)
-            self.focus_pane(cur)
+            self.focus_pane(cur, used=False)
         else:
             cur = self._zoomed_pane
             parent, idx, sizes = self._zoom_origin
@@ -390,7 +412,7 @@ class Workspace(QWidget):
             self._zoomed_pane = None
             self._zoom_origin = None
             self._stack.setCurrentWidget(self._tree_page)
-            self.focus_pane(cur)
+            self.focus_pane(cur, used=False)
 
     @property
     def is_zoomed(self) -> bool:
@@ -490,6 +512,7 @@ class Workspace(QWidget):
         old_root.deleteLater()
         focused = state.get("focused", 0)
         focused = focused if isinstance(focused, int) else 0
-        self.focus_pane(self._panes[max(0, min(focused, len(self._panes) - 1))])
+        # Which pane was used last is not saved: restored panes start unused.
+        self.focus_pane(self._panes[max(0, min(focused, len(self._panes) - 1))], used=False)
         if state.get("zoomed"):
             self.toggle_zoom()

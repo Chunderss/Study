@@ -16,9 +16,10 @@ import json
 import sys
 import zipfile
 from pathlib import Path
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 from vocab.gui.main_window import MainWindow
 from vocab.gui.viewers import EpubViewer
 
@@ -86,6 +87,21 @@ def near(places, expected):
     return len(places) == len(expected) and all(
         place[:2] == want[:2] and abs(place[2] - want[2]) < 0.02 and abs(place[3] - want[3]) < 0.001
         for place, want in zip(places, expected))
+
+def wheel(viewer):
+    """Turn the mouse wheel over the page, which does not move keyboard focus."""
+    target = viewer._web.focusProxy()
+    center = target.rect().center()
+    QApplication.sendEvent(target, QWheelEvent(
+        QPointF(center), QPointF(target.mapToGlobal(center)), QPoint(), QPoint(0, -120),
+        Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))
+
+def press(viewer, label):
+    QTest.mouseClick(next(b for b in viewer.findChildren(QPushButton) if b.text() == label),
+                     Qt.LeftButton)
+
+def saved():
+    return window.app.storage.load_reading_pos("Book", "book.epub")
 
 def close_all():
     for window in windows:
@@ -176,4 +192,34 @@ try:
 finally:
     viewer.close()
     viewer.deleteLater()
+''')
+
+
+def test_the_epub_reader_scrolled_or_zoomed_last_decides_the_saved_place(tmp_path):
+    run_workspace(tmp_path, r'''
+window.show()
+first = window._open_viewer(str(path))
+wait_settled(first, "A")
+window.workspace.split_vertical()
+second = window._open_viewer(str(path))
+second._jump(2)
+wait_settled(second, "C")
+scroll_to(second, 0.4)
+focus = QApplication.focusWidget()
+wheel(first)  # over the first pane, while the second keeps keyboard focus
+wait_for(lambda: first.source_location()["scroll"] > 0, lambda: first.source_location())
+assert QApplication.focusWidget() is focus
+expected = first.reading_position()
+assert window.close()
+assert saved() == expected, (saved(), expected)
+
+reopened = open_window()
+reopened.show()
+first, second = readers(reopened)
+wait_settled(first, "A")
+wait_settled(second, "C")
+press(second, "A+")
+expected = second.reading_position()
+assert reopened.close()
+assert saved() == expected, (saved(), expected)
 ''')

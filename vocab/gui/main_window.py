@@ -42,6 +42,9 @@ class MainWindow(QWidget):
         self.ctx.source_requested.connect(self._open_source)
         self.ctx.module_deleting.connect(self._release_module_readers)
         self._status_problem = ""
+        # (module, file name) -> Pane.last_used of the reader that last saved
+        # that document's place (see _keeps_saved_place).
+        self._saved_by_use = {}
         self._clearing_module = False
         self._missing_module = ""
         self.setWindowTitle("Vocab Study")
@@ -342,13 +345,14 @@ class MainWindow(QWidget):
         except Exception:
             return
         released = False
-        for pane in list(self.workspace._panes):
+        for pane in self.workspace.panes_by_use():  # the reader used last saves last
             path = getattr(pane.component, "path", None)
             if isinstance(path, str) and folder in Path(path).resolve().parents:
                 # Save its place without asking: if the delete then fails
                 # ("nothing was deleted"), the module keeps it.
                 try:
-                    pane.component.save_position()
+                    if not self._keeps_saved_place(pane):
+                        pane.component.save_position()
                 except Exception as error:
                     self.ctx.log.emit(f"! Could not save your place in {pane.component._fname}: {error}")
                 pane.set_component(self._make_component("documents"), "documents", save=False)
@@ -577,7 +581,36 @@ class MainWindow(QWidget):
         except Exception as error:
             self.ctx.log.emit(f"! {error}")
 
+    def _keeps_saved_place(self, pane) -> bool:
+        """Whether a reader should leave its document's saved place alone when
+        all readers save at once (quitting, deleting a module): another reader
+        of the document saved there after this one was last used, or other
+        readers show the document and this one was not used since the app
+        started. Its pane still keeps its own place."""
+        viewer = pane.component
+        key = (getattr(viewer, "_module", None), getattr(viewer, "_fname", None))
+        if key in self._saved_by_use:
+            return pane.last_used <= self._saved_by_use[key]
+        return not pane.last_used and any(
+            other is not pane and (getattr(other.component, "_module", None),
+                                   getattr(other.component, "_fname", None)) == key
+            and callable(getattr(other.component, "save_position", None))
+            for other in self.workspace._panes)
+
+    def _reader_saved(self, pane, viewer) -> None:
+        if pane in self.workspace._panes and pane.component is viewer:
+            key = (viewer._module, viewer._fname)
+            self._saved_by_use[key] = max(self._saved_by_use.get(key, 0), pane.last_used)
+
+    def _reader_used(self, pane, viewer) -> None:
+        if pane in self.workspace._panes and pane.component is viewer:
+            self.workspace.mark_used(pane)
+
     def _bind_viewer_return(self, pane, viewer, state=None):
+        # Scrolling, paging and zooming count as using the pane, even when
+        # its buttons and the wheel leave keyboard focus elsewhere.
+        viewer.used.connect(lambda p=pane, v=viewer: self._reader_used(p, v))
+        viewer.position_saved.connect(lambda p=pane, v=viewer: self._reader_saved(p, v))
         return_state = None
         if isinstance(state, dict) and state.get("module") == viewer._module:
             capture_id = state.get("capture_id")
@@ -742,11 +775,12 @@ class MainWindow(QWidget):
             e.ignore()
             return
         # Save every reader's place first; a failure is shown, and No keeps
-        # the window open to retry.
+        # the window open to retry. Of several readers of one document, the
+        # one used last saves last, so its place is the document's.
         unsaved = []
-        for pane in list(self.workspace._panes):
+        for pane in self.workspace.panes_by_use():
             saver = getattr(pane.component, "save_position", None)
-            if callable(saver):
+            if callable(saver) and not self._keeps_saved_place(pane):
                 try:
                     saver()
                 except Exception as error:

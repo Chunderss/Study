@@ -53,3 +53,25 @@ jobs:
           name: VocabStudy-Windows
           path: dist/VocabStudy-Windows.zip
           if-no-files-found: error
+  linux:
+    # The supported Python floor on Linux: the terminal app, storage, file
+    # locking and grading, with real NLTK data. Without the gui extra the
+    # desktop tests skip; Qt on this image would also need system libraries
+    # (EGL, GL, xkbcommon and the WebEngine runtime) from apt.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - run: python -m pip install -e ".[wordnet,test]"
+      - name: Download and verify the NLTK data the tests use
+        run: python tools/build_desktop.py --data-only
+      - name: Terminal and storage regressions
+        timeout-minutes: 10
+        env:
+          NLTK_DATA: ${{ github.workspace }}/build/nltk_data
+          VOCAB_REQUIRE_NLTK_DATA: '1'   # tests using real NLTK data must run, not skip
+        run: python -m pytest -q

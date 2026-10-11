@@ -272,6 +272,12 @@ GUI tests use Qt's offscreen platform and temporary data directories. Linux stil
 needs Qt's system libraries (including GL, EGL, and xkbcommon); EPUB rendering also
 requires the Qt WebEngine runtime libraries.
 
+The repository's workflow runs the whole test suite on Windows with Python 3.12 and the
+current PySide6, then builds and smoke-tests the app. A second job runs it on Ubuntu
+24.04 with Python 3.10, the oldest supported version, without the `gui` extra: the
+terminal, storage and grading tests run there with real NLTK data, and the desktop tests
+skip. Run the desktop tests on Linux locally.
+
 Build on the target OS:
 
 ```bash

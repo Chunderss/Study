@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 from .test_gui_reliability import qt, window  # noqa: F401
 from .test_learning_gui import make_pdf
+from vocab.core.learning import LearningStore
 from vocab.gui.main_window import MainWindow
 from vocab.gui.viewers import PdfViewer
 
@@ -55,6 +56,17 @@ def wheel(viewer, steps=-1):
                         QPoint(0, 120 * steps), Qt.NoButton, Qt.NoModifier,
                         Qt.NoScrollPhase, False)
     QApplication.sendEvent(viewport, event)
+
+
+def open_from_documents(window, name="book.pdf"):
+    """Open a document from a Documents pane, in the focused pane."""
+    window.workspace.set_focused_component("documents")
+    documents = window.workspace.focused.component
+    documents.docs.setCurrentItem(documents.docs.findItems(name, Qt.MatchExactly)[0])
+    documents.docs.itemActivated.emit(documents.docs.currentItem())
+    viewer = window.workspace.focused.component
+    assert isinstance(viewer, PdfViewer)
+    return viewer
 
 
 def saved(window):
@@ -198,3 +210,45 @@ def test_deleting_a_module_saves_the_reader_used_last(window, monkeypatch):
     assert window.app.storage.exists("Book")  # nothing was deleted
     assert readers(window) == []
     assert saved(window) == expected
+
+
+def test_a_document_open_in_another_pane_starts_at_that_readers_place_and_zoom(window, monkeypatch):
+    path = str(make_pdf(window))
+    window.app.storage.save_reading_pos("Book", "book.pdf", {"page": 0, "zoom_mode": "custom", "zoom": 3.0})
+    first = window._open_viewer(path)
+    set_place(first, 1, 1.8)
+    window.workspace.split_vertical()
+    second = open_from_documents(window)
+    assert place(second) == (1, 1.8)
+    set_place(second, 0, 1.8)
+    press(second, "Fit width")  # each moves on its own
+    assert place(first) == (1, 1.8) and place(second) == (0, "fit")
+
+    # Of two open readers, the one used last is copied.
+    window.workspace.split_vertical()
+    assert place(open_from_documents(window)) == (0, "fit")
+    press(first, "A+")
+    window.workspace.split_vertical()
+    assert place(open_from_documents(window)) == (1, 2.25)
+
+    # Source opens at the capture, with the zoom of the reader used last.
+    store = LearningStore(window.app.storage)
+    store.save_capture("Book", kind="question", prompt="Where?", quote="first page",
+                       source={"kind": "pdf", "filename": "book.pdf", "page": 0})
+    window.workspace.split_vertical()
+    window.workspace.set_focused_component("learning")
+    learning = window.workspace.focused
+    learning.component.entries.setCurrentRow(0)
+    learning.component.open_source()
+    assert isinstance(learning.component, PdfViewer)
+    assert place(learning.component) == (0, 2.25)
+
+    # Replacing a reader by Source without a Learning pane keeps its own zoom.
+    window.workspace.focus_pane(window.workspace._panes[1])
+    replaced = window.workspace.focused.component
+    assert place(replaced) == (0, "fit")
+    press(first, "A+")
+    window._open_source("Book", {"kind": "pdf", "filename": "book.pdf", "page": 1})
+    assert window.workspace.focused.component is not replaced
+    assert place(window.workspace.focused.component) == (1, "fit")
+    assert saved(window) == {"page": 0, "zoom_mode": "fit_width"}  # the replaced reader's

@@ -66,6 +66,11 @@ def wait_settled(viewer, title):
     wait_for(lambda: settled(viewer, title), lambda: f"title={viewer._web.title()!r}, "
              f"loaded={viewer._document_loaded}, pending={viewer._pending_scroll}")
 
+def wait_idle(viewer):
+    """Wait until the reader shows a chapter and nothing is pending."""
+    wait_for(lambda: viewer._document_loaded and not viewer._web.page().isLoading()
+             and viewer._pending_scroll is None, lambda: f"title={viewer._web.title()!r}")
+
 def js(viewer, code):
     result = []
     viewer._run_js(code, result.append)
@@ -137,12 +142,14 @@ first._bump(first.ZOOM_STEP)
 first._bump(first.ZOOM_STEP)
 window.workspace.split_vertical()
 second = window._open_viewer(str(path))
+wait_idle(second)
 second.go_to({"chapter": 0, "href": "notes.xhtml", "scroll": 0.3})
 wait_settled(second, "Notes")
 scroll_to(second, 0.3)
 second._bump(1 / second.ZOOM_STEP)
 places = [where(viewer) for viewer in readers(window)]
-assert near(places, [(1, None, 0.5, 1.653), (0, "notes.xhtml", 0.3, 1.087)]), places
+assert near(places, [(1, None, 0.5, 1.653), (0, "notes.xhtml", 0.3, places[1][3])]), places
+assert places[1][3] != places[0][3], places
 expected = places
 assert window.close()
 
@@ -222,4 +229,57 @@ press(second, "A+")
 expected = second.reading_position()
 assert reopened.close()
 assert saved() == expected, (saved(), expected)
+''')
+
+
+def test_a_second_epub_reader_starts_where_the_open_one_is(tmp_path):
+    run_workspace(tmp_path, r'''
+from vocab.core.learning import LearningStore
+window.app.storage.save_reading_pos("Book", "book.epub", {"chapter": 2, "scroll": 0.0, "zoom": 2.0})
+window.show()
+first = window._open_viewer(str(path))
+wait_settled(first, "C")
+first.go_to({"chapter": 0, "href": "notes.xhtml", "scroll": 0.0})
+wait_settled(first, "Notes")
+scroll_to(first, 0.35)
+press(first, "A+")
+window.workspace.split_vertical()
+window.ctx.view_requested.emit(str(path))  # as Documents opens it
+second = window.workspace.focused.component
+assert isinstance(second, EpubViewer) and second is not first
+wait_settled(second, "Notes")
+before = where(first)
+assert near([where(second)], [before]) and before[3] == 2.3, (where(second), before)
+
+# Afterwards each reader moves on its own.
+press(second, "Next ›")
+wait_settled(second, "B")
+press(second, "A−")
+press(second, "A−")
+assert where(second)[:2] == (1, None) and near([where(first)], [before]), (where(first), before)
+
+# Source opens at the capture, with the zoom of the reader used last.
+press(first, "A+")
+LearningStore(window.app.storage).save_capture(
+    "Book", kind="question", prompt="Where?", quote="Somewhere in C",
+    source={"kind": "epub", "filename": "book.epub", "chapter": 2, "scroll": 0.5})
+window.workspace.split_vertical()
+window.workspace.set_focused_component("learning")
+learning = window.workspace.focused
+learning.component.entries.setCurrentRow(0)
+learning.component.open_source()
+opened = learning.component
+assert isinstance(opened, EpubViewer)
+wait_settled(opened, "C")
+assert near([where(opened)], [(2, None, 0.5, 2.645)]), where(opened)
+
+# Replacing a reader by Source without a Learning pane keeps its own zoom.
+pane = next(pane for pane in window.workspace._panes if pane.component is second)
+window.workspace.focus_pane(pane)
+press(first, "A−")
+window._open_source("Book", {"kind": "epub", "filename": "book.epub", "chapter": 0, "scroll": 0.25})
+replaced = pane.component
+assert replaced is not second and isinstance(replaced, EpubViewer)
+wait_settled(replaced, "A")
+assert near([where(replaced)], [(0, None, 0.25, 1.739)]), where(replaced)
 ''')

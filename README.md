@@ -105,11 +105,16 @@ limits.
 The app reopens the selected module, pane layout, selected notes, preview visibility,
 and document readers after a normal exit. A vocabulary quiz reopens as a Vocab pane;
 its completed reviews are already saved. Each reader pane reopens at its own page
-or chapter and zoom, also when two panes show the same document. A document you
-open again from Documents starts where you last left a reader of it: going back,
+or chapter and zoom, also when two panes show the same document.
+
+Opening a document that another pane already shows starts at that pane's place and
+zoom (of several, the one used last); after that each pane moves on its own.
+Otherwise a document starts where you last left a reader of it: going back,
 switching or closing the pane saves that reader's place. When you quit with several
 readers of a document open, the one you last scrolled, paged, zoomed or clicked in
 counts; readers you have not used since the app started leave the place as it was.
+**Source** opens at the capture, with the zoom of a pane already showing that
+document, otherwise the saved zoom.
 
 ## Markdown notes and drafts
 

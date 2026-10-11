@@ -521,8 +521,10 @@ class MainWindow(QWidget):
         pane = pane or self.workspace.focused
         if pane not in self.workspace._panes:
             return
+        module = self.app.current_module
+        state = self._open_reader_state(module, os.path.basename(path), pane)
         try:
-            viewer = make_viewer(path, self.ctx, source=source)
+            viewer = make_viewer(path, self.ctx, module=module, source=source, state=state)
         except Exception as e:
             self.ctx.log.emit(f"! Could not open document: {e}")
             return
@@ -539,6 +541,23 @@ class MainWindow(QWidget):
         self.ctx.log.emit(f"Opened {os.path.basename(path)} in this pane.")
         self._refresh_status()
         return viewer
+
+    def _open_reader_state(self, module, filename, pane):
+        """Where a new reader of a document starts when another pane shows
+        it: at that reader's place and zoom (a Source link replaces only the
+        place). Of several, the one used most recently. The pane's own reader
+        comes first; only callers without a Learning pane replace it (Learning
+        opens Source in its own pane). None: the document's saved place."""
+        readers = [other for other in self.workspace.panes_by_use()
+                   if callable(getattr(other.component, "reading_position", None))
+                   and getattr(other.component, "_module", None) == module
+                   and getattr(other.component, "_fname", None) == filename]
+        if pane in readers:
+            readers = [pane]
+        try:
+            return readers[-1].component.reading_position() if readers else None
+        except Exception:
+            return None  # the saved place still works
 
     def _capture(self, module, quote, source):
         from .learning import CaptureDialog

@@ -57,6 +57,20 @@ opened. Messages are kept in memory only, until the app closes.
    edit one to mark it resolved. You can also paste a passage using **+ Capture**.
    **Edit**, **Source** and **Delete** act on the highlighted capture, and Delete
    names it before removing it. With nothing highlighted, they are unavailable.
+
+   To find captures, type in the search box above the list (**Ctrl+F** in a Learning
+   pane). It shows the captures whose question, passage or notes contain every word you
+   type, also inside longer words; case and accents on Latin letters do not matter
+   (`cafe` finds "Café"). The menus beside it show one document, chapter or page, and
+   open, resolved or all questions, or concepts due now, not due yet or all. **Esc**
+   clears the search, **Down** or **Enter** moves to the list and highlights the first
+   match, and **Clear filters** shows everything again. A highlighted capture that the
+   search or filters hide is no longer highlighted, so the buttons never act on a
+   capture you cannot see. The search and filters stay when you come back with
+   **‹ Learning** and when the app reopens; selecting another module clears them. A new
+   capture they hide is not listed: the summary counts the captures shown, and adding
+   one here says it is hidden. **Review next due concept** always takes the module's
+   next due concept.
 4. Choose **Review next due concept**. Write an explanation from memory, then
    **Compare with source**. Rate yourself **Needs work** or **Understood** to save
    the attempt and schedule the next review. Closing an unfinished review leaves

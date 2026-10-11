@@ -199,6 +199,8 @@ class MainWindow(QWidget):
             ("z", None, "Zoom / un-zoom focused pane", "Panes", ws.toggle_zoom),
             ("x", None, "Close focused pane", "Panes", ws.close_focused),
             ("1…9", None, "Focus pane by number", "Move between panes", None),
+            # Listed only: each Learning pane handles Find for itself.
+            (None, [(Qt.ControlModifier, Qt.Key_F, "Ctrl+F")], "Search captures", "Learning", None),
         ]
 
     LEADER_DISPLAY = "Ctrl+B"
@@ -574,6 +576,9 @@ class MainWindow(QWidget):
                     value = state.get(key)
                     if isinstance(value, int) and value >= 0:
                         return_state[key] = value
+                if "filters" in state:
+                    from ..core.learning import CaptureFilter
+                    return_state["filters"] = CaptureFilter.from_state(state["filters"]).state()
         viewer._learning_return = return_state
         if return_state is not None:
             viewer.set_back_label("‹ Learning")

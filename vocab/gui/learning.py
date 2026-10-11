@@ -1,11 +1,15 @@
 """Capture, revisit an open question, or explain a concept before seeing its source."""
-from PySide6.QtCore import Qt, QTimer
+import time
+
+from PySide6.QtCore import QEvent, QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMessageBox,
-                               QPlainTextEdit, QPushButton, QVBoxLayout)
+                               QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
 
-from ..core.learning import LearningStore, source_label
+from ..core.learning import (STATUS_FILTERS, CaptureFilter, LearningStore, search_fields,
+                             source_choice_label, source_choices, source_label)
 from .components import BaseComponent
 
 
@@ -22,6 +26,7 @@ class CaptureDialog(QDialog):
         self.ctx, self.module = ctx, module
         self.store = LearningStore(ctx.app.storage)
         self.item = item
+        self.saved = None  # the capture as saved, once Save succeeds
         self.source = dict(item["source"] if item else source or {})
         self.setWindowTitle("Edit capture" if item else "Capture for learning")
         self.resize(620, 620)
@@ -66,10 +71,11 @@ class CaptureDialog(QDialog):
     def save(self):
         kind, prompt, quote, explanation, resolved = self._values()
         try:
-            self.store.save_capture(self.module, kind=kind, prompt=prompt, quote=quote,
-                                    explanation=explanation, source=self.source, resolved=resolved,
-                                    item_id=self.item["id"] if self.item else None,
-                                    revision=self.item["revision"] if self.item else None)
+            self.saved = self.store.save_capture(
+                self.module, kind=kind, prompt=prompt, quote=quote,
+                explanation=explanation, source=self.source, resolved=resolved,
+                item_id=self.item["id"] if self.item else None,
+                revision=self.item["revision"] if self.item else None)
         except Exception as error:
             self.error.setText(str(error))
             return
@@ -168,6 +174,24 @@ class _CaptureList(QListWidget):
             self.selectionModel().clearCurrentIndex()
 
 
+class _SearchField(QLineEdit):
+    """Esc clears the search; Down or Enter moves on to the results."""
+    to_results = Signal()
+
+    def keyPressEvent(self, event):
+        plain = not (event.modifiers() & ~Qt.KeypadModifier)
+        if plain and event.key() == Qt.Key_Escape and self.text():
+            self.clear()
+            return
+        if plain and event.key() in (Qt.Key_Down, Qt.Key_Return, Qt.Key_Enter):
+            self.to_results.emit()
+            return
+        super().keyPressEvent(event)
+
+
+_HINT = "Capture a passage → explain from memory → compare → revisit."
+
+
 class LearningComponent(BaseComponent):
     TITLE = "Learning"
 
@@ -176,11 +200,44 @@ class LearningComponent(BaseComponent):
         self.store = LearningStore(self.app.storage)
         self.items = {}
         self.module = None
+        self.filter = CaptureFilter()
+        self._source_keys = [None]   # source_filter index -> source_choices key
+        self._counts = (0, 0)        # concepts due, open questions
+        self._fields = {}            # capture id -> (revision, search_fields)
         self.ctx.learning_changed.connect(self.refresh)
         layout = QVBoxLayout(self)
         self.summary = plain_label("")
         layout.addWidget(self.summary)
+        self.search = _SearchField()
+        self.search.setPlaceholderText("Search questions, passages and notes (Ctrl+F)")
+        self.search.setAccessibleName("Search captures")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._filters_changed)
+        self.search.to_results.connect(self._to_results)
+        layout.addWidget(self.search)
+        filters = QHBoxLayout()
+        self.source_filter = QComboBox()
+        self.source_filter.setAccessibleName("Filter by source")
+        self.source_filter.setToolTip("Show captures from one document, chapter or page")
+        # A long file name must not widen the pane.
+        self.source_filter.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.source_filter.setMinimumContentsLength(10)
+        self.source_filter.addItem("All sources")
+        self.status_filter = QComboBox()
+        self.status_filter.setAccessibleName("Filter by status")
+        for key, text in STATUS_FILTERS.items():
+            self.status_filter.addItem(text, key)
+        self.clear_filters = QPushButton("Clear filters")
+        self.clear_filters.setEnabled(False)
+        self.clear_filters.clicked.connect(self._clear_filters)
+        self.source_filter.currentIndexChanged.connect(self._filters_changed)
+        self.status_filter.currentIndexChanged.connect(self._filters_changed)
+        filters.addWidget(self.source_filter, 1)
+        filters.addWidget(self.status_filter, 1)
+        filters.addWidget(self.clear_filters)
+        layout.addLayout(filters)
         self.entries = _CaptureList()
+        self.entries.setUniformItemSizes(True)  # one line per capture: quick to filter
         self.entries.currentItemChanged.connect(self._selected)
         self.entries.itemSelectionChanged.connect(self._selected)
         self.entries.itemActivated.connect(self.edit)
@@ -198,13 +255,42 @@ class LearningComponent(BaseComponent):
                 self.target_buttons.append(button)
         layout.addLayout(row)
         self.review_button = QPushButton("Review next due concept")
+        self.review_button.setToolTip("Reviews this module's next due concept; "
+                                      "the search and filters do not limit it.")
         self.review_button.clicked.connect(self.review)
         layout.addWidget(self.review_button)
+        chain = [self.search, self.source_filter, self.status_filter, self.clear_filters, self.entries]
+        for first, second in zip(chain, chain[1:]):
+            QWidget.setTabOrder(first, second)
         self.refresh()
         self._selected()
 
     def focus_default(self):
         self.entries.setFocus()
+
+    def event(self, event):
+        # Find (Ctrl+F) anywhere in this pane goes to its search box. It is
+        # handled as a key event the focused child passes up, not a
+        # QShortcut: with two Learning panes, PySide6 6.11 finds the panes'
+        # shortcuts ambiguous and runs neither.
+        if (event.type() in (QEvent.ShortcutOverride, QEvent.KeyPress)
+                and event.matches(QKeySequence.Find)):
+            event.accept()
+            if event.type() == QEvent.KeyPress:
+                self.focus_search()
+            return True
+        return super().event(event)
+
+    def focus_search(self):
+        self.search.setFocus(Qt.ShortcutFocusReason)
+        self.search.selectAll()
+
+    def _to_results(self):
+        """Down or Enter in the search box: on to the list, highlighting the
+        first capture shown unless a shown capture is already highlighted."""
+        self.entries.setFocus(Qt.OtherFocusReason)
+        if self.selected() is None and self.entries.count():
+            self.entries.setCurrentRow(0)
 
     def selected(self):
         """The highlighted capture. The list can also have a current row that
@@ -217,11 +303,16 @@ class LearningComponent(BaseComponent):
         item = self.selected()
         return {"module": self.module, "capture_id": item["id"] if item else None,
                 "entries_scroll": self.entries.verticalScrollBar().value(),
-                "details_scroll": self.details.verticalScrollBar().value()}
+                "details_scroll": self.details.verticalScrollBar().value(),
+                "filters": self.filter.state()}
 
     def restore_navigation_state(self, state):
         if not isinstance(state, dict) or state.get("module") != self.module:
             return
+        # The saved list position belongs to the filtered list.
+        self._show_filter(CaptureFilter.from_state(state.get("filters")))
+        self._fill_source_filter()
+        self._populate(None)
         capture_id = state.get("capture_id")
         for index in range(self.entries.count()):
             row = self.entries.item(index)
@@ -245,6 +336,8 @@ class LearningComponent(BaseComponent):
     def refresh(self):
         old = self.selected()
         same_module = self.module is not None and self.module == self.app.current_module
+        if not same_module:
+            self._show_filter(CaptureFilter())  # another module starts unfiltered
         old_id = old["id"] if old and same_module else None
         scroll = (self.entries.verticalScrollBar().value(),
                   self.details.verticalScrollBar().value()) if same_module else None
@@ -260,10 +353,11 @@ class LearningComponent(BaseComponent):
     def _keep_scroll(self, capture_id, entries, details):
         """A refresh in the same module (a note saved, a word added, another
         capture changed) keeps the list where it was, and the passage too
-        while the same capture is selected."""
+        while the same capture is selected. entries None leaves the list."""
         def apply():
-            self.entries.doItemsLayout()  # the list lays out its rows lazily
-            self.entries.verticalScrollBar().setValue(entries)
+            if entries is not None:
+                self.entries.doItemsLayout()  # the list lays out its rows lazily
+                self.entries.verticalScrollBar().setValue(entries)
             selected = self.selected()
             if capture_id is not None and (selected["id"] if selected else None) == capture_id:
                 self.details.verticalScrollBar().setValue(details)
@@ -276,26 +370,133 @@ class LearningComponent(BaseComponent):
         self.items = {}
         self.details.clear()
         self.review_button.setEnabled(False)
+        problem = None
         if not self.module:
-            self.summary.setText("Select a module, then capture a passage from a reader or paste one here.")
+            problem = "Select a module, then capture a passage from a reader or paste one here."
+        else:
+            try:
+                self.items = self.store.load(self.module)
+                due = self.store.due(self.items)
+            except Exception as error:
+                self.items = {}
+                problem = str(error)
+        # Change the filters' state only when it really changes: disabling
+        # the focused search box would move the focus while the user types.
+        self._set_filters_enabled(problem is None)
+        self._fill_source_filter()
+        if problem is not None:
+            self.summary.setText(problem)
             return
-        try:
-            self.items = self.store.load(self.module)
-            due = self.store.due(self.items)
-        except Exception as error:
-            self.summary.setText(str(error))
-            return
-        open_count = sum(i["kind"] == "question" and not i["resolved"] for i in self.items.values())
-        self.summary.setText(f"{len(due)} concepts due · {open_count} open questions\nCapture a passage → explain from memory → compare → revisit.")
+        self._counts = (len(due), sum(i["kind"] == "question" and not i["resolved"]
+                                      for i in self.items.values()))
+        self._fields = {key: value for key, value in self._fields.items() if key in self.items}
         self.review_button.setEnabled(bool(due))
+        self._populate(old_id)
+
+    def _populate(self, old_id):
+        """List the captures the search and filters show, and highlight
+        old_id again if it is among them."""
+        self.entries.clear()
+        now = time.time()
+        searching = bool(self.filter.words)
         ordered = sorted(self.items.values(), key=lambda i: (
             not (i["kind"] == "question" and not i["resolved"]), -i["created"]))
         for item in ordered:
-            row = QListWidgetItem(f"{self.store.status(item)} · {item['prompt']}")
+            fields = self._search_fields(item) if searching else None
+            if not self.store.matches(item, self.filter, now, fields):
+                continue
+            # One line per capture, whatever the question holds.
+            row = QListWidgetItem(" ".join(f"{self.store.status(item, now)} · {item['prompt']}".split()))
             row.setData(Qt.UserRole, item["id"])
             self.entries.addItem(row)
             if item["id"] == old_id:
                 self.entries.setCurrentItem(row)
+        self._show_summary()
+
+    def _search_fields(self, item):
+        cached = self._fields.get(item["id"])
+        if cached is None or cached[0] != item["revision"]:
+            cached = self._fields[item["id"]] = (item["revision"], search_fields(item))
+        return cached[1]
+
+    def _show_summary(self):
+        total, shown = len(self.items), self.entries.count()
+        if not (self.filter.active and total):
+            hint = _HINT
+        elif shown:
+            hint = f"Showing {shown} of {total} captures."
+        else:
+            hint = f"No captures match. Clear filters to show all {total}."
+        due, open_count = self._counts
+        self.summary.setText(f"{due} concepts due · {open_count} open questions\n{hint}")
+        self.clear_filters.setEnabled(self.search.isEnabled() and self.filter.active)
+
+    def _set_filters_enabled(self, enabled):
+        for widget in (self.search, self.source_filter, self.status_filter):
+            if widget.isEnabled() != enabled:
+                widget.setEnabled(enabled)
+        self.clear_filters.setEnabled(enabled and self.filter.active)
+
+    def _fill_source_filter(self):
+        """List the sources of the current captures, keeping the chosen one."""
+        keys = source_choices(self.items, keep=self.filter.source)
+        with QSignalBlocker(self.source_filter):
+            if keys != self._source_keys[1:]:
+                # Refilling closes the menu if it is open, so only on a change.
+                self.source_filter.clear()
+                self.source_filter.addItem("All sources")
+                for key in keys:
+                    self.source_filter.addItem(source_choice_label(key))
+                self._source_keys = [None] + keys
+            self.source_filter.setCurrentIndex(self._source_keys.index(self.filter.source))
+
+    def _show_filter(self, capture_filter):
+        """Show capture_filter's search text and status, without applying
+        it; _fill_source_filter shows its source."""
+        self.filter = capture_filter
+        with QSignalBlocker(self.search), QSignalBlocker(self.status_filter):
+            if self.search.text() != capture_filter.query:
+                self.search.setText(capture_filter.query)
+            self.status_filter.setCurrentIndex(list(STATUS_FILTERS).index(capture_filter.status))
+
+    def _filters_changed(self, *_):
+        index = self.source_filter.currentIndex()
+        old, self.filter = self.filter, CaptureFilter(
+            self.search.text(),
+            self._source_keys[index] if 0 <= index < len(self._source_keys) else None,
+            self.status_filter.currentData() or "all")
+        # A space typed between words, say, changes nothing that is shown.
+        if (old.words, old.source, old.status) != (self.filter.words, self.filter.source,
+                                                   self.filter.status):
+            self._apply_filter()
+
+    def _apply_filter(self):
+        old = self.selected()
+        details = self.details.verticalScrollBar().value()
+        self._populate(old["id"] if old else None)
+        # A capture the filters hide stops being the target, and showing it
+        # again does not highlight it again.
+        if old is not None and self.selected() is not None:
+            self._keep_scroll(old["id"], None, details)
+        else:
+            self.entries.scrollToTop()
+
+    def _clear_filters(self):
+        self._show_filter(CaptureFilter())
+        self._fill_source_filter()
+        self._apply_filter()
+        self.search.setFocus(Qt.OtherFocusReason)
+
+    def _report_hidden(self, dialog):
+        """Say so when a capture just saved here is hidden by the filters."""
+        saved = dialog.saved
+        if saved is None or saved["id"] not in self.items:
+            return
+        shown = any(self.entries.item(row).data(Qt.UserRole) == saved["id"]
+                    for row in range(self.entries.count()))
+        if not shown:
+            self.ctx.log.emit("Capture saved. The current search or filters hide it; "
+                              "Clear filters shows it.")
 
     def _selected(self, *_):
         item = self.selected()
@@ -312,12 +513,16 @@ class LearningComponent(BaseComponent):
 
     def capture(self):
         if self.module:
-            CaptureDialog(self.ctx, self.module, parent=self).exec()
+            dialog = CaptureDialog(self.ctx, self.module, parent=self)
+            dialog.exec()
+            self._report_hidden(dialog)
 
     def edit(self, *_):
         item = self.selected()
         if item:
-            CaptureDialog(self.ctx, self.module, item=item, parent=self).exec()
+            dialog = CaptureDialog(self.ctx, self.module, item=item, parent=self)
+            dialog.exec()
+            self._report_hidden(dialog)
 
     def open_source(self):
         item = self.selected()

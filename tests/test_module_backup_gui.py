@@ -197,6 +197,63 @@ def test_cancel_in_the_progress_dialog_leaves_nothing(window, tmp_path, monkeypa
         not d.isVisible() for d in window.findChildren(QProgressDialog))
 
 
+def test_cancel_stops_a_restore_of_several_backups(window, tmp_path, monkeypatch):
+    from vocab.gui import backup_actions
+    names = ["First", "Second", "Third"]
+    archives = [tmp_path / f"{name}.zip" for name in names]
+    for name, archive in zip(names, archives):
+        window.app.cmd_create(name)
+        window.app.cmd_backup(name, str(archive))
+        window.app.storage.delete(name)
+    dialogs = Dialogs(monkeypatch)
+    dialogs.answers["getOpenFileNames"] = ([str(a) for a in archives], "")
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a: pytest.fail("no name is taken"))
+    logged = []
+    window.ctx.log.connect(logged.append)
+    real = backup_actions.ProgressCallback.__call__
+    labels = []
+
+    def cancel_when(test):
+        def press_cancel(self, done, total, label=""):
+            labels.append(label)
+            real(self, done, total, label)
+            if test(done, total, label):
+                self.dialog.cancel()  # what the Cancel button does
+        monkeypatch.setattr(backup_actions.ProgressCallback, "__call__", press_cancel)
+
+    # Cancel while the second backup is restored: the third is not restored.
+    cancel_when(lambda done, total, label: label == "Restoring 'Second'")
+    window.restore_action.trigger()
+    assert logged[0].startswith(f"Restored module 'First' from {archives[0]} (")
+    assert logged[1:] == ["Restore cancelled; nothing was restored.",
+                          "Cancelled after restoring 1 of 3 backups: First.zip. Not restored: "
+                          "Second.zip, Third.zip."]
+    assert "Restoring 'Third'" not in labels
+    assert window.app.storage.list_names() == ["Book", "First"]
+    assert "First" in listed(window)
+    # Cancel pressed after the second's last step: it is complete, the third
+    # still is not restored.
+    window.app.storage.delete("First")
+    logged.clear()
+    labels.clear()
+    cancel_when(lambda done, total, label: label == "Restoring 'Second'" and done == total)
+    window.restore_action.trigger()
+    assert [line.split(" from ")[0] for line in logged[:2]] == [
+        "Restored module 'First'", "Restored module 'Second'"]
+    assert logged[2:] == ["Cancelled after restoring 2 of 3 backups: First.zip, Second.zip. "
+                          "Not restored: Third.zip."]
+    assert "Restoring 'Third'" not in labels
+    assert window.app.storage.list_names() == ["Book", "First", "Second"]
+    # Cancel with one backup left says nothing more than that restore's reply.
+    window.app.storage.delete("Second")
+    logged.clear()
+    dialogs.answers["getOpenFileNames"] = ([str(archives[1])], "")
+    cancel_when(lambda done, total, label: True)
+    window.restore_action.trigger()
+    assert logged == ["Restore cancelled; nothing was restored."]
+    assert window.app.storage.list_names() == ["Book", "First"]
+
+
 def test_console_backup_restore_and_folder_by_typed_keys(window, tmp_path, monkeypatch, capsys,
                                                          documents_folder, qt):
     archive = documents_folder / f"Book {DATE}.zip"

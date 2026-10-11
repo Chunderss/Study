@@ -28,7 +28,8 @@ FILTER = "Vocab Study backup (*.zip)"
 class ProgressCallback:
     """progress(done, total, label) for the core, shown in one modal
     QProgressDialog created on first use. Cancel raises backup.Cancelled
-    from the next call."""
+    from the next call. ``cancelled`` stays true once Cancel was pressed,
+    even when the work had already passed its last progress call."""
 
     MIN_DURATION = 500  # ms before the dialog appears; quick operations show none
 
@@ -36,6 +37,7 @@ class ProgressCallback:
         self.parent = parent
         self.title = title
         self.dialog = None
+        self.cancelled = False
 
     def __call__(self, done, total, label=""):
         if self.dialog is None:
@@ -53,10 +55,13 @@ class ProgressCallback:
             self.dialog.setMaximum(maximum)
         self.dialog.setValue(min(maximum, done // 1024))  # processes events while modal
         if self.dialog.wasCanceled():
+            self.cancelled = True
             raise Cancelled()
 
     def close(self):
         if self.dialog is not None:
+            if self.dialog.wasCanceled():  # reset() forgets it
+                self.cancelled = True
             self.dialog.reset()
             self.dialog.close()
             self.dialog.deleteLater()
@@ -106,10 +111,10 @@ def _start_folder(window) -> Path:
         return Path.home()
 
 
-def _run(window, title, work):
-    """Run work(progress) under a progress dialog; log its reply or error.
-    Returns the reply, or None after an error."""
-    progress = progress_callback(window, title)
+def _run(window, title, work, progress=None):
+    """Run work(progress) under a progress dialog (``progress``, or a new
+    one); log its reply or error. Returns the reply, or None after an error."""
+    progress = progress or progress_callback(window, title)
     try:
         message = work(progress)
     except Exception as error:
@@ -194,12 +199,15 @@ def _suggestion(app, name) -> str:
 
 def restore(window) -> None:
     """Restore one or more backups, each as a new module; a name that is
-    taken asks for another. The current module stays selected."""
+    taken asks for another, and cancelling that question skips the backup.
+    Cancel in the progress dialog stops the whole batch: the backups after
+    it are not restored, and the message says which were. The current module
+    stays selected."""
     app, ctx = window.app, window.ctx
     paths, _ = QFileDialog.getOpenFileNames(window, "Restore modules from backups",
                                             str(_start_folder(window)),
                                             f"{FILTER};;All files (*)")
-    restored = 0
+    restored = []
     for path in paths:
         try:
             full, info = app.backup_info(path)
@@ -224,12 +232,27 @@ def restore(window) -> None:
                 ctx.log.emit(f"Skipped {full}; nothing was restored.")
                 continue
             new_name = text.strip()
+        progress = progress_callback(window, "Restoring a module")
         reply = _run(window, "Restoring a module",
-                     lambda progress: app.cmd_restore(str(full), new_name, progress=progress))
+                     lambda progress: app.cmd_restore(str(full), new_name, progress=progress),
+                     progress)
         if reply and reply.startswith("Restored module"):
-            restored += 1
+            restored.append(path)
+        if progress.cancelled:
+            if len(paths) > 1 and len(restored) < len(paths):
+                ctx.log.emit(_cancelled_batch(paths, restored))
+            break
     if restored:
         ctx.changed.emit()
+
+
+def _cancelled_batch(paths, restored) -> str:
+    """The message after Cancel stopped a restore of several backups."""
+    if not restored:
+        return f"Cancelled; none of the {len(paths)} backups was restored."
+    left = [Path(p).name for p in paths if p not in restored]
+    return (f"Cancelled after restoring {len(restored)} of {len(paths)} backups: "
+            f"{', '.join(Path(p).name for p in restored)}. Not restored: {', '.join(left)}.")
 
 
 def choose_files_folder(window) -> None:

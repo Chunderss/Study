@@ -144,3 +144,120 @@ app.processEvents()
                             cwd=Path(__file__).resolve().parents[1], env=env,
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_legacy_quotes_match_rendered_text_without_conflating_words():
+    script = r'''
+import json
+from PySide6.QtCore import QEvent
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from vocab.gui.epub_highlights import render_highlights_js
+
+app = QApplication([])
+web = QWebEngineView()
+web.resize(850, 900)
+web.show()
+loaded = []
+web.loadFinished.connect(loaded.append)
+image = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'/%3E"
+web.setHtml("""<html><head><title>Legacy</title></head><body>
+<p id="wrapped">The quick brown
+   fox jumps over</p>
+<p id="nbsp">Ten&nbsp;kilometres and two&nbsp;&nbsp;spaces</p>
+<div id="paragraphs"><p>End of one paragraph.</p>
+<p>Start of the next.</p></div>
+<p id="br">First line<br/>second line</p>
+<table id="cells"><tr><td>Cell one</td><td>cell two</td></tr></table>
+<ul id="list"><li>Item one</li><li>item two</li></ul>
+<p id="ruby"><ruby>漢<rt>kan</rt></ruby>字 reading</p>
+<p id="emoji">Smile 😀&nbsp;now</p>
+<p id="drop"><span style="float:left;font-size:3em">T</span>he drop cap opening line.</p>
+<p id="image">picture<img src="IMAGE" style="display:block;width:10px;height:10px" alt="">caption</p>
+<div id="rule">Above the rule<hr/>below the rule</div>
+<p id="nowhere">It was nowhere to be found.</p>
+<div id="split"><p>some</p><p>where</p></div>
+<p id="once">Repeated twice here.</p>
+<p id="twice">Repeated
+   twice here.</p>
+<p hidden>Only hidden text here.</p>
+</body></html>""".replace("IMAGE", image))
+
+def wait_for(check):
+    for _ in range(500):
+        if check(): return
+        QTest.qWait(20)
+    raise AssertionError("Chromium callback did not finish")
+
+def js(code):
+    results = []
+    web.page().runJavaScript(code, results.append)
+    wait_for(lambda: bool(results))
+    return results[0]
+
+def legacy_quote(element_id):
+    """What older versions saved: the reader's selected text, trimmed."""
+    js("""(() => { const range = document.createRange();
+        range.selectNodeContents(document.getElementById(%s));
+        getSelection().removeAllRanges(); getSelection().addRange(range); return true; })()"""
+       % json.dumps(element_id))
+    wait_for(lambda: web.selectedText().strip() != "")
+    quote = web.selectedText().strip()
+    js("getSelection().removeAllRanges(); true;")
+    wait_for(lambda: web.selectedText() == "")
+    return quote
+
+wait_for(lambda: True in loaded)
+QTest.qWait(100)
+resolvable = ["wrapped", "nbsp", "paragraphs", "br", "cells", "list", "ruby", "emoji", "drop",
+              "image", "rule"]
+quotes = {element_id: legacy_quote(element_id) for element_id in resolvable}
+# The rendered text differs from the raw text nodes the anchors index.
+assert quotes["wrapped"] == "The quick brown fox jumps over"
+assert quotes["nbsp"] == "Ten kilometres and two  spaces"
+assert "\n" in quotes["paragraphs"] and "\n" in quotes["br"] and "\t" in quotes["cells"]
+assert "￼" in quotes["image"]
+records = [{"id": element_id, "anchor": {"exact": quote}} for element_id, quote in quotes.items()]
+records += [
+    {"id": "joined words", "anchor": {"exact": "was now here to"}},
+    {"id": "split word", "anchor": {"exact": "somewhere"}},
+    {"id": "repeated", "anchor": {"exact": legacy_quote("twice")}},
+    {"id": "hidden", "anchor": {"exact": "Only hidden text here."}},
+    # Anchored captures keep exact raw matching.
+    {"id": "anchored", "anchor": {"version": 1, "exact": "The quick brown fox jumps over",
+                                  "prefix": "\n", "suffix": "\n", "start": 1, "end": 31}},
+]
+js("""window.textScans = 0; const createWalker = document.createTreeWalker.bind(document);
+document.createTreeWalker = (...args) => { ++window.textScans; return createWalker(...args); }; true;""")
+report = json.loads(js(render_highlights_js(records, focus_id="paragraphs")))
+assert report["rendered"] == resolvable, report
+assert report["unresolved"] == ["joined words", "split word", "repeated", "hidden", "anchored"], report
+assert report["focused"]
+assert js("window.textScans") == 1
+highlights = json.loads(js("""JSON.stringify([...CSS.highlights.get('vocab-study-saved')].map(range => ({
+    text: range.toString(),
+    start: range.startContainer.parentElement.closest('[id]').id,
+    end: range.endContainer.parentElement.closest('[id]').id})))"""))
+assert len(highlights) == len(resolvable)
+for element_id, highlight in zip(resolvable, highlights):
+    # Each covers the whole passage in the original DOM text, line breaks included.
+    assert highlight["start"] == highlight["end"] == element_id, (element_id, highlight)
+    whole = js("document.getElementById(%s).textContent" % json.dumps(element_id))
+    assert highlight["text"].split() == whole.split(), (element_id, highlight, whole)
+assert highlights[0]["text"] == "The quick brown\n   fox jumps over"
+assert highlights[1]["text"] == "Ten kilometres and two  spaces"
+web.close()
+web.deleteLater()
+app.sendPostedEvents(None, QEvent.DeferredDelete)
+app.processEvents()
+'''
+    env = dict(os.environ)
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if sys.platform == "win32":
+        env["QT_QPA_PLATFORM"] = "windows"
+    env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
+    result = subprocess.run([sys.executable, "-c", script],
+                            cwd=Path(__file__).resolve().parents[1], env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr

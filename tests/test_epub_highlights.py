@@ -289,3 +289,49 @@ for _ in range(20):
 assert reopened._pending_scroll is None
 assert reopened._pending_highlight is None
 ''')
+
+
+def test_legacy_capture_across_paragraphs_rehighlights_and_falls_back_when_ambiguous(tmp_path):
+    run_browser(tmp_path, '''
+viewer = open_viewer()
+# Older versions saved the reader's selected text and no anchor.
+js(viewer, """(() => {
+    const range = document.createRange();
+    range.setStart(document.getElementById('legacy').firstChild, 0);
+    range.setEnd(document.getElementById('footnote').firstChild, 'Unique footnote.'.length);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+    return true;
+})()""")
+wait_for(lambda: viewer._web.selectedText().startswith("Unique legacy"))
+across = viewer._web.selectedText().strip()
+assert across == "Unique legacy sentence.\\n\\nUnique footnote.", repr(across)
+js(viewer, "getSelection().removeAllRanges(); true;")
+legacy = {"kind": "epub", "filename": "book.epub", "chapter": 0, "scroll": 0.3}
+item = save_capture("Book", across, legacy)
+expect_marks(viewer, [("legacy", "Unique legacy sentence.Unique footnote.")])
+
+# Source finds the passage instead of the saved position.
+reopened = open_viewer(source=dict(legacy, scroll=0.95, capture_id=item["id"], quote=across))
+def focused_passage():
+    return js(reopened, """(() => {
+        const ranges = Array.from(CSS.highlights.get('vocab-study-active') || []);
+        if (ranges.length !== 1) return false;
+        const rect = ranges[0].getBoundingClientRect();
+        return ranges[0].startContainer.parentElement.id === 'legacy' &&
+            rect.top >= 0 && rect.bottom <= innerHeight;
+    })()""")
+wait_for(focused_passage)
+assert reopened._pending_scroll is None and reopened._pending_highlight is None
+
+# A passage that appears more than once stays unhighlighted, and Source
+# opens at the saved position.
+repeated = "More reading text.\\n\\nMore reading text."
+item = save_capture("Book", repeated, dict(legacy, scroll=0.6))
+expect_marks(viewer, [("legacy", "Unique legacy sentence.Unique footnote.")])
+fallback = open_viewer(source=dict(legacy, scroll=0.6, capture_id=item["id"], quote=repeated))
+wait_for(lambda: fallback._pending_scroll is None and fallback._pending_highlight is None)
+position = json.loads(js(fallback, """JSON.stringify({y: scrollY,
+    height: (document.scrollingElement || document.documentElement).scrollHeight})"""))
+assert abs(position["y"] - 0.6 * position["height"]) <= 2, position
+assert js(fallback, "CSS.highlights.get('vocab-study-active').size") == 0
+''')

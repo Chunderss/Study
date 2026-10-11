@@ -78,6 +78,100 @@ function selectedAnchor(index) {
     };
 }
 
+// Captures made before anchors were saved hold only the reader's selected
+// text. The browser wrote it as rendered: whitespace runs (line breaks, nbsp)
+// as one space or line break, a line break or tab between blocks, table cells
+// and at <br>/<hr>, and U+FFFC for an image. renderedText() rebuilds that text
+// from the indexed text nodes, with every gap as one space, and maps it back
+// to raw offsets. Missing whitespace stays missing: "now here" never matches
+// "nowhere", nor "nowhere" a "now" and a "here" in two paragraphs.
+function renderedText(index) {
+    if (index.rendered) return index.rendered;
+    // The block box around a text: the nearest ancestor that is not laid out
+    // inline. A floated drop cap stays inside its paragraph's line, as in the
+    // browser's selection text, so floats count as inline.
+    const blocks = new Map();
+    const blockOf = element => {
+        const path = [];
+        let block = element;
+        while (block && block !== document.body && !blocks.has(block)) {
+            const style = getComputedStyle(block);
+            if (!/^(inline|contents|ruby)/.test(style.display) && style.float === 'none') break;
+            path.push(block);
+            block = block.parentElement;
+        }
+        if (blocks.has(block)) block = blocks.get(block);
+        for (const element of path) blocks.set(element, block);
+        blocks.set(block, block);
+        return block;
+    };
+    const separated = new Set();
+    let previous = null;
+    index.entries.forEach((entry, i) => {
+        const block = blockOf(entry.node.parentElement);
+        if (i > 0 && block !== previous) separated.add(i);
+        previous = block;
+    });
+    // A <br> or <hr> separates the first indexed text after it. Walk forward
+    // in document order, remembering each node's answer for later breaks.
+    const position = new Map(index.entries.map((entry, i) => [entry.node, i]));
+    const after = new Map();
+    for (const rule of document.body.querySelectorAll('br, hr')) {
+        const visited = [];
+        let node = rule, found = -1;
+        while (node) {
+            if (position.has(node)) { found = position.get(node); break; }
+            if (after.has(node)) { found = after.get(node); break; }
+            visited.push(node);
+            if (node !== rule && node.firstChild) { node = node.firstChild; continue; }
+            while (node && !node.nextSibling) node = node.parentNode;
+            node = node && node.nextSibling;
+        }
+        for (const node of visited) after.set(node, found);
+        if (found > 0) separated.add(found);
+    }
+    const parts = [], segments = [];
+    let length = 0, space = false;
+    index.entries.forEach((entry, i) => {
+        if (separated.has(i)) space = true;
+        const words = /\S+/g;
+        let match;
+        while ((match = words.exec(entry.node.data))) {
+            if (match.index > 0) space = true;
+            if (space && length) { parts.push(' '); ++length; }
+            segments.push({at: length, raw: entry.start + match.index});
+            parts.push(match[0]);
+            length += match[0].length;
+            space = false;
+        }
+        if (/\s$/.test(entry.node.data)) space = true;
+    });
+    return index.rendered = {text: parts.join(''), segments};
+}
+
+// The raw offset of a rendered position, which is never a gap's space.
+function rawOffset(rendered, at) {
+    const segments = rendered.segments;
+    let low = 0, high = segments.length - 1;
+    while (low < high) {
+        const middle = (low + high + 1) >> 1;
+        if (segments[middle].at <= at) low = middle; else high = middle - 1;
+    }
+    return segments[low].raw + at - segments[low].at;
+}
+
+// A legacy quote that appears exactly once in the rendered text.
+function renderedMatch(index, exact) {
+    const quote = exact.replace(/\uFFFC/g, '').replace(/\s+/g, ' ').trim();
+    if (!quote) return null;
+    const rendered = renderedText(index);
+    const first = rendered.text.indexOf(quote);
+    if (first === -1 || rendered.text.indexOf(quote, first + 1) !== -1) return null;
+    // Both ends are non-space characters, inside a text node's word.
+    return {start: rawOffset(rendered, first),
+            end: rawOffset(rendered, first + quote.length - 1) + 1};
+}
+
 function resolveAnchor(index, anchor) {
     if (!anchor || (anchor.version !== undefined && anchor.version !== 1) ||
         typeof anchor.exact !== 'string' || !anchor.exact.length) return null;
@@ -92,6 +186,8 @@ function resolveAnchor(index, anchor) {
                         anchor.start >= 0 && anchor.end - anchor.start === exact.length;
     if (knownOffset && text.slice(anchor.start, anchor.end) === exact &&
         contextMatches(anchor.start)) return {start: anchor.start, end: anchor.end};
+    // Without context or offsets, `exact` is a legacy capture's rendered text.
+    if (!hasContext && !knownOffset) return renderedMatch(index, exact);
     const matches = [];
     let position = text.indexOf(exact);
     while (position !== -1) {
@@ -105,7 +201,6 @@ function resolveAnchor(index, anchor) {
     const contextual = matches.filter(contextMatches);
     if (contextual.length === 1)
         return {start: contextual[0], end: contextual[0] + exact.length};
-    // Exact-only legacy captures with repeated text are deliberately unresolved.
     return null;
 }
 
@@ -198,8 +293,9 @@ SELECTION_ANCHOR_JS = "(() => {\n" + _HELPERS + r"""
 def render_highlights_js(records, active_id=None, focus_id=None):
     """Build a script for ``[{id, anchor}]``; return a JSON rendering report.
 
-    ``anchor={'exact': quote}`` supports unambiguous legacy captures. Full
-    anchors also disambiguate repeated text. ``focus_id`` scrolls to a resolved
+    ``anchor={'exact': quote}`` supports legacy captures: the quote is found
+    in the rendered text, gaps counted as one space, only if it occurs once.
+    Full anchors also disambiguate repeated text. ``focus_id`` scrolls to a resolved
     passage; the report's ``focused`` flag tells the reader whether that worked.
     """
     payload = json.dumps({"records": records, "activeId": active_id, "focusId": focus_id})

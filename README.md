@@ -77,10 +77,12 @@ opened. Messages are kept in memory only, until the app closes.
    the schedule unchanged and asks before discarding an explanation. Starting a
    review clears the highlight, so no passage is shown while you recall.
 5. Select a capture and click **Source** to return to its PDF page or highlighted
-   EPUB passage. Older captures fall back to their saved position when the passage
-   cannot be matched. Click **‹ Learning** to return to the same capture and list
-   position. Links stay attached to the original module; if it was removed outside
-   the app, the reader stays open and **View → Documents** leaves it.
+   EPUB passage. Captures made by older versions are found by their text, ignoring
+   differences in line breaks, spacing and paragraph breaks; if that text appears
+   more than once in the chapter, or not at all, they are not highlighted and Source
+   opens at their saved position. Click **‹ Learning** to return to the same capture
+   and list position. Links stay attached to the original module; if it was removed
+   outside the app, the reader stays open and **View → Documents** leaves it.
 
 Concept reviews are separate from vocabulary Study/Study All. Captures, explanations,
 and review history are stored locally. This workflow requires no AI or network access.

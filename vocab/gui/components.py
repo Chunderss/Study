@@ -510,10 +510,28 @@ class ConsoleComponent(BaseComponent):
                 target = " ".join(cmd.args) if cmd.args else self.app.current_module
                 self.ctx.study_requested.emit([target] if target else [])
             return
+        from . import backup_actions
+        # Like the menu, warn that a backup holds the saved versions of notes
+        # with unsaved changes. A command with a usage problem reports it.
+        backs_up = ((cmd.verb == "BACKUP" and 1 <= len(cmd.args) <= 2)
+                    or (cmd.verb == "BACKUPALL" and len(cmd.args) <= 1))
+        if backs_up and cmd.body is None:
+            modules = None  # BACKUPALL: every module
+            if cmd.verb == "BACKUP":
+                try:
+                    modules = [self.app.storage.canonical_name(cmd.args[0])]
+                except Exception:
+                    modules = []  # the command itself reports the problem
+            if modules != [] and not backup_actions.confirm_unsaved(self, self.ctx, modules):
+                self.log("Cancelled; nothing was written.")
+                return
         repl = Repl(self.app)
         repl._confirm = lambda text: QMessageBox.question(
             self, "Confirm", text, QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No) == QMessageBox.Yes
+        # BACKUP, BACKUPALL and RESTORE report progress in a dialog with a
+        # Cancel button, never on stdout.
+        repl.progress = backup_actions.progress_callback(self)
         previous_module = self.app.current_module
         try:
             deleted = deleted_note = None
@@ -552,6 +570,8 @@ class ConsoleComponent(BaseComponent):
             self.log("(QUIT ignored in the app — just close the window)")
         except Exception as e:
             self.log(f"! {e}")
+        finally:
+            repl.progress.close()
         if previous_module != self.app.current_module:
             self.ctx.module_changed.emit(self.app.current_module or "")
         self.ctx.changed.emit()

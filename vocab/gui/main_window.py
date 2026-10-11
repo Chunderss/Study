@@ -113,6 +113,17 @@ class MainWindow(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         menu = QMenuBar(self)
         outer.addWidget(menu)
+        from . import backup_actions
+        modules_menu = menu.addMenu("Modules")
+        self.backup_action = modules_menu.addAction(
+            "Back up current module…", lambda: backup_actions.back_up_current(self))
+        self.backup_all_action = modules_menu.addAction(
+            "Back up all modules…", lambda: backup_actions.back_up_all(self))
+        self.restore_action = modules_menu.addAction(
+            "Restore from backup…", lambda: backup_actions.restore(self))
+        modules_menu.addSeparator()
+        self.files_folder_action = modules_menu.addAction(
+            "Folder for files…", lambda: backup_actions.choose_files_folder(self))
         notes_menu = menu.addMenu("Notes")
         save_action = notes_menu.addAction("Save focused note", self._save_focused_note)
         save_action.setShortcut("Ctrl+S")

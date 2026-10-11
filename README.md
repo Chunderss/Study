@@ -278,6 +278,16 @@ These vocabulary exports do not include captures or notes; a module backup does.
 
 ### Back up and restore modules
 
+In the desktop app, the **Modules** menu has **Back up current module…** (a Save
+dialog that starts at the dated name in the folder for files), **Back up all
+modules…** (choose the folder that gets the new dated folder), **Restore from
+backup…** (choose one or more backup files; when a module name is taken it asks for
+another, suggesting "Name (restored)"), and **Folder for files…**. Backing up asks first
+when an open note has unsaved changes, since the backup holds the saved version. A
+progress window with a **Cancel** button appears for longer operations; Cancel leaves
+nothing behind. The message line shows the result, and **View → Console** lists every
+message. The same commands typed in the Console behave the same way.
+
 `BACKUP <module> [<file.zip> | <folder>]`, in the terminal or the Console, writes one ZIP
 archive with everything the module holds: its words and study progress, notes, documents,
 Learning captures (with their source links, EPUB highlights and review attempts) and

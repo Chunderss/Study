@@ -8,8 +8,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QListWidget, QListWidgetItem, QMessageBox,
                                QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
 
-from ..core.learning import (STATUS_FILTERS, CaptureFilter, LearningStore, search_fields,
-                             source_choice_label, source_choices, source_label)
+from ..core.learning import (SEARCHED_FIELDS, STATUS_FILTERS, CaptureFilter, LearningStore,
+                             search_fields, source_choice_label, source_choices, source_label)
 from .components import BaseComponent
 
 
@@ -203,7 +203,7 @@ class LearningComponent(BaseComponent):
         self.filter = CaptureFilter()
         self._source_keys = [None]   # source_filter index -> source_choices key
         self._counts = (0, 0)        # concepts due, open questions
-        self._fields = {}            # capture id -> (revision, search_fields)
+        self._fields = {}            # capture id -> (its SEARCHED_FIELDS, search_fields)
         self._problem = None         # why nothing is listed: no module, an unreadable file
         self.ctx.learning_changed.connect(self.refresh)
         layout = QVBoxLayout(self)
@@ -339,6 +339,7 @@ class LearningComponent(BaseComponent):
         same_module = self.module is not None and self.module == self.app.current_module
         if not same_module:
             self._show_filter(CaptureFilter())  # another module starts unfiltered
+            self._fields = {}
         old_id = old["id"] if old and same_module else None
         scroll = (self.entries.verticalScrollBar().value(),
                   self.details.verticalScrollBar().value()) if same_module else None
@@ -416,9 +417,14 @@ class LearningComponent(BaseComponent):
         self._show_summary()
 
     def _search_fields(self, item):
+        """search_fields(item), folded again only when the capture's text
+        changed. The text is compared, not the revision: a module restored
+        from a backup, or a learning.json put back from elsewhere, has the
+        same capture ids and revisions as another copy, with other text."""
+        text = tuple(item[field] for field in SEARCHED_FIELDS)
         cached = self._fields.get(item["id"])
-        if cached is None or cached[0] != item["revision"]:
-            cached = self._fields[item["id"]] = (item["revision"], search_fields(item))
+        if cached is None or cached[0] != text:
+            cached = self._fields[item["id"]] = (text, search_fields(item))
         return cached[1]
 
     def _show_summary(self):

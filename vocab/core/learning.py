@@ -37,10 +37,14 @@ def search_text(text):
     return text if text.isascii() else drop_latin_accents(text)
 
 
+#: The capture fields a search looks in: the question, the passage and the notes.
+SEARCHED_FIELDS = ("prompt", "quote", "explanation")
+
+
 def search_fields(item):
-    """The capture text a search looks in: the question, the passage and the
-    notes, folded by search_text. Earlier review answers are not searched."""
-    return tuple(search_text(item[field]) for field in ("prompt", "quote", "explanation"))
+    """The capture text a search looks in, SEARCHED_FIELDS folded by
+    search_text. Earlier review answers are not searched."""
+    return tuple(search_text(item[field]) for field in SEARCHED_FIELDS)
 
 
 def _whole(value):

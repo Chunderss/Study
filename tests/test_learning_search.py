@@ -408,3 +408,37 @@ def test_a_restored_pane_keeps_saying_why_nothing_is_listed(window, qt, tmp_path
         reopened.close()
         reopened.deleteLater()
         qt.processEvents()
+
+
+def test_search_reads_each_modules_own_text_when_capture_ids_match(window, tmp_path):
+    store = LearningStore(window.app.storage)
+    item = store.save_capture("Book", kind="concept", prompt="Original prompt", quote="A passage.")
+    archive = str(tmp_path / "book.zip")
+    window.app.cmd_backup("Book", archive)
+    window.app.cmd_restore(archive, "Copy")     # the same capture ids and revisions
+    copy = store.load("Copy")[item["id"]]
+    assert copy["revision"] == item["revision"]
+    store.save_capture("Book", kind="concept", prompt="alpha topic", quote="A passage.",
+                       item_id=item["id"], revision=item["revision"])
+    store.save_capture("Copy", kind="concept", prompt="beta topic", quote="A passage.",
+                       item_id=item["id"], revision=copy["revision"])
+    window.ctx.module_changed.emit("Book")
+    window.workspace.set_focused_component("learning")
+    pane = window.workspace.focused.component
+    found = {}
+    for module in ("Book", "Copy", "Book"):
+        window.app.cmd_use(module)
+        window.ctx.module_changed.emit(module)
+        for word in ("alpha", "beta"):
+            pane.search.setText(word)
+            found[module, word] = shown(pane)
+    assert found == {("Book", "alpha"): ["alpha topic"], ("Book", "beta"): [],
+                     ("Copy", "alpha"): [], ("Copy", "beta"): ["beta topic"]}
+    # learning.json replaced from elsewhere (a sync, a copy put back) with
+    # other text at the same revision.
+    path = window.app.paths.module_dir("Book") / "learning.json"
+    path.write_bytes((window.app.paths.module_dir("Copy") / "learning.json").read_bytes())
+    window.ctx.learning_changed.emit()
+    assert pane.search.text() == "beta" and shown(pane) == ["beta topic"]
+    pane.search.setText("alpha")
+    assert shown(pane) == []

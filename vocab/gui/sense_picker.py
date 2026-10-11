@@ -2,9 +2,10 @@
 
 A small panel over the workspace, like the help panel: it never opens a
 dialog, never resizes a pane, and appears after a lookup without taking
-keyboard focus. Ctrl+B w moves into it; Enter studies only the highlighted
-sense, Space checks several for Study checked, and Esc closes it, returning
-focus to where it was.
+keyboard focus. Ctrl+B w moves into it with the first studied sense
+highlighted, where Enter keeps every sense the word studies; once the user
+moves the highlight, Enter studies only the highlighted sense. Space checks
+several for Study checked, and Esc closes it, returning focus to where it was.
 
 Every change goes through App.choose_senses, the path SENSE uses in the
 terminal, so a choice made from senses that changed since they were shown
@@ -60,6 +61,7 @@ class SensePicker(QFrame):
         self._listing = None      # its SenseListing, or None
         self._more_token = None   # the All senses lookup still wanted
         self._return_to = None    # where Esc puts keyboard focus back
+        self._opened_row = None   # the row focus_list highlighted, until the user moves
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
@@ -81,6 +83,9 @@ class SensePicker(QFrame):
         root.addWidget(self.context)
         self.list = _SenseList(self)
         self.list.itemDoubleClicked.connect(lambda _item: self.use_current())
+        # A highlight the user moved or clicked is the user's pick.
+        self.list.currentRowChanged.connect(self._forget_opened_row)
+        self.list.itemPressed.connect(self._forget_opened_row)
         root.addWidget(self.list, 1)
         self.status = QLabel("")
         self.status.setTextFormat(Qt.PlainText)
@@ -100,7 +105,7 @@ class SensePicker(QFrame):
             buttons.addWidget(button)
         buttons.addStretch(1)
         root.addLayout(buttons)
-        self.hint = QLabel("Enter: study only the highlighted sense · Space: check several · "
+        self.hint = QLabel("Enter: study only the sense you highlight · Space: check several · "
                            "Esc: close", objectName="Muted")
         self.hint.setWordWrap(True)
         root.addWidget(self.hint)
@@ -240,13 +245,23 @@ class SensePicker(QFrame):
                           "current list.")
 
     # ---- actions ----------------------------------------------------------
+    def _forget_opened_row(self, *_args) -> None:
+        self._opened_row = None
+
     def use_current(self) -> None:
+        """Enter: study only the highlighted sense. On the row the picker
+        highlighted when it opened, before the user moved, keep every sense
+        the word studies instead, so opening and pressing Enter never drops
+        one of several (with one, it confirms the sense as chosen by you)."""
         listing = self._listing
         if listing is None or listing.manual:
             return
         item = self.list.currentItem()
         if item is None or not item.flags() & Qt.ItemIsSelectable:
             self.status.setText("Highlight a sense with the arrow keys, then press Enter.")
+            return
+        if self._opened_row is not None and self.list.currentRow() == self._opened_row:
+            self._choose(list(range(listing.kept)))
             return
         self._choose([item.data(Qt.UserRole)])
 
@@ -294,7 +309,7 @@ class SensePicker(QFrame):
                 current.module, current.key, current.expected):
             return  # the word changed meanwhile; its list was reloaded
         listing = current.with_extra(result.extra, result.note)
-        row, restart = self.list.currentRow(), self.restart.isChecked()
+        row, restart, opened = self.list.currentRow(), self.restart.isChecked(), self._opened_row
         checks = [self.list.item(i).checkState() for i in range(self.list.count())]
         self._listing = listing
         count = len(listing.extra)
@@ -305,6 +320,7 @@ class SensePicker(QFrame):
             if self.list.item(i).flags() & Qt.ItemIsUserCheckable:
                 self.list.item(i).setCheckState(state)
         self.list.setCurrentRow(row)
+        self._opened_row = opened
         self.restart.setChecked(restart)
 
     # ---- focus and placement ---------------------------------------------
@@ -314,7 +330,10 @@ class SensePicker(QFrame):
             self._return_to = focus
         self.raise_()
         if self.list.currentRow() < 0 and self._listing is not None and not self._listing.manual:
-            self.list.setCurrentRow(0)  # the studied sense: Enter keeps it
+            # The first studied sense, for the arrow keys to start from. Enter
+            # there keeps every studied sense, not only this one (use_current).
+            self.list.setCurrentRow(0)
+            self._opened_row = 0
         self.list.setFocus(Qt.ShortcutFocusReason)
 
     def hide_and_return(self) -> None:

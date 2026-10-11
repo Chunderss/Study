@@ -193,8 +193,11 @@ from anywhere (before Esc does anything else), and Ctrl+B `w` moves into it, or 
 it for the last word looked up. Each word in the Vocab list is a link to its senses, the
 senses it studies are listed under it, and the list keeps its place when it updates. The
 picker shows the module and dictionary, whether the first sense was chosen automatically
-or by you, and the sentence. Enter (or a double click) studies only the highlighted
-sense at once; Space checks several and **Study checked** studies those, in list order.
+or by you, and the sentence. Moving into it highlights the first studied sense, and
+Enter there keeps every sense the word studies, marking them as chosen by you. Once you
+move the highlight or click a sense, Enter (or a double click) studies only the
+highlighted sense at once; Space checks several and **Study checked** studies those, in
+list order.
 Either keeps the word's progress unless you tick **Start its reviews over** first (it
 unticks itself after each choice); choosing again undoes the choice. **All senses**
 looks up the dictionary's other senses in the background; one is saved only if you

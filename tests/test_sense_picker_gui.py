@@ -464,6 +464,53 @@ def test_space_checks_several_and_the_button_keeps_them(window, qt, monkeypatch,
     assert definitions(window, "flag")[0] == "become less intense"
 
 
+def click_word(vocab, word):
+    rect = vocab.words.cursorRect(vocab.words.document().find(word))
+    QTest.mouseClick(vocab.words.viewport(), Qt.LeftButton, pos=rect.center() - QPoint(8, 0))
+
+
+def test_opening_then_enter_keeps_every_studied_sense(window, qt, monkeypatch, no_dialogs):
+    vocab, native = reader_add(window, qt, monkeypatch)
+    picker = window.sense_picker
+    QTest.keyClick(native, Qt.Key_Escape)
+    window.app.cmd_sense("3,1", "flag")
+    kept = window.app.paths.words_file("Book").read_bytes()
+    leader(native, Qt.Key_W)  # opens with the first studied sense highlighted
+    assert qt.focusWidget() is picker.list and picker.list.currentRow() == 0
+    QTest.keyClick(native, Qt.Key_Return)  # to confirm or close: nothing is dropped
+    assert window.app.paths.words_file("Book").read_bytes() == kept
+    assert picker.status.text() == ("'flag' in 'Book' already studies 2 senses: verb: decorate "
+                                    "with flags; noun: a rectangular emblem of cloth  "
+                                    "(nothing was changed)")
+    QTest.keyClick(native, Qt.Key_Escape)
+    window.ctx.changed.emit()
+    click_word(vocab, "flag")  # in the Vocab list
+    assert qt.focusWidget() is picker.list and picker.list.currentRow() == 0
+    QTest.keyClick(native, Qt.Key_Return)
+    assert window.app.paths.words_file("Book").read_bytes() == kept
+    QTest.keyClick(native, Qt.Key_Down)    # a highlight the user moved is the user's pick,
+    QTest.keyClick(native, Qt.Key_Up)      # even back on the first row
+    QTest.keyClick(native, Qt.Key_Return)  # Enter: only this sense
+    assert "kept" not in raw(window, "flag")
+    assert definitions(window, "flag")[0] == "decorate with flags"
+
+
+def test_opening_after_study_checked_then_enter_keeps_them(window, qt, monkeypatch, no_dialogs):
+    vocab, native = reader_add(window, qt, monkeypatch)
+    picker = window.sense_picker
+    leader(native, Qt.Key_W)
+    QTest.keyClick(native, Qt.Key_Down)
+    QTest.keyClick(native, Qt.Key_Space)
+    QTest.mouseClick(picker.use_btn, Qt.LeftButton)  # Study checked: two senses
+    assert raw(window, "flag")["kept"] == 2
+    kept = window.app.paths.words_file("Book").read_bytes()
+    picker.list.setFocus()
+    QTest.keyClick(native, Qt.Key_Escape)
+    leader(native, Qt.Key_W)  # reopens the last word
+    QTest.keyClick(native, Qt.Key_Return)
+    assert window.app.paths.words_file("Book").read_bytes() == kept
+
+
 def test_study_view_shows_and_grades_every_kept_sense(window, qt, monkeypatch):
     from vocab.gui.study_view import StudyView
     from vocab.study.judge import KeywordJudge

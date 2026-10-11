@@ -20,7 +20,8 @@ word can carry multiple senses (real dictionaries have several)::
     }
 
 Optional keys are written only when set, so other entries stay as they were
-and older builds still read the file: "context" is the sentence a lookup
+and older builds still read the file (but drop these keys from every word
+when they save it, as the README warns): "context" is the sentence a lookup
 ranked the senses for, "choice" is "user" once the user chose which sense
 comes first, and "kept" says how many leading senses are studied (when more
 than the first).

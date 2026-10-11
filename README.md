@@ -346,6 +346,15 @@ follows OneDrive and folder redirection), on Linux the XDG documents folder, oth
 These vocabulary exports include each word's senses and the sentence it was added
 from, but not captures or notes; a module backup does.
 
+**An older version also drops word details when it saves.** For each word this version
+keeps the sentence it was added from, whether you chose its sense, and how many senses it
+studies (`SENSE 3,1`). An older version reads such a module, but the first time it saves
+that module's vocabulary (adding or deleting a word, for example) it silently drops all
+three from every word in the module: the words keep their senses, the sense order and
+their progress, but study only their first sense again. Older versions use the same data
+folder by default, so back up or export the module before opening your data with one, or
+give the older version its own data folder with `--home DIR`.
+
 ### Back up and restore modules
 
 In the desktop app, the **Modules** menu has **Back up current module…** (a Save

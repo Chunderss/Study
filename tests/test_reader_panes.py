@@ -252,3 +252,42 @@ def test_a_document_open_in_another_pane_starts_at_that_readers_place_and_zoom(w
     assert window.workspace.focused.component is not replaced
     assert place(window.workspace.focused.component) == (1, "fit")
     assert saved(window) == {"page": 0, "zoom_mode": "fit_width"}  # the replaced reader's
+
+
+def test_a_books_title_shows_as_text_in_its_pane(qt, tmp_path):
+    import zipfile
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QWidget
+    from vocab.gui.viewers import EpubBook
+    from vocab.gui.workspace import Workspace
+
+    image = tmp_path / "big.png"
+    picture = QImage(300, 300, QImage.Format_RGB32)
+    picture.fill(QColor("red"))
+    assert picture.save(str(image))
+    title = f'<img src="{image.as_uri()}"><b>Bold</b> &amp; Title'
+    path = tmp_path / "book.epub"
+    with zipfile.ZipFile(path, "w") as book:
+        book.writestr("content.opf", '<package xmlns="http://www.idpf.org/2007/opf" '
+                      'xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>'
+                      + title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                      + '</dc:title></metadata></package>')
+        book.writestr("page.html", "<p>text</p>")
+    assert EpubBook(str(path)).title == title
+
+    class Reader(QWidget):
+        TITLE = f"EPUB · {title}"
+
+    workspace = Workspace(lambda key: Reader() if key == "reader" else QWidget(), ["reader", "other"])
+    try:
+        workspace.resize(900, 600)
+        workspace.show()
+        qt.processEvents()
+        label = workspace.focused.title
+        assert label.text() == f"EPUB · {title}"
+        assert label.sizeHint().height() < 100  # the book's markup is not rendered
+        label.setText(Reader.TITLE)  # as MainWindow sets it
+        assert label.sizeHint().height() < 100
+    finally:
+        workspace.deleteLater()
+        qt.processEvents()

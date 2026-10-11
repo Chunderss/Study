@@ -43,6 +43,8 @@ class Pane(QFrame):
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(0)
         self.title = QLabel(getattr(component, "TITLE", "Pane"))
+        # Titles include a book's own title, which is untrusted: never markup.
+        self.title.setTextFormat(Qt.PlainText)
         self.title.setObjectName("PaneTitle")
         lay.addWidget(self.title)
         lay.addWidget(component, 1)

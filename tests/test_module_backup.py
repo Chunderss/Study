@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import threading
 import zipfile
@@ -537,8 +538,9 @@ class Restore:
 
 
 def staging(app):
+    """Staging folders left in modules/: a restore's short ones, and IMPORT's."""
     return [p.name for p in app.paths.modules_dir.iterdir()
-            if p.name.startswith(".vocab-staging-")]
+            if p.name.startswith((".vs~", ".vocab-staging-"))]
 
 
 def test_round_trip_restores_every_kind_of_study_data(app, tmp_path, documents_folder):
@@ -895,6 +897,109 @@ def test_failed_restore_leaves_nothing_and_a_retry_succeeds(app, tmp_path, docum
     assert app.storage.load_words("Copy").words == {}  # the other window's module is intact
     assert staging(app) == []
     assert run(app, f'RESTORE "{archive}" AS Copy2').startswith("Restored module 'Copy2'")
+
+
+def limit_path_length(monkeypatch, limit):
+    """Make creating a file or folder whose path is longer than ``limit``
+    fail as Windows does without long paths (ENOENT)."""
+    real_open, real_mkdir = open, os.mkdir
+
+    def check(path):
+        if len(os.fspath(path)) > limit:
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory", os.fspath(path))
+
+    def limited_open(file, mode="r", *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)) and set(mode) & set("wxa+"):
+            check(file)
+        return real_open(file, mode, *args, **kwargs)
+
+    def limited_mkdir(path, *args, **kwargs):
+        check(path)
+        return real_mkdir(path, *args, **kwargs)
+    monkeypatch.setattr("builtins.open", limited_open)
+    monkeypatch.setattr(os, "mkdir", limited_mkdir)
+
+
+def test_staged_paths_are_no_longer_than_the_final_ones(app, tmp_path, documents_folder,
+                                                        monkeypatch):
+    app.cmd_create("Gatsby")
+    long_name = "A" * 60 + ".pdf"
+    (tmp_path / long_name).write_bytes(b"%PDF-1.4 long")
+    app.storage.add_document("Gatsby", tmp_path / long_name)
+    archive = documents_folder / "g.zip"
+    assert run(app, f'BACKUP Gatsby "{archive}"').startswith("Backed up")
+    modules = app.paths.modules_dir
+    # A module name of 12 characters or more: the restore needs no path
+    # longer than the module's own.
+    name = "Gatsby copy2"
+    longest = modules / name / "documents" / long_name
+    with monkeypatch.context() as patch:
+        limit_path_length(patch, len(str(longest)))
+        assert run(app, f'RESTORE "{archive}" AS {name}').startswith(f"Restored module '{name}'")
+    assert longest.read_bytes() == b"%PDF-1.4 long"
+    assert staging(app) == []
+
+
+def test_a_write_error_while_restoring_is_not_a_missing_backup(app, tmp_path, documents_folder,
+                                                               monkeypatch):
+    app.cmd_create("Gatsby")
+    long_name = "A" * 60 + ".pdf"
+    (tmp_path / long_name).write_bytes(b"%PDF-1.4 long")
+    app.storage.add_document("Gatsby", tmp_path / long_name)
+    archive = documents_folder / "g.zip"
+    assert run(app, f'BACKUP Gatsby "{archive}"').startswith("Backed up")
+    modules = app.paths.modules_dir
+    restore = Restore(app)
+    # A shorter name: the staged document path is a few characters longer
+    # than the final one, and over the limit.
+    limit = len(str(modules / "C" / "documents" / long_name)) + 5
+    staged = re.escape(str(modules)) + re.escape(os.sep) + r"\.vs~[0-9a-f]{8}" + re.escape(
+        os.sep + "documents" + os.sep + long_name)
+    with monkeypatch.context() as patch:
+        limit_path_length(patch, limit)
+        patch.setattr(backup, "_MAX_PATH", None, raising=False)  # not Windows
+        reply = restore.refused(archive, f'RESTORE "{archive}" AS C')
+        assert re.fullmatch(re.escape(f"! Could not restore {archive}: No such file or directory (")
+                            + staged + re.escape("). Nothing was restored."), reply), reply
+        patch.setattr(backup, "_MAX_PATH", limit + 1, raising=False)  # Windows, short paths
+        reply = restore.refused(archive, f'RESTORE "{archive}" AS C')
+        length = limit + 6
+        assert re.fullmatch(re.escape(f"! Could not restore {archive}: No such file or directory (")
+                            + staged + re.escape(f": {length} characters, longer than Windows "
+                                                 "allows unless long paths are turned on). "
+                                                 "Nothing was restored."), reply), reply
+    # The modules folder vanishing meanwhile is not a missing backup either.
+    def vanished(path):
+        raise FileNotFoundError(errno.ENOENT, "No such file or directory", str(path))
+    with monkeypatch.context() as patch:
+        patch.setattr(backup, "_create", vanished)
+        reply = restore.refused(archive)
+        assert reply.startswith(f"! Could not restore {archive}: No such file or directory ("), reply
+    assert restore.refused(documents_folder / "gone.zip") == \
+        f"! Backup file not found: {documents_folder / 'gone.zip'}. Nothing was restored."
+
+
+def test_a_restores_staging_folder_is_hidden_and_purged_once_abandoned(app, tmp_path):
+    app.cmd_create("Book")
+    modules = app.paths.modules_dir
+    abandoned, fresh = modules / ".vs~0123abcd", modules / ".vs~89abcdef"
+    for folder in (abandoned, fresh):
+        (folder / "vocab").mkdir(parents=True)
+        (folder / "module.json").write_text("{}", encoding="utf-8")
+    old = abandoned.stat().st_mtime - 2 * 24 * 3600
+    os.utime(abandoned, (old, old))
+    assert app.storage.list_names() == ["Book"]
+    assert app.storage.unsupported_module_dirs() == []
+    App(app.paths.root)  # a start purges leftovers
+    assert not abandoned.exists() and fresh.exists()
+    # Only that exact form, and only in the modules folder: a document may
+    # have any name.
+    (tmp_path / ".vs~0123abcd").write_bytes(b"a document")
+    app.storage.add_document("Book", tmp_path / ".vs~0123abcd")
+    document = app.paths.documents_dir("Book") / ".vs~0123abcd"
+    os.utime(document, (old, old))
+    App(app.paths.root)
+    assert app.storage.document_names("Book") == [".vs~0123abcd"]
 
 
 def run_restore(app, archive, name, progress):

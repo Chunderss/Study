@@ -187,7 +187,7 @@ def test_cancel_in_the_progress_dialog_leaves_nothing(window, tmp_path, monkeypa
     window.restore_action.trigger()
     assert message(window) == "Restore cancelled; nothing was restored."
     assert window.app.storage.list_names() == ["Book"]
-    assert not any(p.name.startswith(".vocab-staging-")
+    assert not any(p.name.startswith((".vs~", ".vocab-staging-"))
                    for p in window.app.paths.modules_dir.iterdir())
     dialogs.answers["getExistingDirectory"] = str(tmp_path)
     window.backup_all_action.trigger()

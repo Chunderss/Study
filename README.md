@@ -415,10 +415,11 @@ another name.
   newer version, not encrypted, with no links, no duplicate or unlisted files, no file
   outside the module folder, and no name the computer cannot use; the checksums; every
   JSON file's content, with the rules the app applies when it reads them; and free space.
-- The module is built in a hidden folder in the data folder, every file checked against
-  its checksum, and then put in place in one step. A failure, a full disk, Ctrl-C, or the
-  name being taken meanwhile by another window leaves nothing behind, and an immediate
-  retry works.
+- The module is built in a hidden folder beside its final one in the modules folder,
+  every file checked against its checksum, and then put in place in one step. A
+  failure, a full disk, Ctrl-C, or the name being taken meanwhile by another window
+  leaves nothing behind, and an immediate retry works. A file that cannot be written is
+  named in the reply; on Windows, a path longer than Windows allows is pointed out.
 - The restored module keeps the backup's files byte for byte, so captures still open
   their source passage and EPUB highlights and reading positions return. Its
   `module.json` gets the new name and a new identity, so the app treats it as a

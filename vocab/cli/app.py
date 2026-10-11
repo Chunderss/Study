@@ -984,7 +984,7 @@ class App:
             else:
                 taken = f"Module '{error.name}' already exists"
             return f"{taken}; nothing was restored. Restore the backup under another name:  {again}"
-        if isinstance(error, FileNotFoundError):
+        if isinstance(error, _backup.BackupNotFound):
             return f"Backup file not found: {path}. Nothing was restored."
         if isinstance(error, _backup.ContentProblem):
             return (f"Cannot restore {path}: {_backup.relative(error.member)} in the backup "
@@ -993,6 +993,9 @@ class App:
             reason = error.strerror or str(error)
             where = (f" ({error.filename})" if error.strerror and error.filename
                      and Path(error.filename) != Path(path) else "")
+            if error.filename and _backup.path_too_long(error.filename):
+                where = (f" ({error.filename}: {len(str(error.filename))} characters, longer "
+                         "than Windows allows unless long paths are turned on)")
             return f"Could not restore {path}: {reason}{where}. Nothing was restored."
         return f"Cannot restore {path}: {error}. Nothing was restored."
 

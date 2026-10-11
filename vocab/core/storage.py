@@ -63,12 +63,24 @@ STAGING_PREFIX = ".vocab-staging-"
 TRASH_PREFIX = ".vocab-trash-"
 _LEFTOVER = re.compile(r"^\.vocab-(staging|trash)-[0-9a-f]{32}$")
 _STALE_STAGING = 24 * 3600  # an unfinished copy this old is abandoned
+# A restore builds the whole module beside its final folder under a short
+# name (prefix + 8 hex digits), so paths inside it are hardly longer than the
+# final ones (Windows' path limit). '~' is never part of a module name, so no
+# module can be taken for one; only the modules folder is searched for them.
+MODULE_STAGING_PREFIX = ".vs~"
+_MODULE_STAGING = re.compile(r"^\.vs~[0-9a-f]{8}$")
 
 
 def _leftover_kind(name: str):
     """'staging' or 'trash' for an app-owned temporary name, else None."""
     match = _LEFTOVER.match(name)
     return match.group(1) if match else None
+
+
+def _module_leftover_kind(name: str):
+    """_leftover_kind for an entry of the modules folder, which may also hold
+    a restore's short staging folder."""
+    return _leftover_kind(name) or ("staging" if _MODULE_STAGING.match(name) else None)
 
 
 _JUNCTION = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
@@ -331,7 +343,7 @@ class Storage:
             return []
         names = []
         for p in d.iterdir():
-            if _leftover_kind(p.name):
+            if _module_leftover_kind(p.name):
                 continue  # application-owned leftovers, never modules
             try:
                 if not p.is_dir():
@@ -480,8 +492,10 @@ class Storage:
                 entries = list(folder.iterdir())
             except OSError:
                 continue  # one unreadable folder must not stop the rest
+            modules = folder == self.paths.modules_dir
+            leftover = _module_leftover_kind if modules else _leftover_kind
             for path in entries:
-                kind = _leftover_kind(path.name)
+                kind = leftover(path.name)
                 try:
                     if kind is None or (kind == "staging" and path.lstat().st_mtime >= stale):
                         continue  # not ours, or possibly a copy still in progress

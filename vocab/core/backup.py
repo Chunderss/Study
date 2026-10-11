@@ -54,6 +54,7 @@ lock is held, so a desktop progress dialog may process events in them.
 from __future__ import annotations
 
 import datetime as _datetime
+import errno
 import hashlib
 import json
 import os
@@ -73,8 +74,8 @@ from ..version import __version__
 from .learning import learning_problem
 from .module import MODULE_SCHEMA_VERSION, Module
 from .paths import InvalidListName, sanitize_module_name
-from .storage import (STAGING_PREFIX, _leftover_kind, _publish_file, _remove_tree, parse_import,
-                      size_text)
+from .storage import (MODULE_STAGING_PREFIX, _leftover_kind, _publish_file, _remove_tree,
+                      parse_import, size_text)
 
 FORMAT = "vocab-study-module-backup"
 VERSION = 1
@@ -131,6 +132,11 @@ class BackupExists(FileExistsError):
 
 class Cancelled(Exception):
     """Raised by a progress callback to stop the operation."""
+
+
+class BackupNotFound(FileNotFoundError):
+    """The backup file itself does not exist (any other FileNotFoundError
+    comes from somewhere else, such as writing the restored module)."""
 
 
 class ArchiveProblem(ValueError):
@@ -304,18 +310,21 @@ class BackupInfo:
 
 
 def open_archive(path) -> zipfile.ZipFile:
-    """Open a backup file. A file that cannot be opened or read (no
-    permission, locked by another program) raises its OSError, so it is not
-    called damaged; one that is not a usable ZIP file raises ArchiveProblem."""
+    """Open a backup file. A missing file raises BackupNotFound; one that
+    cannot be opened or read (no permission, locked by another program)
+    raises its OSError, so it is not called damaged; one that is not a
+    usable ZIP file raises ArchiveProblem."""
     path = Path(path)
     if path.is_dir():
         raise ArchiveProblem("it is a folder, not a backup file")
-    with open(path, "rb") as stream:  # FileNotFoundError, PermissionError...
-        start = stream.read(64).lstrip(b"\xef\xbb\xbf \t\r\n")
     try:
+        with open(path, "rb") as stream:  # PermissionError...
+            start = stream.read(64).lstrip(b"\xef\xbb\xbf \t\r\n")
         return zipfile.ZipFile(path)
-    except (FileNotFoundError, PermissionError):
-        raise  # removed meanwhile, or a lock on part of the file
+    except FileNotFoundError:
+        raise BackupNotFound(errno.ENOENT, os.strerror(errno.ENOENT), str(path)) from None
+    except PermissionError:
+        raise  # no permission, or a lock on part of the file
     except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError,
             NotImplementedError, ValueError):
         pass
@@ -991,6 +1000,30 @@ def _rename_into_place(staging: Path, final: Path) -> None:
             time.sleep(0.2)
 
 
+def _new_staging(modules: Path) -> Path:
+    """Make a new, empty staging folder beside the module's final folder,
+    under a short name (storage.MODULE_STAGING_PREFIX and 8 hex digits)."""
+    for _ in range(100):
+        staging = modules / f"{MODULE_STAGING_PREFIX}{uuid.uuid4().hex[:8]}"
+        try:
+            staging.mkdir()
+            return staging
+        except FileExistsError:
+            continue  # taken by another restore or a leftover: draw again
+    raise FileExistsError(errno.EEXIST, "Could not find a free temporary name", str(modules))
+
+
+# Windows' path limit (MAX_PATH, 260 with the final NUL) when long paths are
+# not turned on; None elsewhere. Only used to explain a failure.
+_MAX_PATH = 260 if os.name == "nt" else None
+
+
+def path_too_long(path) -> bool:
+    """Whether ``path`` is longer than Windows allows by default, which is
+    then the likely cause of a failure to create it."""
+    return _MAX_PATH is not None and len(os.fspath(path)) >= _MAX_PATH
+
+
 def _restored_id(final: Path):
     try:
         with open(final / "module.json", encoding="utf-8") as stream:
@@ -1012,8 +1045,9 @@ def restore_backup(storage, path, new_name: Optional[str] = None, *, scheduler,
     once the module is in place, the result is returned even if an
     interrupt arrives.
 
-    Raises FileNotFoundError, ArchiveProblem, NameProblem, NameTaken,
-    ContentProblem, BackupError (space) and OSError.
+    Raises BackupNotFound (the backup file does not exist), ArchiveProblem,
+    NameProblem, NameTaken, ContentProblem, BackupError (space) and OSError,
+    which names the file it is about.
     """
     path = Path(path)
     progress = progress or (lambda done, total, label: None)
@@ -1039,14 +1073,16 @@ def restore_backup(storage, path, new_name: Optional[str] = None, *, scheduler,
                    "documents": sum(1 for m in info.files if m.startswith("module/documents/"))}
         result = RestoreResult(name, path, summary)
         label = f"Restoring '{name}'"
-        # The staging folder is the module folder itself, so paths inside it
-        # are no longer than the final ones (Windows' path limit).
-        staging = modules / f"{STAGING_PREFIX}{uuid.uuid4().hex}"
+        # The staging folder becomes the module folder, beside which it is
+        # made. Its name has 12 characters, so the paths inside it are no
+        # longer than the final ones for a module name of 12 characters or
+        # more, and at most 11 longer for a shorter one (Windows' path limit).
+        staging = None
         final = storage.paths.module_dir(name)
         published = False
         try:
             try:
-                staging.mkdir()
+                staging = _new_staging(modules)
                 for folder in ("vocab", "notes", "documents"):
                     (staging / folder).mkdir()
                 for member, data in contents.items():
@@ -1079,9 +1115,10 @@ def restore_backup(storage, path, new_name: Optional[str] = None, *, scheduler,
                     _rename_into_place(staging, final)
                 published = True
             finally:
-                if not published and not os.path.lexists(staging):
+                made = staging is not None and os.path.lexists(staging)
+                if staging is not None and not published and not made:
                     published = _restored_id(final) == new_id  # renamed, then interrupted
-                if os.path.lexists(staging):
+                if made:
                     try:
                         _remove_tree(staging)
                     except OSError:
